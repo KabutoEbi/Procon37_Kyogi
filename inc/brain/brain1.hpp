@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,18 @@ struct BeamSearchConfig {
     // 同じステップで複数の待機中でないエージェントへ行動を割り当てる際の幅。
     std::size_t jointBeamWidth = 512;
     EvaluationWeights weights{};
+
+    // 0なら明示的な相対制限なし。endsAtとの短い方を採用する。
+    std::int64_t timeLimitMs = 0;
+    std::int64_t safetyMarginMs = 1000;
+    std::size_t timeCheckInterval = 256;
+    bool useStateDeadline = true;
+};
+
+enum class SearchStopReason : std::uint8_t {
+    Completed,
+    TimeLimit,
+    NoValidPlan,
 };
 
 struct BeamSearchResult {
@@ -34,6 +47,8 @@ struct BeamSearchResult {
     GameState finalState{};
     EvaluationBreakdown evaluation{};
     std::size_t expandedNodes = 0;
+    SearchStopReason stopReason = SearchStopReason::NoValidPlan;
+    std::int64_t elapsedMs = 0;
 };
 
 class Brain1 final {
@@ -88,7 +103,9 @@ private:
     // 辺コストが移動元で決まるので、逆向き緩和時も predecessor のコストを使う。
     static DistanceMatrix buildSpotDistances(
         const MatchSetting& setting,
-        const MatchState& matchState) {
+        const MatchState& matchState,
+        const std::function<bool()>& stop,
+        bool& stopped) {
         const Field& field = setting.field;
         DistanceMatrix result(
             field.spots.size(),
@@ -99,6 +116,10 @@ private:
         for (std::size_t spotIndex = 0;
              spotIndex < field.spots.size();
              ++spotIndex) {
+            if (stop()) {
+                stopped = true;
+                return result;
+            }
             const CellPos goal = field.spots[spotIndex].pos;
             if (!field.contains(goal) || !field.at(goal).isPassable()) {
                 continue;
@@ -114,6 +135,10 @@ private:
             queue.emplace(0, goal);
 
             while (!queue.empty()) {
+                if (stop()) {
+                    stopped = true;
+                    return result;
+                }
                 const auto [distance, to] = queue.top();
                 queue.pop();
                 if (distance != distances[static_cast<std::size_t>(to)]) {
@@ -352,17 +377,85 @@ public:
         const MatchState& ms,
         ScoreState prev = {},
         const BeamSearchConfig& cfg = {}) {
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
         BeamSearchResult res;
-        if (cfg.beamWidth == 0 || cfg.jointBeamWidth == 0) {
+        auto finish = [&](SearchStopReason reason) {
+            res.stopReason = reason;
+            res.elapsedMs = std::chrono::duration_cast<
+                std::chrono::milliseconds>(Clock::now() - started).count();
             return res;
+        };
+
+        if (cfg.beamWidth == 0 || cfg.jointBeamWidth == 0 ||
+            cfg.timeLimitMs < 0 || cfg.safetyMarginMs < 0) {
+            return finish(SearchStopReason::NoValidPlan);
         }
 
         GameState init;
         if (!init.initialize(s, ms, prev)) {
-            return res;
+            return finish(SearchStopReason::NoValidPlan);
         }
 
-        const DistanceMatrix spotDist = buildSpotDistances(s, ms);
+        std::int64_t budgetMs = cfg.timeLimitMs > 0
+                                    ? cfg.timeLimitMs
+                                    : std::numeric_limits<std::int64_t>::max();
+        if (cfg.useStateDeadline && ms.endsAt > 0) {
+            const auto end = std::chrono::system_clock::time_point{
+                std::chrono::seconds(ms.endsAt)};
+            const auto left = std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                end - std::chrono::system_clock::now()).count();
+            budgetMs = std::min(budgetMs, left);
+        }
+        const bool limited =
+            budgetMs != std::numeric_limits<std::int64_t>::max();
+        if (limited) {
+            budgetMs = std::max<std::int64_t>(
+                0, budgetMs - cfg.safetyMarginMs);
+        }
+        const auto deadline = limited
+                                  ? started + std::chrono::milliseconds(budgetMs)
+                                  : Clock::time_point::max();
+        std::size_t work = 0;
+        const std::size_t checkEvery =
+            std::max<std::size_t>(1, cfg.timeCheckInterval);
+        auto expired = [&](bool force = false) {
+            if (!limited) {
+                return false;
+            }
+            ++work;
+            return (force || work % checkEvery == 0) &&
+                   Clock::now() >= deadline;
+        };
+
+        const DailyPlan wait(
+            init.agentCount, AgentPlan{-init.dayStepLimit});
+        const SimulationResult fallback = simulateDay(s, ms, wait, prev);
+        bool hasBest = fallback.valid;
+        if (hasBest) {
+            EvaluationContext ctx;
+            ctx.scoreAtDayStart = prev;
+            res.success = true;
+            res.plan = wait;
+            res.finalState = fallback.state;
+            res.evaluation = evaluateGameState(
+                fallback.state, ctx, cfg.weights);
+        }
+        if (expired(true)) {
+            return finish(
+                hasBest ? SearchStopReason::TimeLimit
+                        : SearchStopReason::NoValidPlan);
+        }
+
+        bool prepStopped = false;
+        const DistanceMatrix spotDist = buildSpotDistances(
+            s, ms, [&]() { return expired(); }, prepStopped);
+        if (prepStopped) {
+            return finish(
+                hasBest ? SearchStopReason::TimeLimit
+                        : SearchStopReason::NoValidPlan);
+        }
         std::vector<std::vector<std::int32_t>> cache(s.field.cellCount());
 
         BeamNode root;
@@ -371,6 +464,48 @@ public:
         root.evaluation =
             evaluate(root.state, s, ms, prev, spotDist, cache, cfg.weights);
         root.orderingScore = root.evaluation.total;
+
+        auto consider = [&](const BeamNode& node) {
+            DailyPlan plan = node.plan;
+            for (AgentIndex i = 0; i < node.state.agentCount; ++i) {
+                const PendingAction& pending = node.state.pendingActions[i];
+                const std::int32_t reserved =
+                    pending.active ? pending.remainingSteps : 0;
+                const std::int32_t wait =
+                    node.state.remainingSteps() - reserved;
+                if (wait > 0) {
+                    plan[i].push_back(-wait);
+                }
+            }
+
+            const SimulationResult sim = simulateDay(s, ms, plan, prev);
+            if (!sim.valid) {
+                return;
+            }
+            const EvaluationBreakdown eval = evaluate(
+                sim.state, s, ms, prev, spotDist, cache, cfg.weights);
+            if (hasBest &&
+                (eval.total < res.evaluation.total ||
+                 (eval.total == res.evaluation.total &&
+                  !(plan < res.plan)))) {
+                return;
+            }
+            hasBest = true;
+            res.success = true;
+            res.plan = std::move(plan);
+            res.finalState = sim.state;
+            res.evaluation = eval;
+        };
+        if (hasBest) {
+            res.evaluation = evaluate(
+                res.finalState, s, ms, prev, spotDist, cache, cfg.weights);
+        }
+        consider(root);
+        if (expired(true)) {
+            return finish(
+                hasBest ? SearchStopReason::TimeLimit
+                        : SearchStopReason::NoValidPlan);
+        }
 
         std::vector<BeamNode> beam{std::move(root)};
 
@@ -394,6 +529,11 @@ public:
                         0, 1, 2, 3, 4, 5, -1,
                     };
                     for (const std::int32_t action : actions) {
+                        if (expired()) {
+                            return finish(
+                                hasBest ? SearchStopReason::TimeLimit
+                                        : SearchStopReason::NoValidPlan);
+                        }
                         BeamNode child = node;
                         const auto err = tryScheduleAction(
                             child.state,
@@ -417,7 +557,9 @@ public:
                 sortAndLimit(next, cfg.jointBeamWidth);
                 ready = std::move(next);
                 if (ready.empty()) {
-                    return res;
+                    return finish(
+                        hasBest ? SearchStopReason::Completed
+                                : SearchStopReason::NoValidPlan);
                 }
             }
 
@@ -428,17 +570,33 @@ public:
                 if (err.error != SimulationError::None) {
                     continue;
                 }
-                node.evaluation =
-                    evaluate(node.state, s, ms, prev, spotDist, cache, cfg.weights);
+                node.evaluation = evaluate(
+                    node.state,
+                    s,
+                    ms,
+                    prev,
+                    spotDist,
+                    cache,
+                    cfg.weights);
                 node.orderingScore = node.evaluation.total;
                 next.push_back(std::move(node));
             }
             deduplicateAndLimit(next, cfg.beamWidth);
             beam = std::move(next);
+            if (!beam.empty()) {
+                consider(beam.front());
+            }
+            if (expired(true)) {
+                return finish(
+                    hasBest ? SearchStopReason::TimeLimit
+                            : SearchStopReason::NoValidPlan);
+            }
         }
 
         if (beam.empty()) {
-            return res;
+            return finish(
+                hasBest ? SearchStopReason::Completed
+                        : SearchStopReason::NoValidPlan);
         }
 
         for (BeamNode& node : beam) {
@@ -454,18 +612,25 @@ public:
         sortAndLimit(beam, 1);
         if (beam.empty() ||
             !std::isfinite(beam.front().orderingScore)) {
-            return res;
+            return finish(
+                hasBest ? SearchStopReason::Completed
+                        : SearchStopReason::NoValidPlan);
         }
 
-        if (!validateDailyPlan(s, ms, beam.front().plan, prev).valid) {
-            return res;
+        if (validateDailyPlan(s, ms, beam.front().plan, prev).valid) {
+            const BeamNode& best = beam.front();
+            if (!hasBest || best.evaluation.total > res.evaluation.total ||
+                (best.evaluation.total == res.evaluation.total &&
+                 best.plan < res.plan)) {
+                res.success = true;
+                res.plan = best.plan;
+                res.finalState = best.state;
+                res.evaluation = best.evaluation;
+            }
         }
-
-        res.success = true;
-        res.plan = std::move(beam.front().plan);
-        res.finalState = beam.front().state;
-        res.evaluation = beam.front().evaluation;
-        return res;
+        return finish(
+            res.success ? SearchStopReason::Completed
+                        : SearchStopReason::NoValidPlan);
     }
 };
 

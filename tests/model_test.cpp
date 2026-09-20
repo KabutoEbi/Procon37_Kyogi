@@ -172,6 +172,24 @@ void testBeamSearch() {
     assert(res.finalState.finalized);
     assert(res.finalState.dayUdon == 1);
     assert(validateDailyPlan(s, st, res.plan).valid);
+    assert(res.stopReason == SearchStopReason::Completed);
+
+    cfg.timeLimitMs = 1;
+    cfg.safetyMarginMs = 1;
+    const auto timed = brain1(s, st, {}, cfg);
+    assert(timed.success);
+    assert(timed.stopReason == SearchStopReason::TimeLimit);
+    assert(timed.elapsedMs >= 0);
+    assert(validateDailyPlan(s, st, timed.plan).valid);
+
+    MatchState expired = st;
+    expired.endsAt = 1;
+    cfg.timeLimitMs = 0;
+    cfg.safetyMarginMs = 0;
+    const auto deadline = brain1(s, expired, {}, cfg);
+    assert(deadline.success);
+    assert(deadline.stopReason == SearchStopReason::TimeLimit);
+    assert(validateDailyPlan(s, expired, deadline.plan).valid);
 }
 
 void testAgentSelector() {
@@ -205,6 +223,71 @@ void testAgentSelector() {
     assert(fixed.supplyCount == 1);
     assert(fixed.evaluatedAssignments == 2);
     assert(fixed.trialAssignments == 0);
+}
+
+void testMatchRunner() {
+    MatchSetting normal = makeSetting();
+    normal.busyThreshold = 2;
+    normal.jammedThreshold = 4;
+    MatchRunnerConfig plannedCfg;
+    plannedCfg.beam.beamWidth = 32;
+    plannedCfg.beam.jointBeamWidth = 128;
+    const auto planned = runMatch(
+        normal, {AgentKind::Patrol, AgentKind::Supply}, plannedCfg);
+    assert(planned.success);
+    assert(!planned.days[0].usedFallback);
+    assert(planned.score.totalUdon == 1);
+
+    MatchSetting s = makeSetting();
+    s.startsAt = 1'800'000'000;
+    s.daySteps = {1, 1, 1};
+    s.daySeconds = {60, 60, 60};
+    s.busyThreshold = 2;
+    s.jammedThreshold = 4;
+    s.field.cells[4].type = CellType::Road;
+
+    MatchRunnerConfig cfg;
+    cfg.beam.beamWidth = 0;  // 待機フォールバックを確実に使う。
+    cfg.trafficByDay.assign(
+        3,
+        std::vector<TrafficStatus>(9, TrafficStatus::Smooth));
+    cfg.trafficByDay[1][4] = TrafficStatus::Busy;
+    cfg.trafficByDay[2][4] = TrafficStatus::Jammed;
+    const auto res = runMatch(
+        s, {AgentKind::Patrol, AgentKind::Supply}, cfg);
+
+    assert(res.success);
+    assert(res.failedDay == -1);
+    assert(res.days.size() == 3);
+    assert(res.days[0].usedFallback);
+    assert(res.days[0].startState.endsAt == 1'800'000'060);
+    assert(res.days[1].startState.endsAt == 1'800'000'120);
+    assert(res.days[2].startState.endsAt == 1'800'000'180);
+    assert(res.days[0].startState.trafficAt(4) == TrafficStatus::Smooth);
+    assert(res.days[1].startState.trafficAt(4) == TrafficStatus::Busy);
+    assert(res.days[2].startState.trafficAt(4) == TrafficStatus::Jammed);
+    for (const MatchDayResult& day : res.days) {
+        assert(day.endState.finalized);
+        assert(day.roadStaySteps[4] == 2);
+        assert(day.endState.agents[0].pos == 4);
+        assert(day.endState.agents[1].pos == 4);
+    }
+
+    MatchSetting reset = makeSetting();
+    reset.daySteps = {1, 1};
+    reset.daySeconds = {60, 60};
+    reset.busyThreshold = 2;
+    reset.jammedThreshold = 4;
+    reset.agentStarts = {5, 5};
+    MatchRunnerConfig resetCfg = cfg;
+    resetCfg.trafficByDay.clear();
+    const auto scored = runMatch(
+        reset, {AgentKind::Patrol, AgentKind::Supply}, resetCfg);
+    assert(scored.success);
+    assert(scored.score.totalUdon == 2);
+    assert(scored.score.sumOfDailyBrandCounts == 2);
+    assert(scored.days[0].endState.dayUdon == 1);
+    assert(scored.days[1].endState.dayUdon == 1);
 }
 
 void testProblemCreator() {
@@ -329,5 +412,6 @@ int main() {
     testDijkstra();
     testBeamSearch();
     testAgentSelector();
+    testMatchRunner();
     testProblemCreator();
 }
