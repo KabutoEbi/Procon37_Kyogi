@@ -341,6 +341,19 @@ void testProblemCreator() {
     assert(createMatchSettingJson(
         s, "/tmp/procon37-match-setting-test.json"));
 
+    const MatchSetting parsedSetting = parseMatchSettingJson(setJson);
+    assert(parsedSetting.startsAt == s.startsAt);
+    assert(parsedSetting.daySteps == s.daySteps);
+    assert(parsedSetting.daySeconds == s.daySeconds);
+    assert(parsedSetting.agentStarts == s.agentStarts);
+    assert(parsedSetting.field.width == s.field.width);
+    assert(parsedSetting.field.height == s.field.height);
+    assert(parsedSetting.field.spots.size() == s.field.spots.size());
+    assert(ProblemCreator::toMatchSettingJson(parsedSetting) == setJson);
+    const MatchSetting fileSetting = readMatchSettingJson(
+        "/tmp/procon37-match-setting-test.json");
+    assert(fileSetting.agentStarts == s.agentStarts);
+
     CreateMatchStateConfig stateCfg;
     stateCfg.day = 0;
     stateCfg.endsAt = 1'800'000'060;
@@ -373,6 +386,22 @@ void testProblemCreator() {
         s.field,
         "/tmp/procon37-match-state-test.json"));
 
+    const MatchState parsedState = parseMatchStateJson(stateJson, s);
+    assert(parsedState.endsAt == st.endsAt);
+    assert(parsedState.day == st.day);
+    assert(parsedState.agents.size() == st.agents.size());
+    assert(parsedState.others.size() == st.others.size());
+    assert(parsedState.trafficByPos == st.trafficByPos);
+    for (std::size_t i = 0; i < parsedState.agents.size(); ++i) {
+        assert(parsedState.agents[i].index == i);
+        assert(parsedState.agents[i].kind == st.agents[i].kind);
+        assert(parsedState.agents[i].pos == st.agents[i].pos);
+        assert(parsedState.agents[i].fuel == st.agents[i].fuel);
+    }
+    const MatchState fileState = readMatchStateJson(
+        "/tmp/procon37-match-state-test.json", s);
+    assert(fileState.trafficByPos == st.trafficByPos);
+
     const MatchState direct = createMatchStateJson(
         s,
         stateCfg,
@@ -399,6 +428,15 @@ void testProblemCreator() {
         assert(!occupied[static_cast<std::size_t>(start)]);
         occupied[static_cast<std::size_t>(start)] = true;
     }
+
+    bool rejected = false;
+    try {
+        (void)parseMatchSettingJson("{}");
+    } catch (const JsonInputError& error) {
+        rejected = std::string(error.what()).find("startsAt") !=
+                   std::string::npos;
+    }
+    assert(rejected);
 }
 
 }  // namespace

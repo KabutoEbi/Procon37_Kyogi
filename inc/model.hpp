@@ -12,6 +12,7 @@
 #include "game.hpp"
 #include "game_state.hpp"
 #include "game_state_hash.hpp"
+#include "json_input.hpp"
 #include "match_runner.hpp"
 #include "path.hpp"
 #include "plan_validator.hpp"
