@@ -8,13 +8,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <queue>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -33,6 +36,18 @@ struct BeamSearchConfig {
     std::int64_t safetyMarginMs = 1000;
     std::size_t timeCheckInterval = 256;
     bool useStateDeadline = true;
+
+    // 0ならハードウェア並列数（最大8）を使う。1なら並列処理を無効化する。
+    std::size_t threadCount = 0;
+    std::size_t parallelThreshold = 64;
+
+    // 大きい盤面・多数エージェント・締切直前では幅を自動的に絞る。
+    bool adaptiveBeamWidth = true;
+    std::size_t minimumBeamWidth = 16;
+    std::size_t minimumJointBeamWidth = 64;
+
+    // 有効な途中解を再シミュレーションして保存する間隔。
+    std::size_t incumbentInterval = 4;
 };
 
 enum class SearchStopReason : std::uint8_t {
@@ -55,6 +70,11 @@ class Brain1 final {
 private:
     using DistanceMatrix = std::vector<std::vector<std::int32_t>>;
 
+    struct SpotDistanceTables {
+        DistanceMatrix steps;
+        DistanceMatrix fuel;
+    };
+
     struct BeamNode {
         GameState state{};
         DailyPlan plan;
@@ -72,10 +92,19 @@ private:
     static void sortAndLimit(
         std::vector<BeamNode>& nodes,
         std::size_t limit) {
-        std::sort(nodes.begin(), nodes.end(), betterNode);
+        if (limit == 0) {
+            nodes.clear();
+            return;
+        }
         if (nodes.size() > limit) {
+            std::nth_element(
+                nodes.begin(),
+                nodes.begin() + static_cast<std::ptrdiff_t>(limit),
+                nodes.end(),
+                betterNode);
             nodes.resize(limit);
         }
+        std::sort(nodes.begin(), nodes.end(), betterNode);
     }
 
     static void deduplicateAndLimit(
@@ -99,64 +128,60 @@ private:
         nodes = std::move(unique);
     }
 
-    // 各 spots[spotIndex] について、全セルからそのスポットまでの最短時間を求める。
-    // 辺コストが移動元で決まるので、逆向き緩和時も predecessor のコストを使う。
-    static DistanceMatrix buildSpotDistances(
+    // 各スポットへの最短時間と巡回車の最小必要燃料を求める。
+    // スポットごとの行は独立しているため、複数スレッドで構築できる。
+    static SpotDistanceTables buildSpotDistances(
         const MatchSetting& setting,
         const MatchState& matchState,
         const std::function<bool()>& stop,
+        std::size_t threadCount,
         bool& stopped) {
         const Field& field = setting.field;
-        DistanceMatrix result(
+        SpotDistanceTables result;
+        result.steps.assign(
             field.spots.size(),
             std::vector<std::int32_t>(
                 field.cellCount(), kImpassableCost));
+        result.fuel = result.steps;
+
+        std::atomic<std::size_t> nextSpot{0};
+        std::atomic<bool> aborted{false};
 
         using QueueEntry = std::pair<std::int32_t, CellPos>;
-        for (std::size_t spotIndex = 0;
-             spotIndex < field.spots.size();
-             ++spotIndex) {
-            if (stop()) {
-                stopped = true;
-                return result;
-            }
+        auto buildRow = [&](std::size_t spotIndex, bool fuel) {
             const CellPos goal = field.spots[spotIndex].pos;
             if (!field.contains(goal) || !field.at(goal).isPassable()) {
-                continue;
+                return;
             }
-
-            auto& distances = result[spotIndex];
+            auto& distances = fuel ? result.fuel[spotIndex]
+                                   : result.steps[spotIndex];
             std::priority_queue<
                 QueueEntry,
                 std::vector<QueueEntry>,
-                std::greater<QueueEntry>>
-                queue;
+                std::greater<QueueEntry>> queue;
             distances[static_cast<std::size_t>(goal)] = 0;
             queue.emplace(0, goal);
-
-            while (!queue.empty()) {
+            while (!queue.empty() && !aborted.load(std::memory_order_relaxed)) {
                 if (stop()) {
-                    stopped = true;
-                    return result;
+                    aborted.store(true, std::memory_order_relaxed);
+                    return;
                 }
                 const auto [distance, to] = queue.top();
                 queue.pop();
                 if (distance != distances[static_cast<std::size_t>(to)]) {
                     continue;
                 }
-
                 for (const CellPos from : field.neighbors(to)) {
-                    if (!field.contains(from) ||
-                        !field.at(from).isPassable()) {
+                    if (!field.contains(from) || !field.at(from).isPassable()) {
                         continue;
                     }
-                    const std::int32_t edgeCost =
-                        moveStepCost(setting, matchState, from);
+                    const std::int32_t edgeCost = fuel
+                        ? moveFuelCost(setting, AgentKind::Patrol, from)
+                        : moveStepCost(setting, matchState, from);
                     if (edgeCost >= kImpassableCost ||
                         distance > kImpassableCost - edgeCost) {
                         continue;
                     }
-
                     const std::int32_t candidate = distance + edgeCost;
                     std::int32_t& current =
                         distances[static_cast<std::size_t>(from)];
@@ -166,25 +191,33 @@ private:
                     }
                 }
             }
-        }
-        return result;
-    }
+        };
 
-    static const std::vector<std::int32_t>& distancesFrom(
-        const MatchSetting& setting,
-        const MatchState& matchState,
-        CellPos start,
-        std::vector<std::vector<std::int32_t>>& cache) {
-        static const std::vector<std::int32_t> empty;
-        if (!setting.field.contains(start)) {
-            return empty;
+        auto worker = [&]() {
+            while (!aborted.load(std::memory_order_relaxed)) {
+                const std::size_t task =
+                    nextSpot.fetch_add(1, std::memory_order_relaxed);
+                if (task >= field.spots.size() * 2) {
+                    return;
+                }
+                buildRow(task / 2, task % 2 != 0);
+            }
+        };
+
+        const std::size_t workers = std::max<std::size_t>(
+            1,
+            std::min(threadCount, field.spots.size() * 2));
+        std::vector<std::thread> threads;
+        threads.reserve(workers > 0 ? workers - 1 : 0);
+        for (std::size_t i = 1; i < workers; ++i) {
+            threads.emplace_back(worker);
         }
-        auto& distances = cache[static_cast<std::size_t>(start)];
-        if (distances.empty()) {
-            distances =
-                Brain0::dijkstra(setting, matchState, start).distances;
+        worker();
+        for (std::thread& thread : threads) {
+            thread.join();
         }
-        return distances;
+        stopped = aborted.load(std::memory_order_relaxed);
+        return result;
     }
 
     static CellPos projectedPosition(
@@ -196,15 +229,82 @@ private:
                    : state.agents[agentIndex].pos;
     }
 
-    static EvaluationContext makeEvaluationContext(
+    static bool canScheduleAction(
         const GameState& state,
         const MatchSetting& setting,
         const MatchState& matchState,
+        AgentIndex agentIndex,
+        std::int32_t action) noexcept {
+        if (agentIndex >= state.agentCount ||
+            state.pendingActions[agentIndex].active ||
+            state.remainingSteps() <= 0) {
+            return false;
+        }
+        if (isWaitAction(action)) {
+            return action != std::numeric_limits<std::int32_t>::min() &&
+                   -action <= state.remainingSteps();
+        }
+        if (!isMoveAction(action)) {
+            return false;
+        }
+        const Agent& agent = state.agents[agentIndex];
+        if (!setting.field.contains(agent.pos)) {
+            return false;
+        }
+        const CellPos destination = setting.field.neighbor(
+            agent.pos, static_cast<Direction>(action));
+        if (!setting.field.contains(destination) ||
+            !setting.field.at(destination).isPassable()) {
+            return false;
+        }
+        const std::int32_t steps =
+            moveStepCost(setting, matchState, agent.pos);
+        const std::int32_t fuel =
+            moveFuelCost(setting, agent.kind, agent.pos);
+        return steps <= state.remainingSteps() &&
+               (!agent.isPatrol() || fuel <= agent.fuel);
+    }
+
+    static std::int32_t projectedDelay(
+        const GameState& state,
+        AgentIndex agentIndex) noexcept {
+        const PendingAction& pending = state.pendingActions[agentIndex];
+        return pending.active ? pending.remainingSteps : 0;
+    }
+
+    // 障害物を無視した六角距離。補給合流の軽量な下界評価に使う。
+    static std::int32_t hexDistance(
+        const Field& field,
+        CellPos lhs,
+        CellPos rhs) noexcept {
+        const Coord a = field.toCoord(lhs);
+        const Coord b = field.toCoord(rhs);
+        if (!field.contains(a) || !field.contains(b)) {
+            return kImpassableCost;
+        }
+        auto cube = [](Coord p) {
+            const std::int32_t q = p.x - (p.y + (p.y & 1)) / 2;
+            const std::int32_t r = p.y;
+            return std::array<std::int32_t, 3>{q, r, -q - r};
+        };
+        const auto ca = cube(a);
+        const auto cb = cube(b);
+        return std::max({
+            std::abs(ca[0] - cb[0]),
+            std::abs(ca[1] - cb[1]),
+            std::abs(ca[2] - cb[2]),
+        });
+    }
+
+    static EvaluationContext makeEvaluationContext(
+        const GameState& state,
+        const MatchSetting& setting,
         ScoreState scoreAtDayStart,
-        const DistanceMatrix& spotDistances,
-        std::vector<std::vector<std::int32_t>>& distanceCache) {
+        const SpotDistanceTables& spotDistances) {
         EvaluationContext context;
         context.scoreAtDayStart = scoreAtDayStart;
+        std::array<std::int32_t, kMaxAgents> targets{};
+        targets.fill(-1);
 
         for (AgentIndex agentIndex = 0;
              agentIndex < state.agentCount;
@@ -218,11 +318,17 @@ private:
             const CellPos projected =
                 projectedPosition(state, agentIndex);
             const std::int32_t reservedSteps =
-                state.pendingActions[agentIndex].active
-                    ? state.pendingActions[agentIndex].remainingSteps
-                    : 0;
+                projectedDelay(state, agentIndex);
+            const std::int32_t availableSteps =
+                std::max(0, state.remainingSteps() - reservedSteps);
 
             std::int32_t nearestSpot = kImpassableCost;
+            std::int32_t nearestNew = kImpassableCost;
+            std::int32_t nearestDaily = kImpassableCost;
+            std::int32_t targetClass = 3;
+            std::int32_t targetDistance = kImpassableCost;
+            bool hasCandidate = false;
+            bool hasTimeReachableCandidate = false;
             for (std::size_t spotIndex = 0;
                  spotIndex < state.spotCount;
                  ++spotIndex) {
@@ -230,23 +336,64 @@ private:
                     state.hasAcquired(agentIndex, spotIndex)) {
                     continue;
                 }
+                hasCandidate = true;
+                const std::size_t pos = static_cast<std::size_t>(projected);
                 const std::int32_t distance =
-                    spotDistances[spotIndex]
-                                 [static_cast<std::size_t>(projected)];
-                if (distance < kImpassableCost &&
-                    reservedSteps <= kImpassableCost - distance) {
-                    nearestSpot = std::min(
-                        nearestSpot, reservedSteps + distance);
+                    spotDistances.steps[spotIndex][pos];
+                const std::int32_t fuel =
+                    spotDistances.fuel[spotIndex][pos];
+                if (distance >= kImpassableCost ||
+                    distance > availableSteps) {
+                    continue;
+                }
+                hasTimeReachableCandidate = true;
+                if (fuel > agent.fuel) {
+                    continue;
+                }
+                const Spot& spot = setting.field.spots[spotIndex];
+                const BrandMask bit = brandBit(
+                    static_cast<std::size_t>(spot.brandIndex));
+                const bool newMatch = (state.score.matchBrands & bit) == 0;
+                const bool newDay = (state.dayBrands & bit) == 0;
+                const std::int32_t kind = newMatch ? 0 : (newDay ? 1 : 2);
+                const std::int32_t total = reservedSteps + distance;
+                nearestSpot = std::min(nearestSpot, total);
+                if (newMatch) {
+                    nearestNew = std::min(nearestNew, total);
+                }
+                if (newDay) {
+                    nearestDaily = std::min(nearestDaily, total);
+                }
+                if (kind < targetClass ||
+                    (kind == targetClass && distance < targetDistance) ||
+                    (kind == targetClass && distance == targetDistance &&
+                     static_cast<std::int32_t>(spotIndex) <
+                         targets[agentIndex])) {
+                    targetClass = kind;
+                    targetDistance = distance;
+                    targets[agentIndex] =
+                        static_cast<std::int32_t>(spotIndex);
                 }
             }
             context.nearestValuableSpotSteps[agentIndex] = nearestSpot;
+            context.nearestNewBrandSpotSteps[agentIndex] = nearestNew;
+            context.nearestDailyBrandSpotSteps[agentIndex] = nearestDaily;
+            if (targetDistance < kImpassableCost) {
+                context.targetSlack += availableSteps - targetDistance;
+            } else if (hasCandidate) {
+                ++context.unreachableTargetCount;
+                if (hasTimeReachableCandidate) {
+                    context.fuelRisk += std::max(
+                        1, (setting.fuelLimit + 1) / 2 - agent.fuel);
+                }
+            }
 
-            const auto& distances = distancesFrom(
-                setting,
-                matchState,
-                projected,
-                distanceCache);
+            const std::int32_t fuelThreshold = std::max(
+                1, (setting.fuelLimit + 1) / 2);
+            const std::int32_t fuelNeed =
+                std::max(0, fuelThreshold - agent.fuel);
             std::int32_t nearestSupply = kImpassableCost;
+            std::int32_t bestMismatch = kImpassableCost;
             for (AgentIndex other = 0;
                  other < state.agentCount;
                  ++other) {
@@ -255,40 +402,41 @@ private:
                 }
                 const CellPos supplyPos =
                     projectedPosition(state, other);
-                if (setting.field.contains(supplyPos) &&
-                    !distances.empty()) {
-                    nearestSupply = std::min(
-                        nearestSupply,
-                        distances[static_cast<std::size_t>(supplyPos)]);
+                const std::int32_t distance = hexDistance(
+                    setting.field, projected, supplyPos);
+                if (distance < kImpassableCost) {
+                    nearestSupply = std::min(nearestSupply, distance);
+                    const std::int32_t supplyDelay =
+                        projectedDelay(state, other);
+                    bestMismatch = std::min(
+                        bestMismatch,
+                        std::min(
+                            std::abs(
+                                reservedSteps + distance - supplyDelay),
+                            std::abs(
+                                supplyDelay + distance - reservedSteps)));
                 }
             }
-            context.nearestSupplySteps[agentIndex] = nearestSupply;
+            if (fuelNeed > 0 && nearestSupply < kImpassableCost) {
+                context.nearestSupplySteps[agentIndex] = nearestSupply;
+                context.rendezvousMismatch += bestMismatch;
+                context.fuelRisk += fuelNeed;
+            }
         }
 
-        // 同じ現在地・予約移動先へ巡回車が集中する度合い。
-        for (AgentIndex lhs = 0; lhs < state.agentCount; ++lhs) {
-            if (!state.agents[lhs].isPatrol()) {
-                continue;
+        // 同一スポットの残存在庫を超えて巡回車が集中する分を罰する。
+        for (std::size_t spotIndex = 0;
+             spotIndex < state.spotCount;
+             ++spotIndex) {
+            std::int32_t assigned = 0;
+            for (AgentIndex agentIndex = 0;
+                 agentIndex < state.agentCount;
+                 ++agentIndex) {
+                assigned += targets[agentIndex] ==
+                            static_cast<std::int32_t>(spotIndex);
             }
-            const PendingAction& lhsPending = state.pendingActions[lhs];
-            const CellPos lhsTarget = lhsPending.isMove()
-                                          ? lhsPending.destination
-                                          : state.agents[lhs].pos;
-            for (AgentIndex rhs = lhs + 1;
-                 rhs < state.agentCount;
-                 ++rhs) {
-                if (!state.agents[rhs].isPatrol()) {
-                    continue;
-                }
-                const PendingAction& rhsPending =
-                    state.pendingActions[rhs];
-                const CellPos rhsTarget = rhsPending.isMove()
-                                              ? rhsPending.destination
-                                              : state.agents[rhs].pos;
-                if (lhsTarget == rhsTarget) {
-                    ++context.concentrationCount;
-                }
-            }
+            context.concentrationCount += std::max(
+                0, assigned - state.remainingStocks[spotIndex]);
         }
         return context;
     }
@@ -296,18 +444,14 @@ private:
     static EvaluationBreakdown evaluate(
         const GameState& state,
         const MatchSetting& setting,
-        const MatchState& matchState,
         ScoreState scoreAtDayStart,
-        const DistanceMatrix& spotDistances,
-        std::vector<std::vector<std::int32_t>>& distanceCache,
+        const SpotDistanceTables& spotDistances,
         const EvaluationWeights& weights) {
         const EvaluationContext context = makeEvaluationContext(
             state,
             setting,
-            matchState,
             scoreAtDayStart,
-            spotDistances,
-            distanceCache);
+            spotDistances);
         return evaluateGameState(state, context, weights);
     }
 
@@ -315,7 +459,7 @@ private:
         const BeamNode& node,
         AgentIndex agentIndex,
         const MatchSetting& setting,
-        const DistanceMatrix& spotDistances,
+        const SpotDistanceTables& spotDistances,
         const EvaluationWeights& weights) noexcept {
         const Agent& agent = node.state.agents[agentIndex];
         const PendingAction& pending =
@@ -334,6 +478,7 @@ private:
                                       ? pending.destination
                                       : agent.pos;
         std::int32_t nearest = kImpassableCost;
+        std::int32_t priority = 3;
         for (std::size_t spotIndex = 0;
              spotIndex < node.state.spotCount;
              ++spotIndex) {
@@ -341,10 +486,26 @@ private:
                 node.state.hasAcquired(agentIndex, spotIndex)) {
                 continue;
             }
-            nearest = std::min(
-                nearest,
-                spotDistances[spotIndex]
-                             [static_cast<std::size_t>(projected)]);
+            const std::size_t pos = static_cast<std::size_t>(projected);
+            const std::int32_t distance =
+                spotDistances.steps[spotIndex][pos];
+            const std::int32_t fuel =
+                spotDistances.fuel[spotIndex][pos];
+            if (fuel > agent.fuel) {
+                continue;
+            }
+            const Spot& spot = setting.field.spots[spotIndex];
+            const BrandMask bit = brandBit(
+                static_cast<std::size_t>(spot.brandIndex));
+            const std::int32_t kind =
+                (node.state.score.matchBrands & bit) == 0
+                    ? 0
+                    : ((node.state.dayBrands & bit) == 0 ? 1 : 2);
+            if (kind < priority ||
+                (kind == priority && distance < nearest)) {
+                priority = kind;
+                nearest = distance;
+            }
         }
 
         double bonus = pending.isWait()
@@ -352,6 +513,11 @@ private:
                            : -0.01 * pending.remainingSteps;
         if (nearest < kImpassableCost) {
             bonus += weights.valuableSpotDistance * nearest;
+            if (priority == 0) {
+                bonus += weights.newBrandSpotDistance * nearest;
+            } else if (priority == 1) {
+                bonus += weights.dailyBrandSpotDistance * nearest;
+            }
         }
 
         const Cell& destination = setting.field.at(projected);
@@ -381,6 +547,9 @@ public:
         const auto started = Clock::now();
         BeamSearchResult res;
         auto finish = [&](SearchStopReason reason) {
+            if (res.success) {
+                res.plan = compressWaitActions(res.plan);
+            }
             res.stopReason = reason;
             res.elapsedMs = std::chrono::duration_cast<
                 std::chrono::milliseconds>(Clock::now() - started).count();
@@ -388,7 +557,8 @@ public:
         };
 
         if (cfg.beamWidth == 0 || cfg.jointBeamWidth == 0 ||
-            cfg.timeLimitMs < 0 || cfg.safetyMarginMs < 0) {
+            cfg.timeLimitMs < 0 || cfg.safetyMarginMs < 0 ||
+            cfg.incumbentInterval == 0) {
             return finish(SearchStopReason::NoValidPlan);
         }
 
@@ -417,16 +587,54 @@ public:
         const auto deadline = limited
                                   ? started + std::chrono::milliseconds(budgetMs)
                                   : Clock::time_point::max();
-        std::size_t work = 0;
+        const std::size_t hardwareThreads = std::min<std::size_t>(
+            8,
+            std::max(1U, std::thread::hardware_concurrency()));
+        const std::size_t requestedThreads =
+            cfg.threadCount == 0 ? hardwareThreads : cfg.threadCount;
+        const std::size_t threadCount = std::clamp<std::size_t>(
+            requestedThreads, 1, hardwareThreads);
+
+        std::atomic<std::size_t> work{0};
         const std::size_t checkEvery =
             std::max<std::size_t>(1, cfg.timeCheckInterval);
         auto expired = [&](bool force = false) {
             if (!limited) {
                 return false;
             }
-            ++work;
-            return (force || work % checkEvery == 0) &&
+            const std::size_t count =
+                work.fetch_add(1, std::memory_order_relaxed) + 1;
+            return (force || count % checkEvery == 0) &&
                    Clock::now() >= deadline;
+        };
+
+        auto adaptiveLimit = [&](std::size_t configured,
+                                 std::size_t minimum) {
+            if (!cfg.adaptiveBeamWidth || configured <= minimum) {
+                return configured;
+            }
+            double scale = std::min(
+                1.0,
+                256.0 / static_cast<double>(
+                            std::max<std::size_t>(256, s.field.cellCount())));
+            scale *= std::min(
+                1.0,
+                4.0 / static_cast<double>(
+                          std::max<std::size_t>(4, init.agentCount)));
+            if (limited && budgetMs > 0) {
+                const auto left = std::chrono::duration_cast<
+                    std::chrono::milliseconds>(deadline - Clock::now()).count();
+                const double ratio = static_cast<double>(
+                    std::max<std::int64_t>(0, left)) / budgetMs;
+                if (ratio < 0.15) {
+                    scale *= 0.35;
+                } else if (ratio < 0.35) {
+                    scale *= 0.60;
+                }
+            }
+            const std::size_t scaled = static_cast<std::size_t>(
+                std::ceil(configured * scale));
+            return std::min(configured, std::max(minimum, scaled));
         };
 
         const DailyPlan wait(
@@ -449,20 +657,22 @@ public:
         }
 
         bool prepStopped = false;
-        const DistanceMatrix spotDist = buildSpotDistances(
-            s, ms, [&]() { return expired(); }, prepStopped);
+        const SpotDistanceTables spotDist = buildSpotDistances(
+            s,
+            ms,
+            [&]() { return expired(); },
+            threadCount,
+            prepStopped);
         if (prepStopped) {
             return finish(
                 hasBest ? SearchStopReason::TimeLimit
                         : SearchStopReason::NoValidPlan);
         }
-        std::vector<std::vector<std::int32_t>> cache(s.field.cellCount());
-
         BeamNode root;
         root.state = init;
         root.plan.resize(init.agentCount);
         root.evaluation =
-            evaluate(root.state, s, ms, prev, spotDist, cache, cfg.weights);
+            evaluate(root.state, s, prev, spotDist, cfg.weights);
         root.orderingScore = root.evaluation.total;
 
         auto consider = [&](const BeamNode& node) {
@@ -474,7 +684,7 @@ public:
                 const std::int32_t wait =
                     node.state.remainingSteps() - reserved;
                 if (wait > 0) {
-                    plan[i].push_back(-wait);
+                    appendPlanAction(plan[i], -wait);
                 }
             }
 
@@ -483,7 +693,7 @@ public:
                 return;
             }
             const EvaluationBreakdown eval = evaluate(
-                sim.state, s, ms, prev, spotDist, cache, cfg.weights);
+                sim.state, s, prev, spotDist, cfg.weights);
             if (hasBest &&
                 (eval.total < res.evaluation.total ||
                  (eval.total == res.evaluation.total &&
@@ -498,7 +708,7 @@ public:
         };
         if (hasBest) {
             res.evaluation = evaluate(
-                res.finalState, s, ms, prev, spotDist, cache, cfg.weights);
+                res.finalState, s, prev, spotDist, cfg.weights);
         }
         consider(root);
         if (expired(true)) {
@@ -534,6 +744,10 @@ public:
                                 hasBest ? SearchStopReason::TimeLimit
                                         : SearchStopReason::NoValidPlan);
                         }
+                        if (!canScheduleAction(
+                                node.state, s, ms, a, action)) {
+                            continue;
+                        }
                         BeamNode child = node;
                         const auto err = tryScheduleAction(
                             child.state,
@@ -545,7 +759,7 @@ public:
                         if (err.error != SimulationError::None) {
                             continue;
                         }
-                        child.plan[a].push_back(action);
+                        appendPlanAction(child.plan[a], action);
                         child.orderingScore =
                             node.orderingScore +
                             scheduledActionBonus(
@@ -554,7 +768,11 @@ public:
                         ++res.expandedNodes;
                     }
                 }
-                sortAndLimit(next, cfg.jointBeamWidth);
+                sortAndLimit(
+                    next,
+                    adaptiveLimit(
+                        cfg.jointBeamWidth,
+                        cfg.minimumJointBeamWidth));
                 ready = std::move(next);
                 if (ready.empty()) {
                     return finish(
@@ -565,25 +783,76 @@ public:
 
             std::vector<BeamNode> next;
             next.reserve(ready.size());
-            for (BeamNode& node : ready) {
-                const auto err = advanceSimulationStep(node.state, s);
-                if (err.error != SimulationError::None) {
-                    continue;
+            const bool parallel = threadCount > 1 &&
+                                  ready.size() >= cfg.parallelThreshold;
+            std::atomic<bool> evaluationTimedOut{false};
+            auto evaluateRange = [&](std::size_t begin,
+                                     std::size_t end,
+                                     std::vector<BeamNode>& output) {
+                output.reserve(end - begin);
+                for (std::size_t i = begin; i < end; ++i) {
+                    if (expired()) {
+                        evaluationTimedOut.store(
+                            true, std::memory_order_relaxed);
+                        return;
+                    }
+                    BeamNode& node = ready[i];
+                    const auto err = advanceSimulationStep(node.state, s);
+                    if (err.error != SimulationError::None) {
+                        continue;
+                    }
+                    node.evaluation = evaluate(
+                        node.state, s, prev, spotDist, cfg.weights);
+                    node.orderingScore = node.evaluation.total;
+                    output.push_back(std::move(node));
                 }
-                node.evaluation = evaluate(
-                    node.state,
-                    s,
-                    ms,
-                    prev,
-                    spotDist,
-                    cache,
-                    cfg.weights);
-                node.orderingScore = node.evaluation.total;
-                next.push_back(std::move(node));
+            };
+
+            if (parallel) {
+                const std::size_t workers = std::min(
+                    threadCount, ready.size());
+                std::vector<std::vector<BeamNode>> chunks(workers);
+                std::vector<std::thread> threads;
+                threads.reserve(workers - 1);
+                for (std::size_t worker = 1; worker < workers; ++worker) {
+                    const std::size_t begin =
+                        ready.size() * worker / workers;
+                    const std::size_t end =
+                        ready.size() * (worker + 1) / workers;
+                    threads.emplace_back(
+                        evaluateRange,
+                        begin,
+                        end,
+                        std::ref(chunks[worker]));
+                }
+                evaluateRange(
+                    0, ready.size() / workers, chunks.front());
+                for (std::thread& thread : threads) {
+                    thread.join();
+                }
+                for (auto& chunk : chunks) {
+                    next.insert(
+                        next.end(),
+                        std::make_move_iterator(chunk.begin()),
+                        std::make_move_iterator(chunk.end()));
+                }
+            } else {
+                evaluateRange(0, ready.size(), next);
             }
-            deduplicateAndLimit(next, cfg.beamWidth);
+            if (evaluationTimedOut.load(std::memory_order_relaxed)) {
+                return finish(
+                    hasBest ? SearchStopReason::TimeLimit
+                            : SearchStopReason::NoValidPlan);
+            }
+            deduplicateAndLimit(
+                next,
+                adaptiveLimit(cfg.beamWidth, cfg.minimumBeamWidth));
             beam = std::move(next);
-            if (!beam.empty()) {
+            if (!beam.empty() &&
+                (static_cast<std::size_t>(beam.front().state.step) %
+                     cfg.incumbentInterval == 0 ||
+                 beam.front().state.step ==
+                     beam.front().state.dayStepLimit)) {
                 consider(beam.front());
             }
             if (expired(true)) {
@@ -606,7 +875,7 @@ public:
                 continue;
             }
             node.evaluation =
-                evaluate(node.state, s, ms, prev, spotDist, cache, cfg.weights);
+                evaluate(node.state, s, prev, spotDist, cfg.weights);
             node.orderingScore = node.evaluation.total;
         }
         sortAndLimit(beam, 1);
@@ -623,7 +892,7 @@ public:
                 (best.evaluation.total == res.evaluation.total &&
                  best.plan < res.plan)) {
                 res.success = true;
-                res.plan = best.plan;
+                res.plan = compressWaitActions(best.plan);
                 res.finalState = best.state;
                 res.evaluation = best.evaluation;
             }

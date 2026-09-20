@@ -1,7 +1,8 @@
-#include "model.hpp"
+#include "application.hpp"
 
 #include <cassert>
 #include <cstddef>
+#include <sstream>
 #include <unordered_set>
 
 namespace {
@@ -96,6 +97,32 @@ void testFuelValidation() {
     assert(valid.valid);
 }
 
+void testWaitCompression() {
+    const AgentPlan raw = {-1, -1, -3, 2, -1, -14};
+    const AgentPlan compressed = compressWaitActions(raw);
+    assert((compressed == AgentPlan{-5, 2, -15}));
+
+    AgentPlan appended;
+    appendPlanAction(appended, -1);
+    appendPlanAction(appended, -14);
+    assert((appended == AgentPlan{-15}));
+
+    std::ostringstream output;
+    printPlan(output, DailyPlan{{-1}, {-1, -14}});
+    assert(output.str() == "[\n  [-1],\n  [-15]\n]\n");
+
+    MatchSetting s = makeSetting();
+    s.daySteps = {15};
+    const MatchState st = makeState();
+    const auto rawResult = simulateDay(
+        s, st, DailyPlan{{-1, -14}, {-1, -14}});
+    const auto compressedResult = simulateDay(
+        s, st, DailyPlan{{-15}, {-15}});
+    assert(rawResult.valid);
+    assert(compressedResult.valid);
+    assert(rawResult.state == compressedResult.state);
+}
+
 void testHashAndEvaluation() {
     const MatchSetting s = makeSetting();
     const MatchState st = makeState();
@@ -111,10 +138,22 @@ void testHashAndEvaluation() {
     assert(states.count(changed) == 0);
 
     EvaluationContext ctx;
+    ctx.nearestNewBrandSpotSteps[0] = 2;
+    ctx.nearestDailyBrandSpotSteps[0] = 3;
+    ctx.targetSlack = 4;
+    ctx.rendezvousMismatch = 5;
+    ctx.fuelRisk = 6;
+    ctx.unreachableTargetCount = 1;
     const auto eval = evaluateGameState(sim.state, ctx);
     assert(eval.newBrandCount == 1);
     assert(eval.dailyBrandCount == 1);
     assert(eval.udonCount == 1);
+    assert(eval.newBrandSpotDistance == 2);
+    assert(eval.dailyBrandSpotDistance == 3);
+    assert(eval.targetSlack == 4);
+    assert(eval.rendezvousMismatch == 5);
+    assert(eval.fuelRisk == 6);
+    assert(eval.unreachableTargetCount == 1);
 }
 
 void testDijkstra() {
@@ -190,6 +229,28 @@ void testBeamSearch() {
     assert(deadline.success);
     assert(deadline.stopReason == SearchStopReason::TimeLimit);
     assert(validateDailyPlan(s, expired, deadline.plan).valid);
+
+    BeamSearchConfig serialCfg;
+    serialCfg.beamWidth = 64;
+    serialCfg.jointBeamWidth = 256;
+    serialCfg.threadCount = 1;
+    serialCfg.parallelThreshold = 1;
+    const auto serial = brain1(s, st, {}, serialCfg);
+
+    BeamSearchConfig parallelCfg = serialCfg;
+    parallelCfg.threadCount = 2;
+    const auto parallel = brain1(s, st, {}, parallelCfg);
+    assert(serial.success);
+    assert(parallel.success);
+    assert(serial.plan == parallel.plan);
+    assert(serial.evaluation.total == parallel.evaluation.total);
+    assert(validateDailyPlan(s, st, parallel.plan).valid);
+    for (const AgentPlan& actions : parallel.plan) {
+        for (std::size_t i = 1; i < actions.size(); ++i) {
+            assert(!(isWaitAction(actions[i - 1]) &&
+                     isWaitAction(actions[i])));
+        }
+    }
 }
 
 void testAgentSelector() {
@@ -446,6 +507,7 @@ int main() {
     testMoveAcquireAndRefuel();
     testAcquisitionOrder();
     testFuelValidation();
+    testWaitCompression();
     testHashAndEvaluation();
     testDijkstra();
     testBeamSearch();

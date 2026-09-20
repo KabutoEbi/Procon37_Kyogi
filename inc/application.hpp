@@ -199,16 +199,20 @@ inline BeamSearchResult solveDay(
 }
 
 inline void printPlan(std::ostream& output, const DailyPlan& plan) {
+    const DailyPlan compressed = compressWaitActions(plan);
     output << "[\n";
-    for (std::size_t agent = 0; agent < plan.size(); ++agent) {
+    for (std::size_t agent = 0; agent < compressed.size(); ++agent) {
         output << "  [";
-        for (std::size_t action = 0; action < plan[agent].size(); ++action) {
+        for (std::size_t action = 0;
+             action < compressed[agent].size();
+             ++action) {
             if (action != 0) {
                 output << ", ";
             }
-            output << plan[agent][action];
+            output << compressed[agent][action];
         }
-        output << "]" << (agent + 1 == plan.size() ? "\n" : ",\n");
+        output << "]"
+               << (agent + 1 == compressed.size() ? "\n" : ",\n");
     }
     output << "]\n";
 }

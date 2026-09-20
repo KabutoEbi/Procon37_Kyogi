@@ -15,22 +15,36 @@ struct EvaluationWeights {
     double udon = 1.0e4;
     double remainingFuel = 1.0;
     double unusedStep = -0.5;
-    double valuableSpotDistance = -2.0;
-    double supplyDistance = -1.0;
-    double concentration = -10.0;
+    double valuableSpotDistance = -4.0;
+    double newBrandSpotDistance = -2000.0;
+    double dailyBrandSpotDistance = -200.0;
+    double targetSlack = 0.5;
+    double supplyDistance = -6.0;
+    double rendezvousMismatch = -4.0;
+    double fuelRisk = -1000.0;
+    double unreachableTarget = -5000.0;
+    double concentration = -250.0;
 };
 
-// 距離値は評価直前にダイクストラ結果から設定する。
+// スポット距離と補給合流指標は探索側で設定する。
 struct EvaluationContext {
     ScoreState scoreAtDayStart{};
     std::array<std::int32_t, kMaxAgents> nearestValuableSpotSteps{};
+    std::array<std::int32_t, kMaxAgents> nearestNewBrandSpotSteps{};
+    std::array<std::int32_t, kMaxAgents> nearestDailyBrandSpotSteps{};
     std::array<std::int32_t, kMaxAgents> nearestSupplySteps{};
 
     // 複数台が同じ低価値目標へ向かう等の、探索側で計算する競合度。
     std::int32_t concentrationCount = 0;
+    std::int32_t targetSlack = 0;
+    std::int32_t rendezvousMismatch = 0;
+    std::int32_t fuelRisk = 0;
+    std::int32_t unreachableTargetCount = 0;
 
     EvaluationContext() noexcept {
         nearestValuableSpotSteps.fill(kImpassableCost);
+        nearestNewBrandSpotSteps.fill(kImpassableCost);
+        nearestDailyBrandSpotSteps.fill(kImpassableCost);
         nearestSupplySteps.fill(kImpassableCost);
     }
 };
@@ -42,8 +56,14 @@ struct EvaluationBreakdown {
     std::int32_t remainingFuel = 0;
     std::int32_t unusedSteps = 0;
     std::int32_t valuableSpotDistance = 0;
+    std::int32_t newBrandSpotDistance = 0;
+    std::int32_t dailyBrandSpotDistance = 0;
     std::int32_t supplyDistance = 0;
     std::int32_t concentrationCount = 0;
+    std::int32_t targetSlack = 0;
+    std::int32_t rendezvousMismatch = 0;
+    std::int32_t fuelRisk = 0;
+    std::int32_t unreachableTargetCount = 0;
     double total = 0.0;
 };
 
@@ -58,6 +78,10 @@ inline EvaluationBreakdown evaluateGameState(
     res.udonCount = st.score.totalUdon - ctx.scoreAtDayStart.totalUdon;
     res.unusedSteps = st.remainingSteps();
     res.concentrationCount = ctx.concentrationCount;
+    res.targetSlack = ctx.targetSlack;
+    res.rendezvousMismatch = ctx.rendezvousMismatch;
+    res.fuelRisk = ctx.fuelRisk;
+    res.unreachableTargetCount = ctx.unreachableTargetCount;
 
     for (std::size_t i = 0; i < st.agentCount; ++i) {
         const Agent& a = st.agents[i];
@@ -65,6 +89,14 @@ inline EvaluationBreakdown evaluateGameState(
             res.remainingFuel += a.fuel;
             if (ctx.nearestValuableSpotSteps[i] < kImpassableCost) {
                 res.valuableSpotDistance += ctx.nearestValuableSpotSteps[i];
+            }
+            if (ctx.nearestNewBrandSpotSteps[i] < kImpassableCost) {
+                res.newBrandSpotDistance +=
+                    ctx.nearestNewBrandSpotSteps[i];
+            }
+            if (ctx.nearestDailyBrandSpotSteps[i] < kImpassableCost) {
+                res.dailyBrandSpotDistance +=
+                    ctx.nearestDailyBrandSpotSteps[i];
             }
             if (ctx.nearestSupplySteps[i] < kImpassableCost) {
                 res.supplyDistance += ctx.nearestSupplySteps[i];
@@ -78,7 +110,13 @@ inline EvaluationBreakdown evaluateGameState(
                 w.remainingFuel * res.remainingFuel +
                 w.unusedStep * res.unusedSteps +
                 w.valuableSpotDistance * res.valuableSpotDistance +
+                w.newBrandSpotDistance * res.newBrandSpotDistance +
+                w.dailyBrandSpotDistance * res.dailyBrandSpotDistance +
+                w.targetSlack * res.targetSlack +
                 w.supplyDistance * res.supplyDistance +
+                w.rendezvousMismatch * res.rendezvousMismatch +
+                w.fuelRisk * res.fuelRisk +
+                w.unreachableTarget * res.unreachableTargetCount +
                 w.concentration * res.concentrationCount;
     return res;
 }
