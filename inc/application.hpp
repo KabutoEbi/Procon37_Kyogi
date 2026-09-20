@@ -18,7 +18,8 @@ struct ApplicationConfig {
     CreateConfig createConfig{};
     BeamSearchConfig beamConfig{};
     std::string outputPath = "problem.json";
-    std::int32_t supplyCount = 1;
+    // -1ならエージェント種別選択器に任せる。
+    std::int32_t supplyCount = -1;
 };
 
 namespace application_detail {
@@ -132,9 +133,33 @@ inline void printUsage(std::ostream& output, const char* program) {
         << "  --teams N              number of teams\n"
         << "  --seed N               deterministic random seed\n\n"
         << "Solve options:\n"
-        << "  --supplies N           number of supply agents\n"
+        << "  --supplies N           fixed supply count (default: auto)\n"
         << "  --beam-width N         main beam width\n"
         << "  --joint-beam-width N   joint action beam width\n";
+}
+
+inline MatchState makeInitialState(
+    const MatchSetting& setting,
+    const std::vector<AgentKind>& kinds) {
+    if (kinds.size() != setting.agentCount()) {
+        throw std::invalid_argument(
+            "agent kind count must match agent starts");
+    }
+
+    MatchState state;
+    state.day = 0;
+    state.trafficByPos.assign(
+        setting.field.cellCount(), TrafficStatus::Smooth);
+    state.agents.reserve(setting.agentCount());
+    for (std::size_t i = 0; i < setting.agentCount(); ++i) {
+        state.agents.push_back(Agent{
+            i,
+            kinds[i],
+            setting.agentStarts[i],
+            setting.fuelLimit,
+        });
+    }
+    return state;
 }
 
 inline MatchState makeInitialState(
@@ -146,26 +171,16 @@ inline MatchState makeInitialState(
             "supplies must be in [0, agentCount - 1]");
     }
 
-    MatchState state;
-    state.day = 0;
-    state.trafficByPos.assign(
-        setting.field.cellCount(), TrafficStatus::Smooth);
-    state.agents.reserve(setting.agentCount());
-
+    std::vector<AgentKind> kinds(
+        setting.agentCount(), AgentKind::Patrol);
     const std::size_t firstSupply =
         setting.agentCount() - static_cast<std::size_t>(supplyCount);
     for (std::size_t i = 0; i < setting.agentCount(); ++i) {
-        const AgentKind kind = i >= firstSupply
-                                   ? AgentKind::Supply
-                                   : AgentKind::Patrol;
-        state.agents.push_back(Agent{
-            i,
-            kind,
-            setting.agentStarts[i],
-            setting.fuelLimit,
-        });
+        if (i >= firstSupply) {
+            kinds[i] = AgentKind::Supply;
+        }
     }
-    return state;
+    return makeInitialState(setting, kinds);
 }
 
 inline DailyPlan makeWaitPlan(
@@ -244,8 +259,18 @@ inline int runLocalSolver(
         argc, argv, false, defaults);
     const GeneratedProblem problem =
         ProblemCreator::generate(options.createConfig);
-    const MatchState state =
-        makeInitialState(problem.setting, options.supplyCount);
+    MatchState state;
+    if (options.supplyCount < 0) {
+        const AgentSelectionResult selection =
+            selectAgentKinds(problem.setting);
+        if (!selection.success) {
+            std::cerr << "failed to select agent kinds\n";
+            return 1;
+        }
+        state = makeInitialState(problem.setting, selection.kinds);
+    } else {
+        state = makeInitialState(problem.setting, options.supplyCount);
+    }
     const BeamSearchResult result = solveDay(
         problem.setting,
         state,

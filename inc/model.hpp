@@ -2,6 +2,7 @@
 
 // 競技モデルを一括で使うための入口。
 #include "agent.hpp"
+#include "agent_selector.hpp"
 #include "brain/brain0.hpp"
 #include "brain/brain1.hpp"
 #include "cell.hpp"

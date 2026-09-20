@@ -15,7 +15,18 @@ int main() {
     createArgs.seed = 1;
 
     const auto problem = procon37::create(createArgs, "problem.json");
-    const auto state = procon37::makeInitialState(problem.setting, 1);
+
+    procon37::AgentSelectorConfig selectorArgs;
+    selectorArgs.trialCandidateLimit = 8;
+    selectorArgs.trialBeamWidth = 32;
+    selectorArgs.trialJointBeamWidth = 128;
+    const auto selection =
+        procon37::selectAgentKinds(problem.setting, selectorArgs);
+    if (!selection.success) {
+        return 1;
+    }
+    const auto state =
+        procon37::makeInitialState(problem.setting, selection.kinds);
 
     [[maybe_unused]] const auto shortestPath = procon37::brain0(
         problem.setting,

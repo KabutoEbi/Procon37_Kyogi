@@ -178,6 +178,41 @@ void testBeamSearch() {
     assert(validateDailyPlan(setting, state, result.plan).valid);
 }
 
+void testAgentSelector() {
+    const MatchSetting setting = makeSetting();
+    AgentSelectorConfig config;
+    config.trialCandidateLimit = 2;
+    config.trialBeamWidth = 16;
+    config.trialJointBeamWidth = 64;
+
+    const AgentSelectionResult first = selectAgentKinds(setting, config);
+    const AgentSelectionResult second = selectAgentKinds(setting, config);
+    assert(first.success);
+    assert(first.kinds == second.kinds);
+    assert(first.kinds.size() == setting.agentCount());
+    assert(first.evaluatedAssignments == 3);
+    assert(first.trialAssignments == 2);
+    assert(std::count(
+               first.kinds.begin(),
+               first.kinds.end(),
+               AgentKind::Supply) == first.supplyCount);
+    assert(std::count(
+               first.kinds.begin(),
+               first.kinds.end(),
+               AgentKind::Patrol) >= 1);
+
+    config.minSupplyCount = 1;
+    config.maxSupplyCount = 1;
+    config.trialCandidateLimit = 0;
+    const AgentSelectionResult fixedCount =
+        selectAgentKinds(setting, config);
+    assert(fixedCount.success);
+    assert(fixedCount.supplyCount == 1);
+    assert(fixedCount.evaluatedAssignments == 2);
+    assert(fixedCount.trialAssignments == 0);
+
+}
+
 void testProblemCreator() {
     CreateConfig config;
     config.width = 8;
@@ -304,5 +339,6 @@ int main() {
     testHashAndEvaluation();
     testDijkstra();
     testBeamSearch();
+    testAgentSelector();
     testProblemCreator();
 }
