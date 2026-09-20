@@ -47,62 +47,54 @@ private:
     };
 
     static void validate(
-        const MatchSetting& setting,
-        const AgentSelectorConfig& config) {
-        const std::size_t agentCount = setting.agentCount();
-        if (agentCount == 0 || agentCount > kMaxAgents) {
+        const MatchSetting& s,
+        const AgentSelectorConfig& cfg) {
+        const std::size_t n = s.agentCount();
+        if (n == 0 || n > kMaxAgents) {
             throw std::invalid_argument(
                 "agent count must be in [1, kMaxAgents]");
         }
-        if (setting.daySteps.empty() ||
-            !setting.hasConsistentDaySettings() ||
-            setting.fuelLimit <= 0 ||
-            setting.field.cells.size() != setting.field.cellCount()) {
+        if (s.daySteps.empty() || !s.hasConsistentDaySettings() ||
+            s.fuelLimit <= 0 ||
+            s.field.cells.size() != s.field.cellCount()) {
             throw std::invalid_argument("match setting is incomplete");
         }
-        for (const CellPos start : setting.agentStarts) {
-            if (!setting.field.contains(start) ||
-                !setting.field.at(start).isPassable()) {
+        for (const CellPos start : s.agentStarts) {
+            if (!s.field.contains(start) ||
+                !s.field.at(start).isPassable()) {
                 throw std::invalid_argument(
                     "every agent start must be passable");
             }
         }
 
         const std::int32_t maximum =
-            config.maxSupplyCount < 0
-                ? static_cast<std::int32_t>(agentCount) - 1
-                : config.maxSupplyCount;
-        if (config.minSupplyCount < 0 ||
-            config.minSupplyCount > maximum ||
-            maximum >= static_cast<std::int32_t>(agentCount)) {
+            cfg.maxSupplyCount < 0
+                ? static_cast<std::int32_t>(n) - 1
+                : cfg.maxSupplyCount;
+        if (cfg.minSupplyCount < 0 || cfg.minSupplyCount > maximum ||
+            maximum >= static_cast<std::int32_t>(n)) {
             throw std::invalid_argument(
                 "supply count range must leave at least one patrol agent");
         }
-        if (config.trialCandidateLimit > 0 &&
-            (config.trialBeamWidth == 0 ||
-             config.trialJointBeamWidth == 0)) {
+        if (cfg.trialCandidateLimit > 0 &&
+            (cfg.trialBeamWidth == 0 || cfg.trialJointBeamWidth == 0)) {
             throw std::invalid_argument(
                 "beam widths must be positive when trials are enabled");
         }
     }
 
     static MatchState makeState(
-        const MatchSetting& setting,
+        const MatchSetting& s,
         const std::vector<AgentKind>& kinds) {
-        MatchState state;
-        state.day = 0;
-        state.trafficByPos.assign(
-            setting.field.cellCount(), TrafficStatus::Smooth);
-        state.agents.reserve(kinds.size());
+        MatchState st;
+        st.day = 0;
+        st.trafficByPos.assign(s.field.cellCount(), TrafficStatus::Smooth);
+        st.agents.reserve(kinds.size());
         for (std::size_t i = 0; i < kinds.size(); ++i) {
-            state.agents.push_back(Agent{
-                i,
-                kinds[i],
-                setting.agentStarts[i],
-                setting.fuelLimit,
-            });
+            st.agents.push_back(
+                Agent{i, kinds[i], s.agentStarts[i], s.fuelLimit});
         }
-        return state;
+        return st;
     }
 
     static std::int32_t countBits(std::uint32_t value) noexcept {
@@ -157,199 +149,176 @@ private:
 
 public:
     static AgentSelectionResult select(
-        const MatchSetting& setting,
-        const AgentSelectorConfig& config = {}) {
-        validate(setting, config);
+        const MatchSetting& s,
+        const AgentSelectorConfig& cfg = {}) {
+        validate(s, cfg);
 
-        const std::size_t agentCount = setting.agentCount();
-        const std::int32_t maximumSupply =
-            config.maxSupplyCount < 0
-                ? static_cast<std::int32_t>(agentCount) - 1
-                : config.maxSupplyCount;
-        const std::int32_t daySteps = setting.daySteps.front();
-        const std::uint32_t assignmentCount =
-            std::uint32_t{1} << static_cast<std::uint32_t>(agentCount);
+        const std::size_t n = s.agentCount();
+        const std::int32_t maxSupply =
+            cfg.maxSupplyCount < 0
+                ? static_cast<std::int32_t>(n) - 1
+                : cfg.maxSupplyCount;
+        const std::int32_t steps = s.daySteps.front();
+        const std::uint32_t masks =
+            std::uint32_t{1} << static_cast<std::uint32_t>(n);
 
-        MatchState allPatrolState;
-        allPatrolState.day = 0;
-        allPatrolState.trafficByPos.assign(
-            setting.field.cellCount(), TrafficStatus::Smooth);
-        std::vector<DijkstraTable> distances;
-        distances.reserve(agentCount);
-        for (const CellPos start : setting.agentStarts) {
-            distances.push_back(
-                Brain0::dijkstra(setting, allPatrolState, start));
+        MatchState base;
+        base.day = 0;
+        base.trafficByPos.assign(s.field.cellCount(), TrafficStatus::Smooth);
+        std::vector<DijkstraTable> dist;
+        dist.reserve(n);
+        for (const CellPos start : s.agentStarts) {
+            dist.push_back(Brain0::dijkstra(s, base, start));
         }
 
-        std::vector<Candidate> candidates;
-        for (std::uint32_t mask = 0; mask < assignmentCount; ++mask) {
-            const std::int32_t supplyCount = countBits(mask);
-            if (supplyCount < config.minSupplyCount ||
-                supplyCount > maximumSupply) {
+        std::vector<Candidate> cs;
+        for (std::uint32_t mask = 0; mask < masks; ++mask) {
+            const std::int32_t supplyN = countBits(mask);
+            if (supplyN < cfg.minSupplyCount || supplyN > maxSupply) {
                 continue;
             }
 
-            Candidate candidate;
-            candidate.supplyCount = supplyCount;
-            candidate.supplyMask = mask;
-            candidate.kinds.resize(agentCount, AgentKind::Patrol);
-            for (std::size_t i = 0; i < agentCount; ++i) {
+            Candidate c;
+            c.supplyCount = supplyN;
+            c.supplyMask = mask;
+            c.kinds.resize(n, AgentKind::Patrol);
+            for (std::size_t i = 0; i < n; ++i) {
                 if ((mask & (std::uint32_t{1} << i)) != 0) {
-                    candidate.kinds[i] = AgentKind::Supply;
+                    c.kinds[i] = AgentKind::Supply;
                 }
             }
 
-            std::vector<bool> reachableBrands(
-                setting.field.brands.size(), false);
-            std::int32_t reachableSpots = 0;
-            std::int32_t reachableStock = 0;
-            std::int64_t distanceSum = 0;
-            for (const Spot& spot : setting.field.spots) {
-                std::int32_t nearest = kImpassableCost;
-                for (std::size_t i = 0; i < agentCount; ++i) {
-                    if (candidate.kinds[i] != AgentKind::Patrol) {
+            std::vector<bool> brands(s.field.brands.size(), false);
+            std::int32_t spots = 0;
+            std::int32_t stock = 0;
+            std::int64_t distSum = 0;
+            for (const Spot& spot : s.field.spots) {
+                std::int32_t near = kImpassableCost;
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (c.kinds[i] != AgentKind::Patrol) {
                         continue;
                     }
-                    nearest = std::min(
-                        nearest,
-                        distanceTo(distances[i], spot.pos));
+                    near = std::min(near, distanceTo(dist[i], spot.pos));
                 }
-                if (nearest > daySteps || nearest >= kImpassableCost) {
+                if (near > steps || near >= kImpassableCost) {
                     continue;
                 }
-                ++reachableSpots;
-                reachableStock += spot.maxStock;
-                distanceSum += nearest;
+                ++spots;
+                stock += spot.maxStock;
+                distSum += near;
                 if (spot.brandIndex >= 0 &&
                     static_cast<std::size_t>(spot.brandIndex) <
-                        reachableBrands.size()) {
-                    reachableBrands[
-                        static_cast<std::size_t>(spot.brandIndex)] = true;
+                        brands.size()) {
+                    brands[static_cast<std::size_t>(spot.brandIndex)] = true;
                 }
             }
 
-            const std::int32_t brandCount = static_cast<std::int32_t>(
-                std::count(
-                    reachableBrands.begin(),
-                    reachableBrands.end(),
-                    true));
+            const auto brandN = static_cast<std::int32_t>(
+                std::count(brands.begin(), brands.end(), true));
 
             // 同じ補給車台数なら、巡回車と主要スポットに近い開始位置を
             // 補給車へ割り当てる。燃料が少ない問題ほど影響を強める。
-            std::int64_t supplyDistance = 0;
-            if (supplyCount > 0) {
-                for (std::size_t patrol = 0;
-                     patrol < agentCount;
-                     ++patrol) {
-                    if (candidate.kinds[patrol] != AgentKind::Patrol) {
+            std::int64_t supplyDist = 0;
+            if (supplyN > 0) {
+                for (std::size_t p = 0; p < n; ++p) {
+                    if (c.kinds[p] != AgentKind::Patrol) {
                         continue;
                     }
-                    std::int32_t nearest = kImpassableCost;
-                    for (std::size_t supply = 0;
-                         supply < agentCount;
-                         ++supply) {
-                        if (candidate.kinds[supply] != AgentKind::Supply) {
+                    std::int32_t near = kImpassableCost;
+                    for (std::size_t q = 0; q < n; ++q) {
+                        if (c.kinds[q] != AgentKind::Supply) {
                             continue;
                         }
-                        nearest = std::min(
-                            nearest,
-                            distanceTo(
-                                distances[supply],
-                                setting.agentStarts[patrol]));
+                        near = std::min(
+                            near, distanceTo(dist[q], s.agentStarts[p]));
                     }
-                    if (nearest < kImpassableCost) {
-                        supplyDistance += nearest;
+                    if (near < kImpassableCost) {
+                        supplyDist += near;
                     }
                 }
             }
 
-            const double maximumFuelDemand =
-                3.0 * static_cast<double>(std::max(1, daySteps));
+            const double maxFuel =
+                3.0 * static_cast<double>(std::max(1, steps));
             const double fuelPressure = std::max(
                 0.0,
-                (maximumFuelDemand - setting.fuelLimit) /
-                    maximumFuelDemand);
-            candidate.heuristicScore =
-                1.0e9 * brandCount +
-                1.0e6 * reachableSpots +
-                1.0e4 * reachableStock -
-                100.0 * static_cast<double>(distanceSum) -
-                10.0 * fuelPressure *
-                    static_cast<double>(supplyDistance);
-            candidates.push_back(std::move(candidate));
+                (maxFuel - s.fuelLimit) / maxFuel);
+            c.heuristicScore =
+                1.0e9 * brandN + 1.0e6 * spots + 1.0e4 * stock -
+                100.0 * static_cast<double>(distSum) -
+                10.0 * fuelPressure * static_cast<double>(supplyDist);
+            cs.push_back(std::move(c));
         }
 
-        std::sort(candidates.begin(), candidates.end(), betterHeuristic);
-        AgentSelectionResult result;
-        result.evaluatedAssignments = candidates.size();
-        if (candidates.empty()) {
-            return result;
+        std::sort(cs.begin(), cs.end(), betterHeuristic);
+        AgentSelectionResult res;
+        res.evaluatedAssignments = cs.size();
+        if (cs.empty()) {
+            return res;
         }
 
-        std::vector<std::size_t> trialIndices;
-        if (config.trialCandidateLimit > 0) {
+        std::vector<std::size_t> trials;
+        if (cfg.trialCandidateLimit > 0) {
             // 補給車台数ごとの最良配置を優先し、台数の違いを必ず比較する。
-            for (std::int32_t supplies = config.minSupplyCount;
-                 supplies <= maximumSupply &&
-                 trialIndices.size() < config.trialCandidateLimit;
-                 ++supplies) {
+            for (std::int32_t count = cfg.minSupplyCount;
+                 count <= maxSupply &&
+                 trials.size() < cfg.trialCandidateLimit;
+                 ++count) {
                 const auto found = std::find_if(
-                    candidates.begin(),
-                    candidates.end(),
-                    [supplies](const Candidate& candidate) {
-                        return candidate.supplyCount == supplies;
+                    cs.begin(),
+                    cs.end(),
+                    [count](const Candidate& c) {
+                        return c.supplyCount == count;
                     });
-                if (found != candidates.end()) {
-                    trialIndices.push_back(static_cast<std::size_t>(
-                        found - candidates.begin()));
+                if (found != cs.end()) {
+                    trials.push_back(static_cast<std::size_t>(
+                        found - cs.begin()));
                 }
             }
             for (std::size_t i = 0;
-                 i < candidates.size() &&
-                 trialIndices.size() < config.trialCandidateLimit;
+                 i < cs.size() && trials.size() < cfg.trialCandidateLimit;
                  ++i) {
-                if (std::find(trialIndices.begin(), trialIndices.end(), i) ==
-                    trialIndices.end()) {
-                    trialIndices.push_back(i);
+                if (std::find(trials.begin(), trials.end(), i) ==
+                    trials.end()) {
+                    trials.push_back(i);
                 }
             }
         }
 
-        const Candidate* selected = &candidates.front();
-        EvaluationBreakdown selectedEvaluation{};
-        bool hasSuccessfulTrial = false;
-        BeamSearchConfig beamConfig;
-        beamConfig.beamWidth = config.trialBeamWidth;
-        beamConfig.jointBeamWidth = config.trialJointBeamWidth;
-        beamConfig.weights = config.trialWeights;
-        for (const std::size_t index : trialIndices) {
-            const Candidate& candidate = candidates[index];
-            const MatchState state = makeState(setting, candidate.kinds);
+        const Candidate* best = &cs.front();
+        EvaluationBreakdown bestEval{};
+        bool tried = false;
+        BeamSearchConfig beam;
+        beam.beamWidth = cfg.trialBeamWidth;
+        beam.jointBeamWidth = cfg.trialJointBeamWidth;
+        beam.weights = cfg.trialWeights;
+        for (const std::size_t i : trials) {
+            const Candidate& c = cs[i];
             const BeamSearchResult trial =
-                Brain1::search(setting, state, {}, beamConfig);
-            ++result.trialAssignments;
+                Brain1::search(s, makeState(s, c.kinds), {}, beam);
+            ++res.trialAssignments;
             if (!trial.success) {
                 continue;
             }
-            if (!hasSuccessfulTrial ||
+            if (!tried ||
                 betterTrial(
                     trial.evaluation,
-                    candidate.heuristicScore,
-                    selectedEvaluation,
-                    selected->heuristicScore)) {
-                selected = &candidate;
-                selectedEvaluation = trial.evaluation;
-                hasSuccessfulTrial = true;
+                    c.heuristicScore,
+                    bestEval,
+                    best->heuristicScore)) {
+                best = &c;
+                bestEval = trial.evaluation;
+                tried = true;
             }
         }
 
-        result.success = true;
-        result.kinds = selected->kinds;
-        result.supplyCount = selected->supplyCount;
-        result.heuristicScore = selected->heuristicScore;
-        result.usedBeamTrial = hasSuccessfulTrial;
-        result.trialEvaluation = selectedEvaluation;
-        return result;
+        res.success = true;
+        res.kinds = best->kinds;
+        res.supplyCount = best->supplyCount;
+        res.heuristicScore = best->heuristicScore;
+        res.usedBeamTrial = tried;
+        res.trialEvaluation = bestEval;
+        return res;
     }
 };
 

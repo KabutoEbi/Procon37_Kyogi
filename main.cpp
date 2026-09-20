@@ -3,47 +3,44 @@
 #include <iostream>
 
 int main() {
-    procon37::CreateConfig createArgs;
-    createArgs.width = 16;
-    createArgs.height = 16;
-    createArgs.agentCount = 4;
-    createArgs.spotCount = 16;
-    createArgs.brandCount = 12;
-    createArgs.dayCount = 4;
-    createArgs.daySeconds = 60;
-    createArgs.teamCount = 2;
-    createArgs.seed = 1;
+    procon37::CreateConfig cfg;
+    cfg.width = 16;
+    cfg.height = 16;
+    cfg.agentCount = 4;
+    cfg.spotCount = 16;
+    cfg.brandCount = 12;
+    cfg.dayCount = 4;
+    cfg.daySeconds = 60;
+    cfg.teamCount = 2;
+    cfg.seed = 1;
 
-    const auto problem = procon37::create(createArgs, "problem.json");
+    const auto problem = procon37::create(cfg, "problem.json");
 
-    procon37::AgentSelectorConfig selectorArgs;
-    selectorArgs.trialCandidateLimit = 8;
-    selectorArgs.trialBeamWidth = 32;
-    selectorArgs.trialJointBeamWidth = 128;
-    const auto selection =
-        procon37::selectAgentKinds(problem.setting, selectorArgs);
-    if (!selection.success) {
+    procon37::AgentSelectorConfig selCfg;
+    selCfg.trialCandidateLimit = 8;
+    selCfg.trialBeamWidth = 32;
+    selCfg.trialJointBeamWidth = 128;
+    const auto sel = procon37::selectAgentKinds(problem.setting, selCfg);
+    if (!sel.success) {
         return 1;
     }
-    const auto state =
-        procon37::makeInitialState(problem.setting, selection.kinds);
+    const auto st = procon37::makeInitialState(problem.setting, sel.kinds);
 
-    [[maybe_unused]] const auto shortestPath = procon37::brain0(
+    [[maybe_unused]] const auto path = procon37::brain0(
         problem.setting,
-        state,
-        state.agents.front().pos,
+        st,
+        st.agents.front().pos,
         problem.setting.field.spots.front().pos,
-        state.agents.front().kind);
+        st.agents.front().kind);
 
-    procon37::BeamSearchConfig brain1Args;
-    brain1Args.beamWidth = 128;
-    brain1Args.jointBeamWidth = 512;
+    procon37::BeamSearchConfig beam;
+    beam.beamWidth = 128;
+    beam.jointBeamWidth = 512;
 
-    const auto answer =
-        procon37::brain1(problem.setting, state, {}, brain1Args);
-    if (!answer.success) {
+    const auto ans = procon37::brain1(problem.setting, st, {}, beam);
+    if (!ans.success) {
         return 1;
     }
-    procon37::printPlan(std::cout, answer.plan);
+    procon37::printPlan(std::cout, ans.plan);
     return 0;
 }

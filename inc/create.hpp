@@ -221,6 +221,78 @@ private:
         return escaped;
     }
 
+    template <class Values>
+    static void writeArray(
+        std::ostringstream& out,
+        std::string_view indent,
+        std::string_view name,
+        const Values& vals,
+        bool comma = true) {
+        out << indent << '"' << name << "\": [";
+        for (std::size_t i = 0; i < vals.size(); ++i) {
+            out << (i == 0 ? "" : ", ") << vals[i];
+        }
+        out << ']' << (comma ? ",\n" : "\n");
+    }
+
+    static void writeCells(
+        std::ostringstream& out,
+        std::string_view indent,
+        const Field& f,
+        bool comma = false) {
+        out << indent << "\"cells\": [\n";
+        for (std::int32_t y = 0; y < f.height; ++y) {
+            out << indent << "  [";
+            for (std::int32_t x = 0; x < f.width; ++x) {
+                const CellPos pos = y * f.width + x;
+                out << (x == 0 ? "" : ", ")
+                    << static_cast<std::int32_t>(f.at(pos).type);
+            }
+            out << ']' << (y + 1 == f.height ? "\n" : ",\n");
+        }
+        out << indent << ']' << (comma ? ",\n" : "\n");
+    }
+
+    static void writeSpots(
+        std::ostringstream& out,
+        std::string_view indent,
+        const Field& f,
+        bool comma = true) {
+        out << indent << "\"spots\": [\n";
+        for (std::size_t i = 0; i < f.spots.size(); ++i) {
+            const Spot& s = f.spots[i];
+            out << indent << "  {\"brand\": " << s.brand
+                << ", \"pos\": " << s.pos
+                << ", \"stocks\": " << s.maxStock << '}'
+                << (i + 1 == f.spots.size() ? "\n" : ",\n");
+        }
+        out << indent << ']' << (comma ? ",\n" : "\n");
+    }
+
+    static void writeAgents(
+        std::ostringstream& out,
+        const std::vector<Agent>& agents,
+        std::string_view indent) {
+        out << "[\n";
+        for (std::size_t i = 0; i < agents.size(); ++i) {
+            const Agent& a = agents[i];
+            out << indent << "{\"kind\": "
+                << static_cast<std::int32_t>(a.kind)
+                << ", \"pos\": " << a.pos
+                << ", \"fuel\": " << a.fuel << '}'
+                << (i + 1 == agents.size() ? "\n" : ",\n");
+        }
+        out << std::string(indent.size() >= 2 ? indent.size() - 2 : 0, ' ')
+            << ']';
+    }
+
+    static bool writeFile(
+        const std::string& path,
+        const std::string& text) {
+        std::ofstream out(path);
+        return out && static_cast<bool>(out << text);
+    }
+
 public:
     // 地形だけを生成する。スポットと初期位置はまだ配置しない。
     static Field generateField(const CreateConfig& config = {}) {
@@ -318,152 +390,66 @@ public:
 
     // 簡易サーバーの -config にそのまま渡せるJSONを生成する。
     static std::string toJson(const GeneratedProblem& problem) {
-        const MatchSetting& setting = problem.setting;
-        const Field& field = setting.field;
-        std::ostringstream output;
-        output << "{\n  \"problem\": {\n";
-
-        output << "    \"spots\": [\n";
-        for (std::size_t i = 0; i < field.spots.size(); ++i) {
-            const Spot& spot = field.spots[i];
-            output << "      {\"brand\": " << spot.brand
-                   << ", \"pos\": " << spot.pos
-                   << ", \"stocks\": " << spot.maxStock << "}";
-            output << (i + 1 == field.spots.size() ? "\n" : ",\n");
-        }
-        output << "    ],\n";
-
-        auto writeIntegerArray = [&](std::string_view name,
-                                     const auto& values,
-                                     bool trailingComma = true) {
-            output << "    \"" << name << "\": [";
-            for (std::size_t i = 0; i < values.size(); ++i) {
-                if (i != 0) {
-                    output << ", ";
-                }
-                output << values[i];
-            }
-            output << "]" << (trailingComma ? ",\n" : "\n");
-        };
-
-        writeIntegerArray("agentStarts", setting.agentStarts);
-        output << "    \"fuelLimits\": " << setting.fuelLimit << ",\n";
-        writeIntegerArray("daySteps", setting.daySteps);
-        writeIntegerArray("daySeconds", setting.daySeconds);
-        output << "    \"busyThreshold\": " << setting.busyThreshold
-               << ",\n";
-        output << "    \"jammedThreshold\": " << setting.jammedThreshold
-               << ",\n";
-        output << "    \"width\": " << field.width << ",\n";
-        output << "    \"height\": " << field.height << ",\n";
-        output << "    \"cells\": [\n";
-        for (std::int32_t y = 0; y < field.height; ++y) {
-            output << "      [";
-            for (std::int32_t x = 0; x < field.width; ++x) {
-                if (x != 0) {
-                    output << ", ";
-                }
-                const CellPos pos = y * field.width + x;
-                output << static_cast<std::int32_t>(field.at(pos).type);
-            }
-            output << "]" << (y + 1 == field.height ? "\n" : ",\n");
-        }
-        output << "    ]\n  },\n";
-
-        output << "  \"teams\": [\n";
+        const MatchSetting& s = problem.setting;
+        const Field& f = s.field;
+        std::ostringstream out;
+        out << "{\n  \"problem\": {\n";
+        writeSpots(out, "    ", f);
+        writeArray(out, "    ", "agentStarts", s.agentStarts);
+        out << "    \"fuelLimits\": " << s.fuelLimit << ",\n";
+        writeArray(out, "    ", "daySteps", s.daySteps);
+        writeArray(out, "    ", "daySeconds", s.daySeconds);
+        out << "    \"busyThreshold\": " << s.busyThreshold << ",\n"
+            << "    \"jammedThreshold\": " << s.jammedThreshold << ",\n"
+            << "    \"width\": " << f.width << ",\n"
+            << "    \"height\": " << f.height << ",\n";
+        writeCells(out, "    ", f);
+        out << "  },\n  \"teams\": [\n";
         for (std::size_t i = 0; i < problem.teams.size(); ++i) {
-            const CreateTeam& team = problem.teams[i];
-            output << "    {";
-            if (!team.name.empty()) {
-                output << "\"name\": \"" << escapeJson(team.name)
-                       << "\", ";
+            const CreateTeam& t = problem.teams[i];
+            out << "    {";
+            if (!t.name.empty()) {
+                out << "\"name\": \"" << escapeJson(t.name) << "\", ";
             }
-            output << "\"token\": \"" << escapeJson(team.token) << "\"}";
-            output << (i + 1 == problem.teams.size() ? "\n" : ",\n");
+            out << "\"token\": \"" << escapeJson(t.token) << "\"}"
+                << (i + 1 == problem.teams.size() ? "\n" : ",\n");
         }
-        output << "  ]\n}\n";
-        return output.str();
+        out << "  ]\n}\n";
+        return out.str();
     }
 
     static bool writeJson(
         const GeneratedProblem& problem,
         const std::string& path) {
-        std::ofstream output(path);
-        if (!output) {
-            return false;
-        }
-        output << toJson(problem);
-        return static_cast<bool>(output);
+        return writeFile(path, toJson(problem));
     }
 
     // GET /setting と同じ「試合開始前のマップ構成フォーマット」。
     static std::string toMatchSettingJson(const MatchSetting& setting) {
-        const Field& field = setting.field;
-        std::ostringstream output;
-        output << "{\n";
-        output << "  \"startsAt\": " << setting.startsAt << ",\n";
-
-        auto writeIntegerArray = [&](std::string_view name,
-                                     const auto& values,
-                                     bool trailingComma = true) {
-            output << "  \"" << name << "\": [";
-            for (std::size_t i = 0; i < values.size(); ++i) {
-                if (i != 0) {
-                    output << ", ";
-                }
-                output << values[i];
-            }
-            output << "]" << (trailingComma ? ",\n" : "\n");
-        };
-
-        writeIntegerArray("daySeconds", setting.daySeconds);
-        writeIntegerArray("daySteps", setting.daySteps);
-        output << "  \"map\": {\n";
-        output << "    \"height\": " << field.height << ",\n";
-        output << "    \"width\": " << field.width << ",\n";
-        output << "    \"cells\": [\n";
-        for (std::int32_t y = 0; y < field.height; ++y) {
-            output << "      [";
-            for (std::int32_t x = 0; x < field.width; ++x) {
-                if (x != 0) {
-                    output << ", ";
-                }
-                const CellPos pos = y * field.width + x;
-                output << static_cast<std::int32_t>(field.at(pos).type);
-            }
-            output << "]" << (y + 1 == field.height ? "\n" : ",\n");
-        }
-        output << "    ]\n  },\n";
-
-        output << "  \"spots\": [\n";
-        for (std::size_t i = 0; i < field.spots.size(); ++i) {
-            const Spot& spot = field.spots[i];
-            output << "    {\"brand\": " << spot.brand
-                   << ", \"pos\": " << spot.pos
-                   << ", \"stocks\": " << spot.maxStock << "}";
-            output << (i + 1 == field.spots.size() ? "\n" : ",\n");
-        }
-        output << "  ],\n";
-        writeIntegerArray("agents", setting.agentStarts);
-        output << "  \"fuelLimits\": " << setting.fuelLimit << ",\n";
-        output << "  \"players\": " << setting.playerCount << ",\n";
-        output << "  \"busyThreshold\": " << setting.busyThreshold
-               << ",\n";
-        output << "  \"jammedThreshold\": " << setting.jammedThreshold
-               << "\n";
-        output << "}\n";
-        return output.str();
+        const Field& f = setting.field;
+        std::ostringstream out;
+        out << "{\n  \"startsAt\": " << setting.startsAt << ",\n";
+        writeArray(out, "  ", "daySeconds", setting.daySeconds);
+        writeArray(out, "  ", "daySteps", setting.daySteps);
+        out << "  \"map\": {\n"
+            << "    \"height\": " << f.height << ",\n"
+            << "    \"width\": " << f.width << ",\n";
+        writeCells(out, "    ", f);
+        out << "  },\n";
+        writeSpots(out, "  ", f);
+        writeArray(out, "  ", "agents", setting.agentStarts);
+        out << "  \"fuelLimits\": " << setting.fuelLimit << ",\n"
+            << "  \"players\": " << setting.playerCount << ",\n"
+            << "  \"busyThreshold\": " << setting.busyThreshold << ",\n"
+            << "  \"jammedThreshold\": " << setting.jammedThreshold << '\n'
+            << "}\n";
+        return out.str();
     }
 
     static bool writeMatchSettingJson(
         const MatchSetting& setting,
         const std::string& path) {
-        std::ofstream output(path);
-        if (!output) {
-            return false;
-        }
-        output << toMatchSettingJson(setting);
-        return static_cast<bool>(output);
+        return writeFile(path, toMatchSettingJson(setting));
     }
 
     // テスト用の各日開始状態を生成する。day=0では公式どおり初期位置、
@@ -560,78 +546,50 @@ public:
     static std::string toMatchStateJson(
         const MatchState& state,
         const Field& field) {
-        auto writeAgents = [](std::ostringstream& output,
-                              const std::vector<Agent>& agents,
-                              std::string_view indent) {
-            output << "[\n";
-            for (std::size_t i = 0; i < agents.size(); ++i) {
-                const Agent& agent = agents[i];
-                output << indent << "{\"kind\": "
-                       << static_cast<std::int32_t>(agent.kind)
-                       << ", \"pos\": " << agent.pos
-                       << ", \"fuel\": " << agent.fuel << "}";
-                output << (i + 1 == agents.size() ? "\n" : ",\n");
-            }
-            output << std::string(indent.size() >= 2 ? indent.size() - 2 : 0, ' ')
-                   << "]";
-        };
-
-        std::ostringstream output;
-        output << "{\n";
-        output << "  \"endsAt\": " << state.endsAt << ",\n";
-        output << "  \"day\": " << state.day << ",\n";
-        output << "  \"agents\": ";
-        writeAgents(output, state.agents, "    ");
-        output << ",\n";
-
-        output << "  \"others\": [\n";
+        std::ostringstream out;
+        out << "{\n"
+            << "  \"endsAt\": " << state.endsAt << ",\n"
+            << "  \"day\": " << state.day << ",\n"
+            << "  \"agents\": ";
+        writeAgents(out, state.agents, "    ");
+        out << ",\n  \"others\": [\n";
         for (std::size_t i = 0; i < state.others.size(); ++i) {
-            const TeamState& team = state.others[i];
-            output << "    {\n";
-            output << "      \"id\": " << team.id << ",\n";
-            output << "      \"agents\": ";
-            writeAgents(output, team.agents, "        ");
-            output << "\n    }";
-            output << (i + 1 == state.others.size() ? "\n" : ",\n");
+            const TeamState& t = state.others[i];
+            out << "    {\n      \"id\": " << t.id
+                << ",\n      \"agents\": ";
+            writeAgents(out, t.agents, "        ");
+            out << "\n    }"
+                << (i + 1 == state.others.size() ? "\n" : ",\n");
         }
-        output << "  ],\n";
-
-        output << "  \"traffics\": [\n";
-        bool firstTraffic = true;
+        out << "  ],\n  \"traffics\": [\n";
+        bool first = true;
         for (std::size_t pos = 0; pos < field.cellCount(); ++pos) {
             if (field.cells[pos].type != CellType::Road) {
                 continue;
             }
-            if (!firstTraffic) {
-                output << ",\n";
+            if (!first) {
+                out << ",\n";
             }
-            const TrafficStatus status =
+            const TrafficStatus s =
                 pos < state.trafficByPos.size()
                     ? state.trafficByPos[pos]
                     : TrafficStatus::Smooth;
-            output << "    {\"pos\": " << pos
-                   << ", \"status\": "
-                   << static_cast<std::int32_t>(status) << "}";
-            firstTraffic = false;
+            out << "    {\"pos\": " << pos << ", \"status\": "
+                << static_cast<std::int32_t>(s) << '}';
+            first = false;
         }
-        if (!firstTraffic) {
-            output << '\n';
+        if (!first) {
+            out << '\n';
         }
-        output << "  ]\n";
-        output << "}\n";
-        return output.str();
+        out << "  ]\n}\n";
+        return out.str();
     }
 
     static bool writeMatchStateJson(
         const MatchState& state,
         const Field& field,
         const std::string& path) {
-        std::ofstream output(path);
-        if (!output) {
-            return false;
-        }
-        output << toMatchStateJson(state, field);
-        return static_cast<bool>(output);
+        return writeFile(path, toMatchStateJson(state, field));
     }
 };
 

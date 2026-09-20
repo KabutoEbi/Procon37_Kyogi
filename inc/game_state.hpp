@@ -80,43 +80,42 @@ public:
 
     // API状態から当日開始時の状態を作る。失敗時は自身を変更しない。
     bool initialize(
-        const MatchSetting& setting,
-        const MatchState& matchState,
-        ScoreState previousScore = {}) noexcept {
-        if (!setting.hasConsistentDaySettings() || matchState.day < 0 ||
-            static_cast<std::size_t>(matchState.day) >= setting.dayCount() ||
-            matchState.agents.size() != setting.agentCount() ||
-            matchState.agents.size() > kMaxAgents ||
-            setting.field.spots.size() > kMaxSpots ||
-            setting.field.brands.size() > kMaxBrands) {
+        const MatchSetting& s,
+        const MatchState& ms,
+        ScoreState prev = {}) noexcept {
+        if (!s.hasConsistentDaySettings() || ms.day < 0 ||
+            static_cast<std::size_t>(ms.day) >= s.dayCount() ||
+            ms.agents.size() != s.agentCount() ||
+            ms.agents.size() > kMaxAgents ||
+            s.field.spots.size() > kMaxSpots ||
+            s.field.brands.size() > kMaxBrands) {
             return false;
         }
 
         GameState next;
-        next.day = matchState.day;
-        next.dayStepLimit =
-            setting.daySteps[static_cast<std::size_t>(matchState.day)];
+        next.day = ms.day;
+        next.dayStepLimit = s.daySteps[static_cast<std::size_t>(ms.day)];
         if (next.dayStepLimit < 0) {
             return false;
         }
 
-        next.agentCount = matchState.agents.size();
-        next.spotCount = setting.field.spots.size();
-        next.score = previousScore;
+        next.agentCount = ms.agents.size();
+        next.spotCount = s.field.spots.size();
+        next.score = prev;
 
         for (std::size_t i = 0; i < next.agentCount; ++i) {
-            next.agents[i] = matchState.agents[i];
+            next.agents[i] = ms.agents[i];
             next.agents[i].index = i;
-            if (!setting.field.contains(next.agents[i].pos) ||
+            if (!s.field.contains(next.agents[i].pos) ||
                 next.agents[i].fuel < 0) {
                 return false;
             }
         }
         for (std::size_t i = 0; i < next.spotCount; ++i) {
-            const Spot& spot = setting.field.spots[i];
+            const Spot& spot = s.field.spots[i];
             if (spot.maxStock <= 0 || spot.brandIndex < 0 ||
                 static_cast<std::size_t>(spot.brandIndex) >=
-                    setting.field.brands.size()) {
+                    s.field.brands.size()) {
                 return false;
             }
             next.remainingStocks[i] = spot.maxStock;
@@ -181,14 +180,13 @@ public:
         if (finalized || fuelLimit < 0) {
             return;
         }
-        for (std::size_t patrol = 0; patrol < agentCount; ++patrol) {
-            if (!agents[patrol].isPatrol()) {
+        for (std::size_t p = 0; p < agentCount; ++p) {
+            if (!agents[p].isPatrol()) {
                 continue;
             }
-            for (std::size_t supply = 0; supply < agentCount; ++supply) {
-                if (agents[supply].isSupply() &&
-                    agents[supply].pos == agents[patrol].pos) {
-                    agents[patrol].fuel = fuelLimit;
+            for (std::size_t q = 0; q < agentCount; ++q) {
+                if (agents[q].isSupply() && agents[q].pos == agents[p].pos) {
+                    agents[p].fuel = fuelLimit;
                     break;
                 }
             }

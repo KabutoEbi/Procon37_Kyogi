@@ -25,94 +25,90 @@ struct ApplicationConfig {
 namespace application_detail {
 
 template <class Integer>
-Integer parseInteger(std::string_view text, std::string_view optionName) {
-    Integer value{};
+Integer parseInteger(std::string_view text, std::string_view name) {
+    Integer val{};
     const char* begin = text.data();
     const char* end = begin + text.size();
-    const auto [position, error] = std::from_chars(begin, end, value);
-    if (error != std::errc{} || position != end) {
+    const auto [pos, err] = std::from_chars(begin, end, val);
+    if (err != std::errc{} || pos != end) {
         throw std::invalid_argument(
-            "invalid integer for " + std::string(optionName) + ": " +
+            "invalid integer for " + std::string(name) + ": " +
             std::string(text));
     }
-    return value;
+    return val;
 }
 
 inline std::string_view requireValue(
-    int& index,
+    int& i,
     int argc,
     char* argv[],
-    std::string_view optionName) {
-    if (index + 1 >= argc) {
+    std::string_view name) {
+    if (i + 1 >= argc) {
         throw std::invalid_argument(
-            "missing value for " + std::string(optionName));
+            "missing value for " + std::string(name));
     }
-    ++index;
-    return argv[index];
+    return argv[++i];
 }
 
 inline ApplicationConfig parseOptions(
     int argc,
     char* argv[],
-    bool allowOutputPath,
-    ApplicationConfig options) {
-    bool positionalOutputUsed = false;
+    bool allowPath,
+    ApplicationConfig cfg) {
+    bool pathUsed = false;
 
     for (int i = 0; i < argc; ++i) {
-        const std::string_view argument = argv[i];
+        const std::string_view arg = argv[i];
         auto value = [&](std::string_view name) {
             return requireValue(i, argc, argv, name);
         };
 
-        if (argument == "--output") {
-            options.outputPath = value(argument);
-            positionalOutputUsed = true;
-        } else if (argument == "--width") {
-            options.createConfig.width =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--height") {
-            options.createConfig.height =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--agents") {
-            options.createConfig.agentCount =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--spots") {
-            options.createConfig.spotCount =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--brands") {
-            options.createConfig.brandCount =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--days") {
-            options.createConfig.dayCount =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--seconds") {
-            options.createConfig.daySeconds =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--teams") {
-            options.createConfig.teamCount =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--seed") {
-            options.createConfig.seed =
-                parseInteger<std::uint64_t>(value(argument), argument);
-        } else if (argument == "--supplies") {
-            options.supplyCount =
-                parseInteger<std::int32_t>(value(argument), argument);
-        } else if (argument == "--beam-width") {
-            options.beamConfig.beamWidth =
-                parseInteger<std::size_t>(value(argument), argument);
-        } else if (argument == "--joint-beam-width") {
-            options.beamConfig.jointBeamWidth =
-                parseInteger<std::size_t>(value(argument), argument);
-        } else if (!argument.empty() && argument.front() != '-' &&
-                   allowOutputPath && !positionalOutputUsed) {
-            options.outputPath = argument;
-            positionalOutputUsed = true;
+        if (arg == "--output") {
+            cfg.outputPath = value(arg);
+            pathUsed = true;
+        } else if (arg == "--width") {
+            cfg.createConfig.width =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--height") {
+            cfg.createConfig.height =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--agents") {
+            cfg.createConfig.agentCount =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--spots") {
+            cfg.createConfig.spotCount =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--brands") {
+            cfg.createConfig.brandCount =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--days") {
+            cfg.createConfig.dayCount =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--seconds") {
+            cfg.createConfig.daySeconds =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--teams") {
+            cfg.createConfig.teamCount =
+                parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--seed") {
+            cfg.createConfig.seed = parseInteger<std::uint64_t>(value(arg), arg);
+        } else if (arg == "--supplies") {
+            cfg.supplyCount = parseInteger<std::int32_t>(value(arg), arg);
+        } else if (arg == "--beam-width") {
+            cfg.beamConfig.beamWidth =
+                parseInteger<std::size_t>(value(arg), arg);
+        } else if (arg == "--joint-beam-width") {
+            cfg.beamConfig.jointBeamWidth =
+                parseInteger<std::size_t>(value(arg), arg);
+        } else if (!arg.empty() && arg.front() != '-' &&
+                   allowPath && !pathUsed) {
+            cfg.outputPath = arg;
+            pathUsed = true;
         } else {
-            throw std::invalid_argument(
-                "unknown argument: " + std::string(argument));
+            throw std::invalid_argument("unknown argument: " + std::string(arg));
         }
     }
-    return options;
+    return cfg;
 }
 
 }  // namespace application_detail
@@ -139,48 +135,38 @@ inline void printUsage(std::ostream& output, const char* program) {
 }
 
 inline MatchState makeInitialState(
-    const MatchSetting& setting,
+    const MatchSetting& s,
     const std::vector<AgentKind>& kinds) {
-    if (kinds.size() != setting.agentCount()) {
+    if (kinds.size() != s.agentCount()) {
         throw std::invalid_argument(
             "agent kind count must match agent starts");
     }
 
-    MatchState state;
-    state.day = 0;
-    state.trafficByPos.assign(
-        setting.field.cellCount(), TrafficStatus::Smooth);
-    state.agents.reserve(setting.agentCount());
-    for (std::size_t i = 0; i < setting.agentCount(); ++i) {
-        state.agents.push_back(Agent{
-            i,
-            kinds[i],
-            setting.agentStarts[i],
-            setting.fuelLimit,
-        });
+    MatchState st;
+    st.trafficByPos.assign(s.field.cellCount(), TrafficStatus::Smooth);
+    st.agents.reserve(s.agentCount());
+    for (std::size_t i = 0; i < s.agentCount(); ++i) {
+        st.agents.push_back(
+            Agent{i, kinds[i], s.agentStarts[i], s.fuelLimit});
     }
-    return state;
+    return st;
 }
 
 inline MatchState makeInitialState(
-    const MatchSetting& setting,
-    std::int32_t supplyCount) {
-    if (supplyCount < 0 ||
-        supplyCount >= static_cast<std::int32_t>(setting.agentCount())) {
+    const MatchSetting& s,
+    std::int32_t supplyN) {
+    if (supplyN < 0 || supplyN >= static_cast<std::int32_t>(s.agentCount())) {
         throw std::invalid_argument(
             "supplies must be in [0, agentCount - 1]");
     }
 
-    std::vector<AgentKind> kinds(
-        setting.agentCount(), AgentKind::Patrol);
-    const std::size_t firstSupply =
-        setting.agentCount() - static_cast<std::size_t>(supplyCount);
-    for (std::size_t i = 0; i < setting.agentCount(); ++i) {
-        if (i >= firstSupply) {
-            kinds[i] = AgentKind::Supply;
-        }
+    std::vector<AgentKind> kinds(s.agentCount(), AgentKind::Patrol);
+    const std::size_t first =
+        s.agentCount() - static_cast<std::size_t>(supplyN);
+    for (std::size_t i = first; i < s.agentCount(); ++i) {
+        kinds[i] = AgentKind::Supply;
     }
-    return makeInitialState(setting, kinds);
+    return makeInitialState(s, kinds);
 }
 
 inline DailyPlan makeWaitPlan(

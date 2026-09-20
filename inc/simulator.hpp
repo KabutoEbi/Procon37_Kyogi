@@ -72,17 +72,17 @@ constexpr const char* simulationErrorMessage(SimulationError error) noexcept {
 namespace detail {
 
 inline SimulationResult simulationFailure(
-    GameState state,
-    std::vector<std::int32_t> roadStaySteps,
-    SimulationError error,
-    AgentIndex agentIndex,
-    std::size_t actionIndex,
+    GameState st,
+    std::vector<std::int32_t> roadSteps,
+    SimulationError err,
+    AgentIndex agent,
+    std::size_t action,
     std::int32_t step) {
-    SimulationResult result;
-    result.state = state;
-    result.roadStaySteps = std::move(roadStaySteps);
-    result.failure = {error, agentIndex, actionIndex, step};
-    return result;
+    SimulationResult res;
+    res.state = st;
+    res.roadStaySteps = std::move(roadSteps);
+    res.failure = {err, agent, action, step};
+    return res;
 }
 
 }  // namespace detail
@@ -91,73 +91,62 @@ inline SimulationResult simulationFailure(
 // ビームサーチでは、待機中でない全エージェントへ予約してから
 // advanceSimulationStep() を呼ぶ。
 inline SimulationFailure tryScheduleAction(
-    GameState& state,
-    const MatchSetting& setting,
-    const MatchState& matchState,
-    AgentIndex agentIndex,
-    std::int32_t rawAction,
+    GameState& st,
+    const MatchSetting& s,
+    const MatchState& ms,
+    AgentIndex i,
+    std::int32_t action,
     std::size_t actionIndex = 0) noexcept {
-    auto failure = [&](SimulationError error) {
-        return SimulationFailure{
-            error,
-            agentIndex,
-            actionIndex,
-            state.step,
-        };
+    auto fail = [&](SimulationError err) {
+        return SimulationFailure{err, i, actionIndex, st.step};
     };
 
-    if (state.finalized || agentIndex >= state.agentCount ||
-        state.pendingActions[agentIndex].active) {
-        return failure(SimulationError::InternalStateError);
+    if (st.finalized || i >= st.agentCount || st.pendingActions[i].active) {
+        return fail(SimulationError::InternalStateError);
     }
 
-    const Agent& agent = state.agents[agentIndex];
-    PendingAction pending;
-    pending.active = true;
-    pending.rawAction = rawAction;
-    pending.from = agent.pos;
+    const Agent& a = st.agents[i];
+    PendingAction next;
+    next.active = true;
+    next.rawAction = action;
+    next.from = a.pos;
 
-    if (isMoveAction(rawAction)) {
-        if (!setting.field.contains(agent.pos)) {
-            return failure(SimulationError::InvalidPosition);
-        }
-
-        const Direction direction = static_cast<Direction>(rawAction);
-        const CellPos destination =
-            setting.field.neighbor(agent.pos, direction);
-        if (!setting.field.contains(destination) ||
-            !setting.field.at(destination).isPassable()) {
-            return failure(SimulationError::ImpassableDestination);
+    if (isMoveAction(action)) {
+        if (!s.field.contains(a.pos)) {
+            return fail(SimulationError::InvalidPosition);
         }
 
-        pending.move = true;
-        pending.destination = destination;
-        pending.remainingSteps =
-            moveStepCost(setting, matchState, agent.pos);
-        pending.fuelCost =
-            moveFuelCost(setting, agent.kind, agent.pos);
-        if (pending.remainingSteps >= kImpassableCost ||
-            pending.fuelCost >= kImpassableCost) {
-            return failure(SimulationError::InvalidPosition);
+        const auto dir = static_cast<Direction>(action);
+        const CellPos to = s.field.neighbor(a.pos, dir);
+        if (!s.field.contains(to) || !s.field.at(to).isPassable()) {
+            return fail(SimulationError::ImpassableDestination);
         }
-        if (agent.isPatrol() && agent.fuel < pending.fuelCost) {
-            return failure(SimulationError::InsufficientFuel);
+
+        next.move = true;
+        next.destination = to;
+        next.remainingSteps = moveStepCost(s, ms, a.pos);
+        next.fuelCost = moveFuelCost(s, a.kind, a.pos);
+        if (next.remainingSteps >= kImpassableCost ||
+            next.fuelCost >= kImpassableCost) {
+            return fail(SimulationError::InvalidPosition);
         }
-    } else if (isWaitAction(rawAction) &&
-               rawAction != std::numeric_limits<std::int32_t>::min()) {
-        pending.move = false;
-        pending.destination = agent.pos;
-        pending.remainingSteps = -rawAction;
+        if (a.isPatrol() && a.fuel < next.fuelCost) {
+            return fail(SimulationError::InsufficientFuel);
+        }
+    } else if (isWaitAction(action) &&
+               action != std::numeric_limits<std::int32_t>::min()) {
+        next.destination = a.pos;
+        next.remainingSteps = -action;
     } else {
-        return failure(SimulationError::InvalidAction);
+        return fail(SimulationError::InvalidAction);
     }
 
-    if (pending.remainingSteps <= 0 ||
-        pending.remainingSteps > state.dayStepLimit - state.step) {
-        return failure(SimulationError::ActionOverrunsDay);
+    if (next.remainingSteps <= 0 ||
+        next.remainingSteps > st.remainingSteps()) {
+        return fail(SimulationError::ActionOverrunsDay);
     }
 
-    state.pendingActions[agentIndex] = pending;
+    st.pendingActions[i] = next;
     return {};
 }
 
@@ -262,27 +251,26 @@ inline SimulationFailure advanceSimulationStep(
 
 // 完成済みの1日分の計画を、公式のフェーズ順序で実行する。
 inline SimulationResult simulateDay(
-    const MatchSetting& setting,
-    const MatchState& matchState,
+    const MatchSetting& s,
+    const MatchState& ms,
     const DailyPlan& plan,
-    ScoreState previousScore = {}) {
-    GameState state;
-    std::vector<std::int32_t> roadStaySteps(
-        setting.field.cellCount(), 0);
+    ScoreState score = {}) {
+    GameState st;
+    std::vector<std::int32_t> roadSteps(s.field.cellCount(), 0);
 
-    if (!state.initialize(setting, matchState, previousScore)) {
+    if (!st.initialize(s, ms, score)) {
         return detail::simulationFailure(
-            state,
-            std::move(roadStaySteps),
+            st,
+            std::move(roadSteps),
             SimulationError::StateInitializationFailed,
             0,
             0,
             0);
     }
-    if (plan.size() != state.agentCount) {
+    if (plan.size() != st.agentCount) {
         return detail::simulationFailure(
-            state,
-            std::move(roadStaySteps),
+            st,
+            std::move(roadSteps),
             SimulationError::AgentCountMismatch,
             0,
             0,
@@ -291,53 +279,41 @@ inline SimulationResult simulateDay(
 
     std::array<std::size_t, kMaxAgents> cursors{};
 
-    auto fail = [&](SimulationError error,
-                    AgentIndex agentIndex,
-                    std::size_t actionIndex,
+    auto fail = [&](SimulationError err,
+                    AgentIndex agent,
+                    std::size_t action,
                     std::int32_t step) {
         return detail::simulationFailure(
-            state,
-            roadStaySteps,
-            error,
-            agentIndex,
-            actionIndex,
-            step);
+            st, roadSteps, err, agent, action, step);
+    };
+    auto failWith = [&](const SimulationFailure& f) {
+        return fail(f.error, f.agentIndex, f.actionIndex, f.step);
     };
 
     // step 0: アクションフェーズのみ。
-    for (AgentIndex i = 0; i < state.agentCount; ++i) {
+    for (AgentIndex i = 0; i < st.agentCount; ++i) {
         if (plan[i].empty()) {
             return fail(SimulationError::MissingAction, i, 0, 0);
         }
-        const SimulationFailure failure = tryScheduleAction(
-            state, setting, matchState, i, plan[i][0], 0);
-        if (failure.error != SimulationError::None) {
-            return fail(
-                failure.error,
-                failure.agentIndex,
-                failure.actionIndex,
-                failure.step);
+        const auto err = tryScheduleAction(st, s, ms, i, plan[i][0], 0);
+        if (err.error != SimulationError::None) {
+            return failWith(err);
         }
         ++cursors[i];
     }
 
-    for (std::int32_t step = 1; step <= state.dayStepLimit; ++step) {
-        const SimulationFailure advanceFailure =
-            advanceSimulationStep(state, setting, &roadStaySteps);
-        if (advanceFailure.error != SimulationError::None) {
-            return fail(
-                advanceFailure.error,
-                advanceFailure.agentIndex,
-                advanceFailure.actionIndex,
-                advanceFailure.step);
+    for (std::int32_t step = 1; step <= st.dayStepLimit; ++step) {
+        const auto err = advanceSimulationStep(st, s, &roadSteps);
+        if (err.error != SimulationError::None) {
+            return failWith(err);
         }
 
         // 最終ステップにはアクションフェーズがない。
-        if (step == state.dayStepLimit) {
+        if (step == st.dayStepLimit) {
             continue;
         }
-        for (AgentIndex i = 0; i < state.agentCount; ++i) {
-            if (!state.pendingActions[i].active) {
+        for (AgentIndex i = 0; i < st.agentCount; ++i) {
+            if (!st.pendingActions[i].active) {
                 if (cursors[i] >= plan[i].size()) {
                     return fail(
                         SimulationError::MissingAction,
@@ -345,54 +321,45 @@ inline SimulationResult simulateDay(
                         cursors[i],
                         step);
                 }
-                const SimulationFailure failure = tryScheduleAction(
-                    state,
-                    setting,
-                    matchState,
-                    i,
-                    plan[i][cursors[i]],
-                    cursors[i]);
-                if (failure.error != SimulationError::None) {
-                    return fail(
-                        failure.error,
-                        failure.agentIndex,
-                        failure.actionIndex,
-                        failure.step);
+                const auto err = tryScheduleAction(
+                    st, s, ms, i, plan[i][cursors[i]], cursors[i]);
+                if (err.error != SimulationError::None) {
+                    return failWith(err);
                 }
                 ++cursors[i];
             }
         }
     }
 
-    for (AgentIndex i = 0; i < state.agentCount; ++i) {
-        if (state.pendingActions[i].active) {
+    for (AgentIndex i = 0; i < st.agentCount; ++i) {
+        if (st.pendingActions[i].active) {
             return fail(
                 SimulationError::InternalStateError,
                 i,
                 cursors[i],
-                state.dayStepLimit);
+                st.dayStepLimit);
         }
         if (cursors[i] != plan[i].size()) {
             return fail(
                 SimulationError::ExtraAction,
                 i,
                 cursors[i],
-                state.dayStepLimit);
+                st.dayStepLimit);
         }
     }
-    if (!state.finishDay()) {
+    if (!st.finishDay()) {
         return fail(
             SimulationError::InternalStateError,
             0,
             0,
-            state.dayStepLimit);
+            st.dayStepLimit);
     }
 
-    SimulationResult result;
-    result.valid = true;
-    result.state = state;
-    result.roadStaySteps = std::move(roadStaySteps);
-    return result;
+    SimulationResult res;
+    res.valid = true;
+    res.state = st;
+    res.roadStaySteps = std::move(roadSteps);
+    return res;
 }
 
 }  // namespace procon37

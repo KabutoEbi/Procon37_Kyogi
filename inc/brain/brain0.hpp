@@ -18,19 +18,18 @@ namespace procon37 {
 class Brain0 final {
 public:
     static DijkstraTable dijkstra(
-        const MatchSetting& setting,
-        const MatchState& state,
+        const MatchSetting& s,
+        const MatchState& st,
         CellPos start) {
-        const Field& field = setting.field;
-        DijkstraTable table;
-        table.start = start;
-        table.distances.assign(field.cellCount(), kImpassableCost);
-        table.previous.assign(field.cellCount(), kInvalidCell);
-        table.previousDirection.assign(
-            field.cellCount(), Direction::UpperLeft);
+        const Field& f = s.field;
+        DijkstraTable res;
+        res.start = start;
+        res.distances.assign(f.cellCount(), kImpassableCost);
+        res.previous.assign(f.cellCount(), kInvalidCell);
+        res.previousDirection.assign(f.cellCount(), Direction::UpperLeft);
 
-        if (!field.contains(start) || !field.at(start).isPassable()) {
-            return table;
+        if (!f.contains(start) || !f.at(start).isPassable()) {
+            return res;
         }
 
         using QueueEntry = std::pair<std::int32_t, CellPos>;
@@ -38,107 +37,98 @@ public:
             QueueEntry,
             std::vector<QueueEntry>,
             std::greater<QueueEntry>>
-            queue;
+            q;
 
-        table.distances[static_cast<std::size_t>(start)] = 0;
-        queue.emplace(0, start);
+        res.distances[static_cast<std::size_t>(start)] = 0;
+        q.emplace(0, start);
 
-        while (!queue.empty()) {
-            const auto [distance, from] = queue.top();
-            queue.pop();
+        while (!q.empty()) {
+            const auto [dist, from] = q.top();
+            q.pop();
 
-            if (distance !=
-                table.distances[static_cast<std::size_t>(from)]) {
+            if (dist != res.distances[static_cast<std::size_t>(from)]) {
                 continue;
             }
 
-            const std::int32_t edgeCost =
-                moveStepCost(setting, state, from);
-            if (edgeCost >= kImpassableCost ||
-                distance > kImpassableCost - edgeCost) {
+            const std::int32_t cost = moveStepCost(s, st, from);
+            if (cost >= kImpassableCost || dist > kImpassableCost - cost) {
                 continue;
             }
-            const std::int32_t nextDistance = distance + edgeCost;
+            const std::int32_t next = dist + cost;
 
-            for (std::int32_t rawDirection = 0; rawDirection < 6;
-                 ++rawDirection) {
-                const Direction direction =
-                    static_cast<Direction>(rawDirection);
-                const CellPos to = field.neighbor(from, direction);
-                if (!field.contains(to) || !field.at(to).isPassable()) {
+            for (std::int32_t d = 0; d < 6; ++d) {
+                const auto dir = static_cast<Direction>(d);
+                const CellPos to = f.neighbor(from, dir);
+                if (!f.contains(to) || !f.at(to).isPassable()) {
                     continue;
                 }
 
-                const std::size_t toIndex = static_cast<std::size_t>(to);
-                if (nextDistance >= table.distances[toIndex]) {
+                const auto i = static_cast<std::size_t>(to);
+                if (next >= res.distances[i]) {
                     continue;
                 }
 
-                table.distances[toIndex] = nextDistance;
-                table.previous[toIndex] = from;
-                table.previousDirection[toIndex] = direction;
-                queue.emplace(nextDistance, to);
+                res.distances[i] = next;
+                res.previous[i] = from;
+                res.previousDirection[i] = dir;
+                q.emplace(next, to);
             }
         }
-        return table;
+        return res;
     }
 
     static PathResult restorePath(
-        const MatchSetting& setting,
-        const DijkstraTable& table,
+        const MatchSetting& s,
+        const DijkstraTable& t,
         CellPos goal,
         AgentKind kind = AgentKind::Patrol) {
-        PathResult result;
-        result.start = table.start;
-        result.goal = goal;
+        PathResult res;
+        res.start = t.start;
+        res.goal = goal;
 
-        const Field& field = setting.field;
-        if (!field.contains(table.start) || !field.contains(goal) ||
-            table.distances.size() != field.cellCount() ||
-            table.previous.size() != field.cellCount() ||
-            table.previousDirection.size() != field.cellCount() ||
-            !table.canReach(goal)) {
-            return result;
+        const Field& f = s.field;
+        if (!f.contains(t.start) || !f.contains(goal) ||
+            t.distances.size() != f.cellCount() ||
+            t.previous.size() != f.cellCount() ||
+            t.previousDirection.size() != f.cellCount() ||
+            !t.canReach(goal)) {
+            return res;
         }
 
-        result.cost.steps =
-            table.distances[static_cast<std::size_t>(goal)];
-        result.cost.fuel = 0;
+        res.cost.steps = t.distances[static_cast<std::size_t>(goal)];
+        res.cost.fuel = 0;
 
-        CellPos current = goal;
-        result.positions.push_back(current);
+        CellPos cur = goal;
+        res.positions.push_back(cur);
         std::size_t guard = 0;
-        while (current != table.start) {
-            if (++guard > field.cellCount()) {
+        while (cur != t.start) {
+            if (++guard > f.cellCount()) {
                 return PathResult{};
             }
 
-            const std::size_t currentIndex =
-                static_cast<std::size_t>(current);
-            const CellPos previous = table.previous[currentIndex];
-            if (!field.contains(previous)) {
+            const auto i = static_cast<std::size_t>(cur);
+            const CellPos prev = t.previous[i];
+            if (!f.contains(prev)) {
                 return PathResult{};
             }
 
-            result.directions.push_back(
-                table.previousDirection[currentIndex]);
-            result.positions.push_back(previous);
+            res.directions.push_back(t.previousDirection[i]);
+            res.positions.push_back(prev);
             if (kind == AgentKind::Patrol) {
-                const std::int32_t fuel =
-                    field.at(previous).patrolFuelCost();
+                const std::int32_t fuel = f.at(prev).patrolFuelCost();
                 if (fuel >= kImpassableCost ||
-                    result.cost.fuel > kImpassableCost - fuel) {
+                    res.cost.fuel > kImpassableCost - fuel) {
                     return PathResult{};
                 }
-                result.cost.fuel += fuel;
+                res.cost.fuel += fuel;
             }
-            current = previous;
+            cur = prev;
         }
 
-        std::reverse(result.positions.begin(), result.positions.end());
-        std::reverse(result.directions.begin(), result.directions.end());
-        result.reachable = true;
-        return result;
+        std::reverse(res.positions.begin(), res.positions.end());
+        std::reverse(res.directions.begin(), res.directions.end());
+        res.reachable = true;
+        return res;
     }
 
     static PathResult shortestPath(

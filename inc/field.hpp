@@ -2,6 +2,7 @@
 
 #include "cell.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
@@ -124,40 +125,38 @@ struct Field {
             return false;
         }
 
-        std::vector<std::int32_t> indices(cellCount(), -1);
-        std::vector<std::int32_t> brandIndices(spots.size(), -1);
-        std::vector<BrandId> newBrands;
+        std::vector<std::int32_t> spotIds(cellCount(), -1);
+        std::vector<std::int32_t> brandIds(spots.size(), -1);
+        std::vector<BrandId> nextBrands;
         for (std::size_t i = 0; i < spots.size(); ++i) {
-            const Spot& spot = spots[i];
-            if (!contains(spot.pos) || spot.maxStock <= 0) {
+            const Spot& s = spots[i];
+            if (!contains(s.pos) || s.maxStock <= 0) {
                 return false;
             }
-            const std::size_t pos = static_cast<std::size_t>(spot.pos);
-            if (cells[pos].type != CellType::Plain || indices[pos] >= 0) {
+            const auto pos = static_cast<std::size_t>(s.pos);
+            if (cells[pos].type != CellType::Plain || spotIds[pos] >= 0) {
                 return false;
             }
-            indices[pos] = static_cast<std::int32_t>(i);
+            spotIds[pos] = static_cast<std::int32_t>(i);
 
-            std::size_t brandIndex = 0;
-            while (brandIndex < newBrands.size() &&
-                   newBrands[brandIndex] != spot.brand) {
-                ++brandIndex;
-            }
-            if (brandIndex == newBrands.size()) {
-                if (newBrands.size() >= kMaxBrands) {
+            auto it = std::find(nextBrands.begin(), nextBrands.end(), s.brand);
+            if (it == nextBrands.end()) {
+                if (nextBrands.size() >= kMaxBrands) {
                     return false;
                 }
-                newBrands.push_back(spot.brand);
+                nextBrands.push_back(s.brand);
+                it = std::prev(nextBrands.end());
             }
-            brandIndices[i] = static_cast<std::int32_t>(brandIndex);
+            brandIds[i] = static_cast<std::int32_t>(
+                it - nextBrands.begin());
         }
         for (std::size_t pos = 0; pos < cells.size(); ++pos) {
-            cells[pos].spotIndex = indices[pos];
+            cells[pos].spotIndex = spotIds[pos];
         }
         for (std::size_t i = 0; i < spots.size(); ++i) {
-            spots[i].brandIndex = brandIndices[i];
+            spots[i].brandIndex = brandIds[i];
         }
-        brands = std::move(newBrands);
+        brands = std::move(nextBrands);
         return true;
     }
 };

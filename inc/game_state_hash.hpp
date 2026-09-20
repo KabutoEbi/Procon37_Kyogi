@@ -10,15 +10,15 @@ namespace procon37 {
 
 namespace detail {
 
-inline void hashCombine(std::size_t& seed, std::size_t value) noexcept {
+inline void hashCombine(std::size_t& h, std::size_t value) noexcept {
     // 64 bit / 32 bit のどちらでも使用できる一般的な combine。
-    seed ^= value + static_cast<std::size_t>(0x9e3779b9U) +
-            (seed << 6U) + (seed >> 2U);
+    h ^= value + static_cast<std::size_t>(0x9e3779b9U) +
+         (h << 6U) + (h >> 2U);
 }
 
 template <class T>
-inline void hashValue(std::size_t& seed, T value) noexcept {
-    hashCombine(seed, std::hash<T>{}(value));
+inline void hashValue(std::size_t& h, T value) noexcept {
+    hashCombine(h, std::hash<T>{}(value));
 }
 
 inline bool equalAgent(const Agent& lhs, const Agent& rhs) noexcept {
@@ -72,42 +72,42 @@ struct GameStateEqual {
 };
 
 struct GameStateHash {
-    std::size_t operator()(const GameState& state) const noexcept {
-        std::size_t seed = 0;
-        detail::hashValue(seed, state.day);
-        detail::hashValue(seed, state.step);
-        detail::hashValue(seed, state.dayStepLimit);
-        detail::hashValue(seed, state.agentCount);
-        detail::hashValue(seed, state.spotCount);
+    std::size_t operator()(const GameState& st) const noexcept {
+        std::size_t h = 0;
+        detail::hashValue(h, st.day);
+        detail::hashValue(h, st.step);
+        detail::hashValue(h, st.dayStepLimit);
+        detail::hashValue(h, st.agentCount);
+        detail::hashValue(h, st.spotCount);
 
-        for (std::size_t i = 0; i < state.agentCount; ++i) {
-            const Agent& agent = state.agents[i];
-            detail::hashValue(seed, agent.index);
-            detail::hashValue(seed, static_cast<std::uint8_t>(agent.kind));
-            detail::hashValue(seed, agent.pos);
-            detail::hashValue(seed, agent.fuel);
+        for (std::size_t i = 0; i < st.agentCount; ++i) {
+            const Agent& a = st.agents[i];
+            detail::hashValue(h, a.index);
+            detail::hashValue(h, static_cast<std::uint8_t>(a.kind));
+            detail::hashValue(h, a.pos);
+            detail::hashValue(h, a.fuel);
 
-            const PendingAction& pending = state.pendingActions[i];
-            detail::hashValue(seed, pending.active);
-            detail::hashValue(seed, pending.move);
-            detail::hashValue(seed, pending.rawAction);
-            detail::hashValue(seed, pending.remainingSteps);
-            detail::hashValue(seed, pending.from);
-            detail::hashValue(seed, pending.destination);
-            detail::hashValue(seed, pending.fuelCost);
-            detail::hashValue(seed, state.acquiredSpots[i]);
+            const PendingAction& p = st.pendingActions[i];
+            detail::hashValue(h, p.active);
+            detail::hashValue(h, p.move);
+            detail::hashValue(h, p.rawAction);
+            detail::hashValue(h, p.remainingSteps);
+            detail::hashValue(h, p.from);
+            detail::hashValue(h, p.destination);
+            detail::hashValue(h, p.fuelCost);
+            detail::hashValue(h, st.acquiredSpots[i]);
         }
-        for (std::size_t i = 0; i < state.spotCount; ++i) {
-            detail::hashValue(seed, state.remainingStocks[i]);
+        for (std::size_t i = 0; i < st.spotCount; ++i) {
+            detail::hashValue(h, st.remainingStocks[i]);
         }
 
-        detail::hashValue(seed, state.dayBrands);
-        detail::hashValue(seed, state.dayUdon);
-        detail::hashValue(seed, state.score.matchBrands);
-        detail::hashValue(seed, state.score.totalUdon);
-        detail::hashValue(seed, state.score.sumOfDailyBrandCounts);
-        detail::hashValue(seed, state.finalized);
-        return seed;
+        detail::hashValue(h, st.dayBrands);
+        detail::hashValue(h, st.dayUdon);
+        detail::hashValue(h, st.score.matchBrands);
+        detail::hashValue(h, st.score.totalUdon);
+        detail::hashValue(h, st.score.sumOfDailyBrandCounts);
+        detail::hashValue(h, st.finalized);
+        return h;
     }
 };
 

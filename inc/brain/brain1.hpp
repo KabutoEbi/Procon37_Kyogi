@@ -348,58 +348,45 @@ private:
 
 public:
     static BeamSearchResult search(
-        const MatchSetting& setting,
-        const MatchState& matchState,
-        ScoreState previousScore = {},
-        const BeamSearchConfig& config = {}) {
-        BeamSearchResult result;
-        if (config.beamWidth == 0 || config.jointBeamWidth == 0) {
-            return result;
+        const MatchSetting& s,
+        const MatchState& ms,
+        ScoreState prev = {},
+        const BeamSearchConfig& cfg = {}) {
+        BeamSearchResult res;
+        if (cfg.beamWidth == 0 || cfg.jointBeamWidth == 0) {
+            return res;
         }
 
-        GameState initialState;
-        if (!initialState.initialize(
-                setting, matchState, previousScore)) {
-            return result;
+        GameState init;
+        if (!init.initialize(s, ms, prev)) {
+            return res;
         }
 
-        const DistanceMatrix spotDistances =
-            buildSpotDistances(setting, matchState);
-        std::vector<std::vector<std::int32_t>> distanceCache(
-            setting.field.cellCount());
+        const DistanceMatrix spotDist = buildSpotDistances(s, ms);
+        std::vector<std::vector<std::int32_t>> cache(s.field.cellCount());
 
-        BeamNode initial;
-        initial.state = initialState;
-        initial.plan.resize(initialState.agentCount);
-        initial.evaluation = evaluate(
-            initial.state,
-            setting,
-            matchState,
-            previousScore,
-            spotDistances,
-            distanceCache,
-            config.weights);
-        initial.orderingScore = initial.evaluation.total;
+        BeamNode root;
+        root.state = init;
+        root.plan.resize(init.agentCount);
+        root.evaluation =
+            evaluate(root.state, s, ms, prev, spotDist, cache, cfg.weights);
+        root.orderingScore = root.evaluation.total;
 
-        std::vector<BeamNode> beam;
-        beam.push_back(std::move(initial));
+        std::vector<BeamNode> beam{std::move(root)};
 
         while (!beam.empty() &&
                beam.front().state.step <
                    beam.front().state.dayStepLimit) {
-            std::vector<BeamNode> scheduled = std::move(beam);
+            std::vector<BeamNode> ready = std::move(beam);
 
             // 待機中でない各エージェントへ、合法な6方向移動または
             // 1ステップ待機を割り当てる。
-            for (AgentIndex agentIndex = 0;
-                 agentIndex < initialState.agentCount;
-                 ++agentIndex) {
-                std::vector<BeamNode> expanded;
-                expanded.reserve(
-                    scheduled.size() * static_cast<std::size_t>(7));
-                for (const BeamNode& node : scheduled) {
-                    if (node.state.pendingActions[agentIndex].active) {
-                        expanded.push_back(node);
+            for (AgentIndex a = 0; a < init.agentCount; ++a) {
+                std::vector<BeamNode> next;
+                next.reserve(ready.size() * 7);
+                for (const BeamNode& node : ready) {
+                    if (node.state.pendingActions[a].active) {
+                        next.push_back(node);
                         continue;
                     }
 
@@ -408,62 +395,50 @@ public:
                     };
                     for (const std::int32_t action : actions) {
                         BeamNode child = node;
-                        const SimulationFailure failure =
-                            tryScheduleAction(
-                                child.state,
-                                setting,
-                                matchState,
-                                agentIndex,
-                                action,
-                                child.plan[agentIndex].size());
-                        if (failure.error != SimulationError::None) {
+                        const auto err = tryScheduleAction(
+                            child.state,
+                            s,
+                            ms,
+                            a,
+                            action,
+                            child.plan[a].size());
+                        if (err.error != SimulationError::None) {
                             continue;
                         }
-                        child.plan[agentIndex].push_back(action);
+                        child.plan[a].push_back(action);
                         child.orderingScore =
                             node.orderingScore +
                             scheduledActionBonus(
-                                child,
-                                agentIndex,
-                                setting,
-                                spotDistances,
-                                config.weights);
-                        expanded.push_back(std::move(child));
-                        ++result.expandedNodes;
+                                child, a, s, spotDist, cfg.weights);
+                        next.push_back(std::move(child));
+                        ++res.expandedNodes;
                     }
                 }
-                sortAndLimit(expanded, config.jointBeamWidth);
-                scheduled = std::move(expanded);
-                if (scheduled.empty()) {
-                    return result;
+                sortAndLimit(next, cfg.jointBeamWidth);
+                ready = std::move(next);
+                if (ready.empty()) {
+                    return res;
                 }
             }
 
-            std::vector<BeamNode> nextBeam;
-            nextBeam.reserve(scheduled.size());
-            for (BeamNode& node : scheduled) {
-                const SimulationFailure failure =
-                    advanceSimulationStep(node.state, setting);
-                if (failure.error != SimulationError::None) {
+            std::vector<BeamNode> next;
+            next.reserve(ready.size());
+            for (BeamNode& node : ready) {
+                const auto err = advanceSimulationStep(node.state, s);
+                if (err.error != SimulationError::None) {
                     continue;
                 }
-                node.evaluation = evaluate(
-                    node.state,
-                    setting,
-                    matchState,
-                    previousScore,
-                    spotDistances,
-                    distanceCache,
-                    config.weights);
+                node.evaluation =
+                    evaluate(node.state, s, ms, prev, spotDist, cache, cfg.weights);
                 node.orderingScore = node.evaluation.total;
-                nextBeam.push_back(std::move(node));
+                next.push_back(std::move(node));
             }
-            deduplicateAndLimit(nextBeam, config.beamWidth);
-            beam = std::move(nextBeam);
+            deduplicateAndLimit(next, cfg.beamWidth);
+            beam = std::move(next);
         }
 
         if (beam.empty()) {
-            return result;
+            return res;
         }
 
         for (BeamNode& node : beam) {
@@ -472,36 +447,25 @@ public:
                     -std::numeric_limits<double>::infinity();
                 continue;
             }
-            node.evaluation = evaluate(
-                node.state,
-                setting,
-                matchState,
-                previousScore,
-                spotDistances,
-                distanceCache,
-                config.weights);
+            node.evaluation =
+                evaluate(node.state, s, ms, prev, spotDist, cache, cfg.weights);
             node.orderingScore = node.evaluation.total;
         }
         sortAndLimit(beam, 1);
         if (beam.empty() ||
             !std::isfinite(beam.front().orderingScore)) {
-            return result;
+            return res;
         }
 
-        const PlanValidationResult validation = validateDailyPlan(
-            setting,
-            matchState,
-            beam.front().plan,
-            previousScore);
-        if (!validation.valid) {
-            return result;
+        if (!validateDailyPlan(s, ms, beam.front().plan, prev).valid) {
+            return res;
         }
 
-        result.success = true;
-        result.plan = std::move(beam.front().plan);
-        result.finalState = beam.front().state;
-        result.evaluation = beam.front().evaluation;
-        return result;
+        res.success = true;
+        res.plan = std::move(beam.front().plan);
+        res.finalState = beam.front().state;
+        res.evaluation = beam.front().evaluation;
+        return res;
     }
 };
 

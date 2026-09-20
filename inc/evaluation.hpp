@@ -48,43 +48,39 @@ struct EvaluationBreakdown {
 };
 
 inline EvaluationBreakdown evaluateGameState(
-    const GameState& state,
-    const EvaluationContext& context,
-    const EvaluationWeights& weights = {}) noexcept {
-    EvaluationBreakdown result;
-    result.newBrandCount = static_cast<std::int32_t>(countBits(
-        state.score.matchBrands & ~context.scoreAtDayStart.matchBrands));
-    result.dailyBrandCount =
-        static_cast<std::int32_t>(countBits(state.dayBrands));
-    result.udonCount =
-        state.score.totalUdon - context.scoreAtDayStart.totalUdon;
-    result.unusedSteps = state.remainingSteps();
-    result.concentrationCount = context.concentrationCount;
+    const GameState& st,
+    const EvaluationContext& ctx,
+    const EvaluationWeights& w = {}) noexcept {
+    EvaluationBreakdown res;
+    res.newBrandCount = static_cast<std::int32_t>(countBits(
+        st.score.matchBrands & ~ctx.scoreAtDayStart.matchBrands));
+    res.dailyBrandCount = static_cast<std::int32_t>(countBits(st.dayBrands));
+    res.udonCount = st.score.totalUdon - ctx.scoreAtDayStart.totalUdon;
+    res.unusedSteps = st.remainingSteps();
+    res.concentrationCount = ctx.concentrationCount;
 
-    for (std::size_t i = 0; i < state.agentCount; ++i) {
-        const Agent& agent = state.agents[i];
-        if (agent.isPatrol()) {
-            result.remainingFuel += agent.fuel;
-            if (context.nearestValuableSpotSteps[i] < kImpassableCost) {
-                result.valuableSpotDistance +=
-                    context.nearestValuableSpotSteps[i];
+    for (std::size_t i = 0; i < st.agentCount; ++i) {
+        const Agent& a = st.agents[i];
+        if (a.isPatrol()) {
+            res.remainingFuel += a.fuel;
+            if (ctx.nearestValuableSpotSteps[i] < kImpassableCost) {
+                res.valuableSpotDistance += ctx.nearestValuableSpotSteps[i];
             }
-            if (context.nearestSupplySteps[i] < kImpassableCost) {
-                result.supplyDistance += context.nearestSupplySteps[i];
+            if (ctx.nearestSupplySteps[i] < kImpassableCost) {
+                res.supplyDistance += ctx.nearestSupplySteps[i];
             }
         }
     }
 
-    result.total =
-        weights.newBrand * result.newBrandCount +
-        weights.dailyBrand * result.dailyBrandCount +
-        weights.udon * result.udonCount +
-        weights.remainingFuel * result.remainingFuel +
-        weights.unusedStep * result.unusedSteps +
-        weights.valuableSpotDistance * result.valuableSpotDistance +
-        weights.supplyDistance * result.supplyDistance +
-        weights.concentration * result.concentrationCount;
-    return result;
+    res.total = w.newBrand * res.newBrandCount +
+                w.dailyBrand * res.dailyBrandCount +
+                w.udon * res.udonCount +
+                w.remainingFuel * res.remainingFuel +
+                w.unusedStep * res.unusedSteps +
+                w.valuableSpotDistance * res.valuableSpotDistance +
+                w.supplyDistance * res.supplyDistance +
+                w.concentration * res.concentrationCount;
+    return res;
 }
 
 }  // namespace procon37
