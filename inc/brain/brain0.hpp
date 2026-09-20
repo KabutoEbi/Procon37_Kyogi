@@ -155,4 +155,20 @@ public:
     }
 };
 
+inline DijkstraTable brain0(
+    const MatchSetting& setting,
+    const MatchState& state,
+    CellPos start) {
+    return Brain0::dijkstra(setting, state, start);
+}
+
+inline PathResult brain0(
+    const MatchSetting& setting,
+    const MatchState& state,
+    CellPos start,
+    CellPos goal,
+    AgentKind kind = AgentKind::Patrol) {
+    return Brain0::shortestPath(setting, state, start, goal, kind);
+}
+
 }  // namespace procon37
