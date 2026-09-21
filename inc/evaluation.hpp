@@ -64,8 +64,30 @@ struct EvaluationBreakdown {
     std::int32_t rendezvousMismatch = 0;
     std::int32_t fuelRisk = 0;
     std::int32_t unreachableTargetCount = 0;
+    std::int32_t valuableSpotAgentCount = 0;
+    std::int32_t newBrandSpotAgentCount = 0;
+    std::int32_t dailyBrandSpotAgentCount = 0;
     double total = 0.0;
 };
+
+inline double evaluationTotal(
+    const EvaluationBreakdown& res,
+    const EvaluationWeights& w) noexcept {
+    return w.newBrand * res.newBrandCount +
+           w.dailyBrand * res.dailyBrandCount +
+           w.udon * res.udonCount +
+           w.remainingFuel * res.remainingFuel +
+           w.unusedStep * res.unusedSteps +
+           w.valuableSpotDistance * res.valuableSpotDistance +
+           w.newBrandSpotDistance * res.newBrandSpotDistance +
+           w.dailyBrandSpotDistance * res.dailyBrandSpotDistance +
+           w.targetSlack * res.targetSlack +
+           w.supplyDistance * res.supplyDistance +
+           w.rendezvousMismatch * res.rendezvousMismatch +
+           w.fuelRisk * res.fuelRisk +
+           w.unreachableTarget * res.unreachableTargetCount +
+           w.concentration * res.concentrationCount;
+}
 
 inline EvaluationBreakdown evaluateGameState(
     const GameState& st,
@@ -89,14 +111,17 @@ inline EvaluationBreakdown evaluateGameState(
             res.remainingFuel += a.fuel;
             if (ctx.nearestValuableSpotSteps[i] < kImpassableCost) {
                 res.valuableSpotDistance += ctx.nearestValuableSpotSteps[i];
+                ++res.valuableSpotAgentCount;
             }
             if (ctx.nearestNewBrandSpotSteps[i] < kImpassableCost) {
                 res.newBrandSpotDistance +=
                     ctx.nearestNewBrandSpotSteps[i];
+                ++res.newBrandSpotAgentCount;
             }
             if (ctx.nearestDailyBrandSpotSteps[i] < kImpassableCost) {
                 res.dailyBrandSpotDistance +=
                     ctx.nearestDailyBrandSpotSteps[i];
+                ++res.dailyBrandSpotAgentCount;
             }
             if (ctx.nearestSupplySteps[i] < kImpassableCost) {
                 res.supplyDistance += ctx.nearestSupplySteps[i];
@@ -104,20 +129,7 @@ inline EvaluationBreakdown evaluateGameState(
         }
     }
 
-    res.total = w.newBrand * res.newBrandCount +
-                w.dailyBrand * res.dailyBrandCount +
-                w.udon * res.udonCount +
-                w.remainingFuel * res.remainingFuel +
-                w.unusedStep * res.unusedSteps +
-                w.valuableSpotDistance * res.valuableSpotDistance +
-                w.newBrandSpotDistance * res.newBrandSpotDistance +
-                w.dailyBrandSpotDistance * res.dailyBrandSpotDistance +
-                w.targetSlack * res.targetSlack +
-                w.supplyDistance * res.supplyDistance +
-                w.rendezvousMismatch * res.rendezvousMismatch +
-                w.fuelRisk * res.fuelRisk +
-                w.unreachableTarget * res.unreachableTargetCount +
-                w.concentration * res.concentrationCount;
+    res.total = evaluationTotal(res, w);
     return res;
 }
 

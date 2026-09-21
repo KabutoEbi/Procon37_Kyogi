@@ -273,6 +273,8 @@ inline int runLocalSolver(
 
     printPlan(std::cout, result.plan);
     std::cerr << "expanded=" << result.expandedNodes
+              << " full-eval=" << result.fullEvaluations
+              << " reused-eval=" << result.reusedEvaluations
               << " score=" << result.evaluation.total
               << " udon=" << result.finalState.dayUdon << '\n';
     return 0;

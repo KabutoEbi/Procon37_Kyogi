@@ -245,12 +245,121 @@ void testBeamSearch() {
     assert(serial.plan == parallel.plan);
     assert(serial.evaluation.total == parallel.evaluation.total);
     assert(validateDailyPlan(s, st, parallel.plan).valid);
+    assert(parallel.fullEvaluations > 0);
     for (const AgentPlan& actions : parallel.plan) {
         for (std::size_t i = 1; i < actions.size(); ++i) {
             assert(!(isWaitAction(actions[i - 1]) &&
                      isWaitAction(actions[i])));
         }
     }
+
+    MatchSetting slow = makeSetting();
+    slow.daySteps = {4};
+    slow.fuelLimit = 3;
+    slow.field.cells[4].type = CellType::Mountain;
+    MatchState slowState = makeState();
+    slowState.agents[0].fuel = 3;
+    BeamSearchConfig slowCfg;
+    slowCfg.beamWidth = 32;
+    slowCfg.jointBeamWidth = 128;
+    slowCfg.threadCount = 2;
+    slowCfg.parallelThreshold = 1;
+    const auto slowResult = brain1(slow, slowState, {}, slowCfg);
+    assert(slowResult.success);
+    assert(slowResult.reusedEvaluations > 0);
+    assert(validateDailyPlan(slow, slowState, slowResult.plan).valid);
+}
+
+void testPathRendezvous() {
+    MatchSetting s;
+    s.daySteps = {10};
+    s.daySeconds = {60};
+    s.fuelLimit = 2;
+    s.playerCount = 2;
+    s.field.width = 5;
+    s.field.height = 1;
+    s.field.cells.assign(5, Cell{CellType::Plain, -1});
+    s.field.spots = {Spot{1, 4, 1, -1}};
+    s.agentStarts = {0, 2};
+    assert(s.field.rebuildSpotIndex());
+
+    MatchState st;
+    st.day = 0;
+    st.agents = {
+        Agent{0, AgentKind::Patrol, 0, 2},
+        Agent{1, AgentKind::Supply, 2, 2},
+    };
+    st.trafficByPos.assign(5, TrafficStatus::Smooth);
+    const auto expected = simulateDay(s, st, {{2, 2, 2, 2, -2}, {-10}});
+    assert(expected.valid);
+    assert(expected.state.dayUdon == 1);
+
+    BeamSearchConfig cfg;
+    cfg.beamWidth = 128;
+    cfg.jointBeamWidth = 512;
+    cfg.threadCount = 1;
+    const auto result = brain1(s, st, {}, cfg);
+
+    assert(result.success);
+    assert(validateDailyPlan(s, st, result.plan).valid);
+    assert(result.finalState.dayUdon == 1);
+    assert(result.finalState.agents[0].pos == 4);
+}
+
+void testWaitAtLastReachableSpotAndRefuel() {
+    MatchSetting s;
+    s.daySteps = {6};
+    s.daySeconds = {60};
+    s.fuelLimit = 2;
+    s.playerCount = 2;
+    s.field.width = 5;
+    s.field.height = 1;
+    s.field.cells.assign(5, Cell{CellType::Plain, -1});
+    s.field.spots = {
+        Spot{1, 0, 1, -1},
+        Spot{2, 4, 1, -1},
+    };
+    s.agentStarts = {1, 2};
+    assert(s.field.rebuildSpotIndex());
+
+    MatchState st;
+    st.day = 0;
+    st.agents = {
+        Agent{0, AgentKind::Patrol, 1, 1},
+        Agent{1, AgentKind::Supply, 2, 2},
+    };
+    st.trafficByPos.assign(5, TrafficStatus::Smooth);
+
+    ScoreState previous;
+    previous.matchBrands = brandBit(1);
+    BeamSearchConfig cfg;
+    cfg.beamWidth = 128;
+    cfg.jointBeamWidth = 512;
+    cfg.threadCount = 1;
+    const auto result = brain1(s, st, previous, cfg);
+
+    assert(result.success);
+    assert(validateDailyPlan(s, st, result.plan, previous).valid);
+    assert(result.finalState.agents[0].pos == 0);
+    assert(result.finalState.agents[0].fuel == s.fuelLimit);
+    assert(result.finalState.hasAcquired(0, 0));
+    CellPos patrolPos = 1;
+    bool reachedSpot = false;
+    std::int32_t waitedAtSpot = 0;
+    for (const std::int32_t action : result.plan[0]) {
+        if (isWaitAction(action)) {
+            if (reachedSpot) {
+                waitedAtSpot += waitSteps(action);
+            }
+            continue;
+        }
+        assert(!reachedSpot);
+        patrolPos = s.field.neighbor(
+            patrolPos, static_cast<Direction>(action));
+        reachedSpot = patrolPos == 0;
+    }
+    assert(reachedSpot);
+    assert(waitedAtSpot > 0);
 }
 
 void testAgentSelector() {
@@ -511,6 +620,8 @@ int main() {
     testHashAndEvaluation();
     testDijkstra();
     testBeamSearch();
+    testPathRendezvous();
+    testWaitAtLastReachableSpotAndRefuel();
     testAgentSelector();
     testMatchRunner();
     testProblemCreator();
