@@ -5,6 +5,9 @@
 #include "game_state_hash.hpp"
 #include "plan_validator.hpp"
 #include "simulator.hpp"
+#include "min_cost_flow.hpp"
+#include "search_state.hpp"
+#include "action_routes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,8 +21,9 @@
 #include <iterator>
 #include <limits>
 #include <mutex>
-#include <queue>
 #include <thread>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -52,7 +56,13 @@ struct BeamSearchConfig {
 
     // 各エージェントで残す合法行動数。0なら全候補を残す。
     std::size_t maxActionsPerAgent = 4;
+    bool adaptiveActionLimit = true;
     bool autoTuneWeights = true;
+    bool useMacroActions = true;
+    std::size_t macroTargetLimit = 3;
+    bool dominancePruning = true;
+    // 上位解を残しつつ、この割合を異なる系列・位置の候補へ確保する。
+    double diversityFraction = 0.25;
 };
 
 enum class SearchStopReason : std::uint8_t {
@@ -69,6 +79,8 @@ struct BeamSearchResult {
     std::size_t expandedNodes = 0;
     std::size_t fullEvaluations = 0;
     std::size_t reusedEvaluations = 0;
+    std::size_t macroCandidates = 0;
+    std::size_t macroContinuations = 0;
     SearchStopReason stopReason = SearchStopReason::NoValidPlan;
     std::int64_t elapsedMs = 0;
 };
@@ -80,10 +92,18 @@ private:
     static constexpr ActionLink kNoAction =
         std::numeric_limits<ActionLink>::max();
 
+    struct PathLabel {
+        std::int32_t steps = kImpassableCost;
+        std::int32_t fuel = kImpassableCost;
+        CellPos next = kInvalidCell;
+    };
+
     struct SpotDistanceTables {
+        DistanceMatrix travel;
+        std::vector<std::vector<CellPos>> firstHop;
         DistanceMatrix steps;
         DistanceMatrix fuel;
-        std::vector<std::vector<CellPos>> next;
+        std::vector<std::vector<std::vector<PathLabel>>> pareto;
     };
 
     struct PatrolTarget {
@@ -100,6 +120,8 @@ private:
         std::int32_t supplyArrival = kImpassableCost;
         std::int32_t supplyTravel = kImpassableCost;
         std::int32_t fuelShortage = 0;
+        std::int32_t goalArrival = kImpassableCost;
+        PathLabel path{};
         bool required = false;
         bool valid = false;
     };
@@ -237,15 +259,17 @@ private:
     struct BeamNode {
         GameState state{};
         std::array<ActionLink, kMaxAgents> planTails{};
+        std::array<ActionRoutes::Id, kMaxAgents> routes{};
+        std::array<CellPos, kMaxAgents> aims{};
         EvaluationBreakdown evaluation{};
         double orderingScore = 0.0;
-        std::size_t stateHash = 0;
         std::uint64_t orderKey = 0;
         std::uint64_t serial = 0;
-        bool evaluationDirty = false;
 
         BeamNode() noexcept {
             planTails.fill(kNoAction);
+            routes.fill(ActionRoutes::none);
+            aims.fill(kInvalidCell);
         }
     };
 
@@ -254,50 +278,8 @@ private:
         std::int32_t action = -1;
         double orderingScore = 0.0;
         std::uint64_t orderKey = 0;
-    };
-
-    class FlatStateSet final {
-    public:
-        void reset(std::size_t expected) {
-            std::size_t capacity = 8;
-            while (capacity < expected * 2) {
-                capacity <<= 1U;
-            }
-            if (slots_.size() < capacity) {
-                slots_.resize(capacity);
-            }
-            activeSize_ = capacity;
-            std::fill(
-                slots_.begin(),
-                slots_.begin() + static_cast<std::ptrdiff_t>(activeSize_),
-                kEmpty);
-        }
-
-        bool insert(
-            const std::vector<BeamNode>& nodes,
-            std::size_t index) noexcept {
-            const std::size_t mask = activeSize_ - 1;
-            std::size_t slot = nodes[index].stateHash & mask;
-            for (;;) {
-                const std::int32_t stored = slots_[slot];
-                if (stored == kEmpty) {
-                    slots_[slot] = static_cast<std::int32_t>(index);
-                    return true;
-                }
-                const BeamNode& other =
-                    nodes[static_cast<std::size_t>(stored)];
-                if (other.stateHash == nodes[index].stateHash &&
-                    other.state == nodes[index].state) {
-                    return false;
-                }
-                slot = (slot + 1) & mask;
-            }
-        }
-
-    private:
-        static constexpr std::int32_t kEmpty = -1;
-        std::vector<std::int32_t> slots_;
-        std::size_t activeSize_ = 0;
+        ActionRoutes::Id route = ActionRoutes::none;
+        CellPos aim = kInvalidCell;
     };
 
     static bool betterNode(const BeamNode& lhs, const BeamNode& rhs) {
@@ -308,6 +290,21 @@ private:
             return lhs.orderKey < rhs.orderKey;
         }
         return lhs.serial < rhs.serial;
+    }
+
+    static bool preferPlan(const DailyPlan& lhs, const DailyPlan& rhs) {
+        auto initialWait = [](const DailyPlan& plan) {
+            std::int64_t total = 0;
+            for (const auto& actions : plan) {
+                for (const int action : actions) {
+                    if (!isWaitAction(action)) break;
+                    total -= action;
+                }
+            }
+            return total;
+        };
+        const auto left = initialWait(lhs), right = initialWait(rhs);
+        return left != right ? left < right : lhs < rhs;
     }
 
     static void sortAndLimit(
@@ -329,34 +326,71 @@ private:
     }
 
     static void deduplicateAndLimit(
-        std::vector<BeamNode>& nodes,
-        std::size_t limit,
-        FlatStateSet& seen,
-        std::vector<std::size_t>& indices,
-        std::vector<BeamNode>& unique) {
+        std::vector<BeamNode>& nodes, std::size_t limit,
+        const Field& field, const BeamSearchConfig& config,
+        std::vector<std::size_t>& indices, std::vector<BeamNode>& unique) {
         sortAndLimit(nodes, nodes.size());
-        seen.reset(nodes.size());
         indices.clear();
-        indices.reserve(std::min(nodes.size(), limit));
+        if (limit == 0) { nodes.clear(); return; }
+        std::vector<GameState> shapes;
+        shapes.reserve(nodes.size());
+        std::vector<bool> removed(nodes.size(), false);
+        std::unordered_map<std::size_t, std::vector<std::size_t>> groups;
         for (std::size_t i = 0; i < nodes.size(); ++i) {
-            if (seen.insert(nodes, i)) {
-                indices.push_back(i);
-                if (indices.size() == limit) {
+            shapes.push_back(canonicalSearchState(nodes[i].state, config.dominancePruning));
+            std::size_t hash = GameStateHash{}(shapes.back());
+            for (const auto route : nodes[i].routes) detail::hashValue(hash, route);
+            auto& group = groups[hash];
+            for (const auto j : group) {
+                if (removed[j] || nodes[i].routes != nodes[j].routes ||
+                    shapes[i] != shapes[j]) continue;
+                if (!config.dominancePruning ||
+                    fuelDominates(nodes[j].state, nodes[i].state)) {
+                    removed[i] = true;
                     break;
                 }
+                if (fuelDominates(nodes[i].state, nodes[j].state)) removed[j] = true;
             }
+            if (!removed[i]) group.push_back(i);
         }
+        std::vector<bool> chosen(nodes.size(), false);
+        const std::size_t elite = std::max<std::size_t>(
+            1, limit - static_cast<std::size_t>(limit * config.diversityFraction));
+        auto signature = [&](const BeamNode& node) {
+            std::size_t hash = 0;
+            detail::hashValue(hash, node.state.score.matchBrands);
+            detail::hashValue(hash, node.state.dayBrands);
+            for (AgentIndex a = 0; a < node.state.agentCount; ++a) {
+                const Coord c = field.toCoord(projectedPosition(node.state, a));
+                detail::hashValue(hash, c.x / 3);
+                detail::hashValue(hash, c.y / 3);
+                detail::hashValue(hash, node.aims[a]);
+            }
+            return hash;
+        };
+        std::unordered_map<std::size_t, bool> niches;
+        auto take = [&](std::size_t i) {
+            indices.push_back(i);
+            chosen[i] = true;
+            niches[signature(nodes[i])] = true;
+        };
+        for (std::size_t i = 0; i < nodes.size() && indices.size() < elite; ++i)
+            if (!removed[i]) take(i);
+        for (std::size_t i = 0; i < nodes.size() && indices.size() < limit; ++i)
+            if (!removed[i] && !chosen[i] && niches.count(signature(nodes[i])) == 0)
+                take(i);
+        for (std::size_t i = 0; i < nodes.size() && indices.size() < limit; ++i)
+            if (!removed[i] && !chosen[i]) take(i);
+        std::sort(indices.begin(), indices.end());
         unique.clear();
-        unique.reserve(std::min(nodes.size(), limit));
-        for (const std::size_t index : indices) {
-            unique.push_back(std::move(nodes[index]));
-        }
+        unique.reserve(indices.size());
+        for (const auto i : indices) unique.push_back(std::move(nodes[i]));
         nodes.swap(unique);
         unique.clear();
     }
 
-    // 各スポットへの最短時間と巡回車の最小必要燃料を求める。
-    // スポットごとの行は独立しているため、複数スレッドで構築できる。
+    // 各スポットへの (所要時間, 必要燃料) の非劣解を求める。
+    // 時間最短経路と燃料最小経路が異なる場合も、両制約を同時に判定できる。
     static SpotDistanceTables buildSpotDistances(
         const MatchSetting& setting,
         const MatchState& matchState,
@@ -366,70 +400,129 @@ private:
         bool& stopped) {
         const Field& field = setting.field;
         SpotDistanceTables result;
+        result.travel.resize(field.cellCount());
+        result.firstHop.resize(field.cellCount());
+        std::atomic<std::size_t> nextSource{0};
+        std::atomic<bool> distanceStopped{false};
+        executor.run(threadCount, [&](std::size_t) {
+            for (;;) {
+                const std::size_t source = nextSource.fetch_add(1);
+                if (source >= field.cellCount() || distanceStopped.load()) break;
+                auto table = Brain0::dijkstra(
+                    setting, matchState, static_cast<CellPos>(source), [&]() {
+                        if (stop()) distanceStopped.store(true);
+                        return distanceStopped.load();
+                    });
+                result.travel[source] = std::move(table.distances);
+                result.firstHop[source] = std::move(table.firstHop);
+            }
+        });
+        if (distanceStopped.load()) {
+            stopped = true;
+            return result;
+        }
         result.steps.assign(
             field.spots.size(),
             std::vector<std::int32_t>(
                 field.cellCount(), kImpassableCost));
         result.fuel = result.steps;
-        result.next.assign(
+        result.pareto.assign(
             field.spots.size(),
-            std::vector<CellPos>(field.cellCount(), kInvalidCell));
+            std::vector<std::vector<PathLabel>>(field.cellCount()));
 
         std::atomic<std::size_t> nextSpot{0};
         std::atomic<bool> aborted{false};
 
-        using QueueEntry = std::pair<std::int32_t, CellPos>;
-        auto buildRow = [&](std::size_t spotIndex, bool fuel) {
+        // 1回の補給を含む経路候補も保持する。直接到達時は残燃料で絞る。
+        const std::int32_t fuelCap = static_cast<std::int32_t>(
+            std::min<std::int64_t>(kImpassableCost - 1,
+                                  2LL * setting.fuelLimit));
+        auto buildRow = [&](std::size_t spotIndex) {
             const CellPos goal = field.spots[spotIndex].pos;
             if (!field.contains(goal) || !field.at(goal).isPassable()) {
                 return;
             }
-            auto& distances = fuel ? result.fuel[spotIndex]
-                                   : result.steps[spotIndex];
-            std::priority_queue<
-                QueueEntry,
-                std::vector<QueueEntry>,
-                std::greater<QueueEntry>> queue;
-            distances[static_cast<std::size_t>(goal)] = 0;
-            queue.emplace(0, goal);
+            auto& rows = result.pareto[spotIndex];
+            DialQueue<std::pair<std::int32_t, CellPos>> queue;
+            rows[static_cast<std::size_t>(goal)].push_back(
+                PathLabel{0, 0, kInvalidCell});
+            queue.push(0, {0, goal});
             while (!queue.empty() && !aborted.load(std::memory_order_relaxed)) {
                 if (stop()) {
                     aborted.store(true, std::memory_order_relaxed);
                     return;
                 }
-                const auto [distance, to] = queue.top();
-                queue.pop();
-                if (distance != distances[static_cast<std::size_t>(to)]) {
+                const auto entry = queue.pop();
+                const std::int32_t steps = entry.first;
+                const std::int32_t fuel = entry.second.first;
+                const CellPos to = entry.second.second;
+                const auto& currentLabels =
+                    rows[static_cast<std::size_t>(to)];
+                const auto current = std::find_if(
+                    currentLabels.begin(),
+                    currentLabels.end(),
+                    [steps, fuel](const PathLabel& label) {
+                        return label.steps == steps && label.fuel == fuel;
+                    });
+                if (current == currentLabels.end()) {
                     continue;
                 }
                 for (const CellPos from : field.neighbors(to)) {
                     if (!field.contains(from) || !field.at(from).isPassable()) {
                         continue;
                     }
-                    const std::int32_t edgeCost = fuel
-                        ? moveFuelCost(setting, AgentKind::Patrol, from)
-                        : moveStepCost(setting, matchState, from);
-                    if (edgeCost >= kImpassableCost ||
-                        distance > kImpassableCost - edgeCost) {
+                    const std::int32_t edgeSteps =
+                        moveStepCost(setting, matchState, from);
+                    const std::int32_t edgeFuel = moveFuelCost(
+                        setting, AgentKind::Patrol, from);
+                    if (edgeSteps >= kImpassableCost ||
+                        edgeFuel >= kImpassableCost ||
+                        steps > kImpassableCost - edgeSteps ||
+                        fuel > fuelCap - edgeFuel) {
                         continue;
                     }
-                    const std::int32_t candidate = distance + edgeCost;
-                    std::int32_t& current =
-                        distances[static_cast<std::size_t>(from)];
-                    if (candidate < current) {
-                        current = candidate;
-                        if (!fuel) {
-                            result.next[spotIndex][
-                                static_cast<std::size_t>(from)] = to;
-                        }
-                        queue.emplace(candidate, from);
-                    } else if (!fuel && candidate == current) {
-                        CellPos& next = result.next[spotIndex][
-                            static_cast<std::size_t>(from)];
-                        if (next == kInvalidCell || to < next) {
-                            next = to;
+                    PathLabel candidate{
+                        steps + edgeSteps,
+                        fuel + edgeFuel,
+                        to,
+                    };
+                    auto& labels = rows[static_cast<std::size_t>(from)];
+                    bool dominated = false;
+                    for (PathLabel& label : labels) {
+                        if (label.steps <= candidate.steps &&
+                            label.fuel <= candidate.fuel) {
+                            if (label.steps == candidate.steps &&
+                                label.fuel == candidate.fuel &&
+                                (label.next == kInvalidCell ||
+                                 candidate.next < label.next)) {
+                                label.next = candidate.next;
+                            }
+                            dominated = true;
+                            break;
                         }
                     }
+                    if (dominated) {
+                        continue;
+                    }
+                    labels.erase(
+                        std::remove_if(
+                            labels.begin(),
+                            labels.end(),
+                            [&](const PathLabel& label) {
+                                return candidate.steps <= label.steps &&
+                                       candidate.fuel <= label.fuel;
+                            }),
+                        labels.end());
+                    labels.push_back(candidate);
+                    queue.push(candidate.steps, {candidate.fuel, from});
+                }
+            }
+
+            for (std::size_t pos = 0; pos < rows.size(); ++pos) {
+                result.steps[spotIndex][pos] = result.travel[pos][goal];
+                for (const PathLabel& label : rows[pos]) {
+                    result.fuel[spotIndex][pos] = std::min(
+                        result.fuel[spotIndex][pos], label.fuel);
                 }
             }
         };
@@ -438,19 +531,46 @@ private:
             while (!aborted.load(std::memory_order_relaxed)) {
                 const std::size_t task =
                     nextSpot.fetch_add(1, std::memory_order_relaxed);
-                if (task >= field.spots.size() * 2) {
+                if (task >= field.spots.size()) {
                     return;
                 }
-                buildRow(task / 2, task % 2 != 0);
+                buildRow(task);
             }
         };
 
         const std::size_t workers = std::max<std::size_t>(
             1,
-            std::min(threadCount, field.spots.size() * 2));
+            std::min(threadCount, field.spots.size()));
         executor.run(workers, worker);
         stopped = aborted.load(std::memory_order_relaxed);
         return result;
+    }
+
+    static const PathLabel* constrainedPath(
+        const SpotDistanceTables& distances,
+        std::size_t spotIndex,
+        CellPos from,
+        std::int32_t maxSteps,
+        std::int32_t maxFuel) noexcept {
+        if (spotIndex >= distances.pareto.size() || from < 0 ||
+            static_cast<std::size_t>(from) >=
+                distances.pareto[spotIndex].size()) {
+            return nullptr;
+        }
+        const PathLabel* best = nullptr;
+        for (const PathLabel& label : distances.pareto[spotIndex][
+                 static_cast<std::size_t>(from)]) {
+            if (label.steps > maxSteps || label.fuel > maxFuel) {
+                continue;
+            }
+            if (best == nullptr || label.steps < best->steps ||
+                (label.steps == best->steps && label.fuel < best->fuel) ||
+                (label.steps == best->steps && label.fuel == best->fuel &&
+                 label.next < best->next)) {
+                best = &label;
+            }
+        }
+        return best;
     }
 
     static CellPos projectedPosition(
@@ -505,241 +625,283 @@ private:
         return pending.active ? pending.remainingSteps : 0;
     }
 
-    // 障害物を無視した六角距離。補給合流の軽量な下界評価に使う。
-    static std::int32_t hexDistance(
-        const Field& field,
-        CellPos lhs,
-        CellPos rhs) noexcept {
-        const Coord a = field.toCoord(lhs);
-        const Coord b = field.toCoord(rhs);
-        if (!field.contains(a) || !field.contains(b)) {
-            return kImpassableCost;
-        }
-        auto cube = [](Coord p) {
-            const std::int32_t q = p.x - (p.y + (p.y & 1)) / 2;
-            const std::int32_t r = p.y;
-            return std::array<std::int32_t, 3>{q, r, -q - r};
-        };
-        const auto ca = cube(a);
-        const auto cb = cube(b);
-        return std::max({
-            std::abs(ca[0] - cb[0]),
-            std::abs(ca[1] - cb[1]),
-            std::abs(ca[2] - cb[2]),
-        });
+
+    using TargetAssignments = std::array<PatrolTarget, kMaxAgents>;
+
+    static std::int32_t projectedFuel(
+        const GameState& state, AgentIndex a) noexcept {
+        return std::max(0, state.agents[a].fuel -
+            (state.pendingActions[a].isMove()
+                 ? state.pendingActions[a].fuelCost : 0));
     }
 
-    static PatrolTarget selectPatrolTarget(
-        const GameState& state,
-        AgentIndex agentIndex,
-        const MatchSetting& setting,
-        const SpotDistanceTables& spotDistances) noexcept {
-        PatrolTarget best;
-        if (agentIndex >= state.agentCount ||
-            !state.agents[agentIndex].isPatrol()) {
-            return best;
+    static const PathLabel* suffixLabel(
+        const SpotDistanceTables& dist, std::size_t spot, CellPos next,
+        std::int32_t steps, std::int32_t fuel) noexcept {
+        for (const auto& label : dist.pareto[spot][next]) {
+            if (label.steps == steps && label.fuel == fuel) return &label;
         }
-        const CellPos from = projectedPosition(state, agentIndex);
-        if (!setting.field.contains(from)) {
-            return best;
+        return nullptr;
+    }
+
+    // 巡回車→スポット→系列の最小費用流。系列の初回だけ報酬を付ける。
+    static TargetAssignments assignPatrolTargets(
+        const GameState& input, const MatchSetting& setting,
+        const MatchState& matchState, const SpotDistanceTables& dist,
+        bool currentDay = true) {
+        GameState state = input;
+        // 現在の予約に基づく次ステップの取得を仮予約し、その先を割り当てる。
+        // 他車のstep 1到着も添字順に反映する。実状態は変更しない。
+        if (currentDay && state.remainingSteps() > 0) {
+            GameState next = state;
+            for (AgentIndex a = 0; a < state.agentCount; ++a) {
+                const auto& pending = state.pendingActions[a];
+                if (pending.isMove() && pending.remainingSteps == 1)
+                    next.agents[a].pos = pending.destination;
+            }
+            for (AgentIndex a = 0; a < next.agentCount; ++a) {
+                const auto* spot = setting.field.spotAt(next.agents[a].pos);
+                if (spot) next.tryAcquire(a, static_cast<std::size_t>(
+                    setting.field.at(next.agents[a].pos).spotIndex), setting.field);
+            }
+            state.score = next.score;
+            state.dayBrands = next.dayBrands;
+            state.remainingStocks = next.remainingStocks;
+            state.acquiredSpots = next.acquiredSpots;
         }
-        const std::int32_t available = std::max(
-            0,
-            state.remainingSteps() - projectedDelay(state, agentIndex));
-        for (std::size_t i = 0; i < state.spotCount; ++i) {
-            if (state.remainingStocks[i] <= 0 ||
-                state.hasAcquired(agentIndex, i)) {
-                continue;
+        TargetAssignments result{};
+        const int n = static_cast<int>(state.agentCount);
+        const int spots = static_cast<int>(state.spotCount);
+        const int brands = static_cast<int>(setting.field.brands.size());
+        const int spotBase = n + 1, brandBase = spotBase + spots;
+        const int sink = brandBase + brands;
+        MinCostFlow flow(sink + 1);
+        std::array<std::array<int, kMaxSpots>, kMaxAgents> edges{};
+        std::array<std::array<std::int32_t, kMaxSpots>, kMaxAgents> times{};
+        for (auto& row : edges) row.fill(-1);
+        const std::int64_t timeBound = std::max<std::int64_t>(
+            state.dayStepLimit, 4LL * setting.field.cellCount());
+        const std::int64_t pickup = timeBound * (n + 1) + 1;
+        const std::int64_t daily = pickup * (n + 1);
+        const std::int64_t fresh = daily * (n + 1);
+        for (int a = 0; a < n; ++a) {
+            if (!state.agents[a].isPatrol()) continue;
+            flow.addEdge(0, a + 1, 1, 0);
+            flow.addEdge(a + 1, sink, 1, 0); // 未割当も許す。
+            const CellPos from = projectedPosition(state, a);
+            const int delay = projectedDelay(state, a);
+            const int available = currentDay
+                ? state.remainingSteps() - delay : kImpassableCost - 1;
+            for (int i = 0; i < spots; ++i) {
+                if (currentDay && (state.remainingStocks[i] <= 0 ||
+                                   state.hasAcquired(a, i))) continue;
+                int travel = dist.steps[i][from];
+                if (travel >= kImpassableCost || travel > available) continue;
+                if (currentDay) {
+                    const auto* direct = constrainedPath(
+                        dist, i, from, available, projectedFuel(state, a));
+                    if (direct) {
+                        travel = direct->steps;
+                    } else {
+                        const PatrolTarget target{
+                            static_cast<std::size_t>(i), 0, travel, true};
+                        const auto meet = findRendezvous(
+                            state, a, target, setting, matchState, dist);
+                        if (!meet.valid) continue;
+                        travel = meet.goalArrival - delay;
+                    }
+                }
+                times[a][i] = travel;
+                edges[a][i] = flow.addEdge(
+                    a + 1, spotBase + i, 1, travel - pickup);
             }
-            const std::int32_t steps =
-                spotDistances.steps[i][static_cast<std::size_t>(from)];
-            if (steps >= kImpassableCost || steps > available) {
-                continue;
-            }
+        }
+        for (int i = 0; i < spots; ++i) {
             const Spot& spot = setting.field.spots[i];
-            const BrandMask bit = brandBit(
-                static_cast<std::size_t>(spot.brandIndex));
-            const std::int32_t priority =
-                (state.score.matchBrands & bit) == 0
-                    ? 0
-                    : ((state.dayBrands & bit) == 0 ? 1 : 2);
-            if (!best.valid || priority < best.priority ||
-                (priority == best.priority && steps < best.steps) ||
-                (priority == best.priority && steps == best.steps &&
-                 i < best.spotIndex)) {
-                best = PatrolTarget{i, priority, steps, true};
+            flow.addEdge(spotBase + i, brandBase + spot.brandIndex,
+                         currentDay ? state.remainingStocks[i] : spot.maxStock, 0);
+        }
+        for (int b = 0; b < brands; ++b) {
+            const BrandMask bit = brandBit(b);
+            const std::int64_t reward =
+                ((state.score.matchBrands & bit) == 0 ? fresh : 0) +
+                ((!currentDay || (state.dayBrands & bit) == 0) ? daily : 0);
+            flow.addEdge(brandBase + b, sink, 1, -reward);
+            flow.addEdge(brandBase + b, sink, n, 0);
+        }
+        flow.run(0, sink, n);
+        std::array<AgentIndex, kMaxBrands> owners{};
+        owners.fill(kMaxAgents);
+        for (int a = 0; a < n; ++a) {
+            for (int i = 0; i < spots; ++i) {
+                if (edges[a][i] < 0 || flow.capacity(a + 1, edges[a][i]) != 0)
+                    continue;
+                result[a] = {static_cast<std::size_t>(i), 2, times[a][i], true};
+                const auto b = setting.field.spots[i].brandIndex;
+                const auto owner = owners[b];
+                if (owner == kMaxAgents ||
+                    times[a][i] + projectedDelay(state, a) <
+                    result[owner].steps + projectedDelay(state, owner))
+                    owners[b] = static_cast<AgentIndex>(a);
             }
         }
-        return best;
+        for (int b = 0; b < brands; ++b) {
+            if (owners[b] == kMaxAgents) continue;
+            const auto bit = brandBit(b);
+            result[owners[b]].priority = (state.score.matchBrands & bit) == 0
+                ? 0 : ((!currentDay || (state.dayBrands & bit) == 0) ? 1 : 2);
+        }
+        return result;
     }
 
-    // スポット上にいて、残り時間内に次の取得対象へ届かない巡回車は
-    // 無目的に離れず、その場で日末まで待機する。
     static bool shouldWaitAtSpot(
-        const GameState& state,
-        AgentIndex agentIndex,
-        const MatchSetting& setting,
-        const SpotDistanceTables& spotDistances) noexcept {
-        if (agentIndex >= state.agentCount ||
-            !state.agents[agentIndex].isPatrol()) {
-            return false;
-        }
-        const CellPos pos = projectedPosition(state, agentIndex);
-        return setting.field.contains(pos) &&
-               setting.field.at(pos).hasSpot() &&
-               !selectPatrolTarget(
-                    state,
-                    agentIndex,
-                    setting,
-                    spotDistances).valid;
+        const GameState& state, AgentIndex a, const MatchSetting& setting,
+        const TargetAssignments& targets) noexcept {
+        const CellPos pos = projectedPosition(state, a);
+        return state.agents[a].isPatrol() && setting.field.contains(pos) &&
+               setting.field.at(pos).hasSpot() && !targets[a].valid;
     }
 
-    // スポットまでの最短距離差と六角距離を組み合わせた、任意セル間の
-    // 移動時間の軽量な下界。合流候補の比較にだけ使用する。
-    static std::int32_t estimatedStepsTo(
-        CellPos from,
-        CellPos to,
-        std::size_t targetSpot,
-        const MatchSetting& setting,
-        const SpotDistanceTables& spotDistances) noexcept {
-        if (from == to) {
-            return 0;
-        }
-        if (!setting.field.contains(from) || !setting.field.contains(to)) {
-            return kImpassableCost;
-        }
-        const std::int32_t hex = hexDistance(setting.field, from, to);
-        const auto& toTarget = spotDistances.steps[targetSpot];
-        const std::int32_t fromTarget =
-            toTarget[static_cast<std::size_t>(from)];
-        const std::int32_t cellTarget =
-            toTarget[static_cast<std::size_t>(to)];
-        if (hex >= kImpassableCost || fromTarget >= kImpassableCost ||
-            cellTarget >= kImpassableCost) {
-            return hex;
-        }
-        return std::max(hex, std::max(0, fromTarget - cellTarget));
-    }
-
-    // 巡回車の最短時間経路を燃料が許す位置までたどり、巡回車を
-    // 待たせない（または待ち時間が最小の）経路上合流地点を選ぶ。
+    // 非劣経路ごとの実際のprefixをたどり、補給車の実距離で合流を判定。
     static RendezvousPlan findRendezvous(
-        const GameState& state,
-        AgentIndex patrolIndex,
-        const PatrolTarget& target,
-        const MatchSetting& setting,
-        const MatchState& matchState,
-        const SpotDistanceTables& spotDistances,
+        const GameState& state, AgentIndex patrolIndex,
+        const PatrolTarget& target, const MatchSetting& setting,
+        const MatchState& matchState, const SpotDistanceTables& dist,
         AgentIndex onlySupply = kMaxAgents) noexcept {
         RendezvousPlan best;
-        if (!target.valid || patrolIndex >= state.agentCount) {
-            return best;
-        }
-        const Agent& patrol = state.agents[patrolIndex];
+        if (!target.valid || !state.agents[patrolIndex].isPatrol()) return best;
         const CellPos start = projectedPosition(state, patrolIndex);
-        if (!patrol.isPatrol() || !setting.field.contains(start)) {
-            return best;
-        }
-
-        const PendingAction& patrolPending =
-            state.pendingActions[patrolIndex];
-        std::int32_t fuel = patrol.fuel;
-        if (patrolPending.isMove()) {
-            fuel -= patrolPending.fuelCost;
-        }
-        fuel = std::max(0, fuel);
-        const std::int32_t requiredFuel = spotDistances.fuel[
-            target.spotIndex][static_cast<std::size_t>(start)];
-        const std::int32_t threshold = std::max(
-            1, (setting.fuelLimit + 1) / 2);
-        best.required = requiredFuel > fuel;
-        best.fuelShortage = best.required && requiredFuel < kImpassableCost
-                                ? requiredFuel - fuel
-                                : std::max(0, threshold - fuel);
-        if (!best.required && fuel >= threshold) {
-            return best;
-        }
-
-        CellPos cell = start;
-        std::int32_t patrolArrival = projectedDelay(state, patrolIndex);
-        std::int32_t fuelLeft = fuel;
+        const int fuel = projectedFuel(state, patrolIndex);
+        const int delay = projectedDelay(state, patrolIndex);
+        const int available = state.remainingSteps();
+        const auto* direct = constrainedPath(
+            dist, target.spotIndex, start, available - delay, fuel);
+        best.required = direct == nullptr;
+        const int need = dist.fuel[target.spotIndex][start];
+        best.fuelShortage = best.required
+            ? std::max(1, need < kImpassableCost ? need - fuel : 1)
+            : std::max(0, (setting.fuelLimit + 1) / 2 - fuel);
+        if (!best.required && best.fuelShortage == 0) return best;
         const CellPos goal = setting.field.spots[target.spotIndex].pos;
-        const auto& next = spotDistances.next[target.spotIndex];
-
-        for (std::size_t guard = 0;
-             guard <= setting.field.cellCount();
-             ++guard) {
-            const std::int32_t remainingRoute = spotDistances.steps[
-                target.spotIndex][static_cast<std::size_t>(cell)];
-            for (AgentIndex supplyIndex = 0;
-                 supplyIndex < state.agentCount;
-                 ++supplyIndex) {
-                if (!state.agents[supplyIndex].isSupply() ||
-                    (onlySupply < kMaxAgents && supplyIndex != onlySupply)) {
-                    continue;
+        for (const PathLabel& route : dist.pareto[target.spotIndex][start]) {
+            if (route.steps + delay > available) continue;
+            const PathLabel* label = &route;
+            CellPos cell = start;
+            int arrival = delay, left = fuel;
+            for (std::size_t guard = 0; guard <= setting.field.cellCount(); ++guard) {
+                for (AgentIndex q = 0; q < state.agentCount; ++q) {
+                    if (!state.agents[q].isSupply() ||
+                        (onlySupply < kMaxAgents && q != onlySupply)) continue;
+                    const int travel = dist.travel[projectedPosition(state, q)][cell];
+                    if (travel >= kImpassableCost) continue;
+                    const int supplyArrival = projectedDelay(state, q) + travel;
+                    // step 0に補給はない。同位置でも最低step 1まで待つ。
+                    const int meetAt = std::max({arrival, supplyArrival,
+                                                state.step == 0 ? 1 : 0});
+                    const auto* suffix = constrainedPath(
+                        dist, target.spotIndex, cell,
+                        available - meetAt, setting.fuelLimit);
+                    if (!suffix) continue;
+                    const int goalArrival = meetAt + suffix->steps;
+                    const int wait = meetAt - arrival;
+                    const int bestWait = best.valid
+                        ? std::max({best.patrolArrival, best.supplyArrival,
+                                    state.step == 0 ? 1 : 0}) - best.patrolArrival
+                        : kImpassableCost;
+                    if (!best.valid ||
+                        std::tie(goalArrival, wait, travel, q, cell) <
+                        std::tie(best.goalArrival, bestWait, best.supplyTravel,
+                                 best.supply, best.pos)) {
+                        best.pos = cell;
+                        best.supply = q;
+                        best.patrolArrival = arrival;
+                        best.supplyArrival = supplyArrival;
+                        best.supplyTravel = travel;
+                        best.goalArrival = goalArrival;
+                        best.path = route;
+                        best.valid = true;
+                    }
                 }
-                const CellPos supplyPos =
-                    projectedPosition(state, supplyIndex);
-                const std::int32_t travel = estimatedStepsTo(
-                    supplyPos,
-                    cell,
-                    target.spotIndex,
-                    setting,
-                    spotDistances);
-                if (travel >= kImpassableCost) {
-                    continue;
-                }
-                const std::int32_t supplyArrival =
-                    projectedDelay(state, supplyIndex) + travel;
-                const std::int32_t meetAt =
-                    std::max(patrolArrival, supplyArrival);
-                if (remainingRoute >= kImpassableCost ||
-                    meetAt > state.remainingSteps() - remainingRoute) {
-                    continue;
-                }
-                const std::int32_t wait =
-                    std::max(0, supplyArrival - patrolArrival);
-                const std::int32_t bestWait = best.valid
-                    ? std::max(0, best.supplyArrival - best.patrolArrival)
-                    : kImpassableCost;
-                if (!best.valid || wait < bestWait ||
-                    (wait == bestWait &&
-                     patrolArrival > best.patrolArrival) ||
-                    (wait == bestWait &&
-                     patrolArrival == best.patrolArrival &&
-                     travel < best.supplyTravel) ||
-                    (wait == bestWait &&
-                     patrolArrival == best.patrolArrival &&
-                     travel == best.supplyTravel &&
-                     supplyIndex < best.supply)) {
-                    best.pos = cell;
-                    best.supply = supplyIndex;
-                    best.patrolArrival = patrolArrival;
-                    best.supplyArrival = supplyArrival;
-                    best.supplyTravel = travel;
-                    best.valid = true;
-                }
+                if (cell == goal || label == nullptr) break;
+                const int edgeFuel = moveFuelCost(setting, AgentKind::Patrol, cell);
+                const int edgeSteps = moveStepCost(setting, matchState, cell);
+                if (edgeFuel > left || edgeSteps >= kImpassableCost) break;
+                const CellPos next = label->next;
+                if (!setting.field.contains(next)) break;
+                label = suffixLabel(dist, target.spotIndex, next,
+                                    label->steps - edgeSteps, label->fuel - edgeFuel);
+                if (!label) break;
+                left -= edgeFuel;
+                arrival += edgeSteps;
+                cell = next;
             }
-
-            if (cell == goal) {
-                break;
-            }
-            const CellPos following = next[static_cast<std::size_t>(cell)];
-            if (!setting.field.contains(following)) {
-                break;
-            }
-            const std::int32_t edgeFuel = moveFuelCost(
-                setting, AgentKind::Patrol, cell);
-            const std::int32_t edgeSteps = moveStepCost(
-                setting, matchState, cell);
-            if (edgeFuel > fuelLeft || edgeSteps >= kImpassableCost) {
-                break;
-            }
-            fuelLeft -= edgeFuel;
-            patrolArrival += edgeSteps;
-            cell = following;
         }
         return best;
+    }
+
+    using RendezvousAssignments =
+        std::array<RendezvousPlan, kMaxAgents>;
+
+    // 組合せ全体で補給要求を最大化する一対一最小費用割当。
+    static RendezvousAssignments assignRendezvous(
+        const GameState& state, const MatchSetting& setting,
+        const MatchState& matchState, const SpotDistanceTables& dist,
+        const TargetAssignments& targets) {
+        RendezvousAssignments result{};
+        const int n = static_cast<int>(state.agentCount), sink = 2 * n + 1;
+        MinCostFlow flow(sink + 1);
+        std::array<std::array<RendezvousPlan, kMaxAgents>, kMaxAgents> pairs{};
+        std::array<std::array<int, kMaxAgents>, kMaxAgents> edges{};
+        for (auto& row : edges) row.fill(-1);
+        const std::int64_t unit =
+            (static_cast<std::int64_t>(state.dayStepLimit) + 1) * (n + 1) * 8;
+        const std::int64_t benefit = unit * (setting.fuelLimit + 1LL) * (n + 1);
+        for (int q = 0; q < n; ++q)
+            if (state.agents[q].isSupply()) flow.addEdge(n + 1 + q, sink, 1, 0);
+        for (int p = 0; p < n; ++p) {
+            if (!state.agents[p].isPatrol()) continue;
+            flow.addEdge(0, p + 1, 1, 0);
+            flow.addEdge(p + 1, sink, 1, 0);
+            const CellPos pos = projectedPosition(state, p);
+            const int fuel = projectedFuel(state, p);
+            for (int q = 0; q < n; ++q) {
+                if (!state.agents[q].isSupply()) continue;
+                auto& meet = pairs[p][q];
+                if (targets[p].valid) {
+                    meet = findRendezvous(
+                        state, p, targets[p], setting, matchState, dist, q);
+                } else if (setting.field.at(pos).hasSpot() && fuel < setting.fuelLimit) {
+                    const int travel = dist.travel[projectedPosition(state, q)][pos];
+                    const int arrival = projectedDelay(state, q) + travel;
+                    if (travel < kImpassableCost &&
+                        std::max({arrival, projectedDelay(state, p),
+                                  state.step == 0 ? 1 : 0}) <= state.remainingSteps()) {
+                        meet.pos = pos;
+                        meet.supply = q;
+                        meet.patrolArrival = projectedDelay(state, p);
+                        meet.supplyArrival = arrival;
+                        meet.supplyTravel = travel;
+                        meet.fuelShortage = setting.fuelLimit - fuel;
+                        meet.goalArrival = std::max(arrival, meet.patrolArrival);
+                        meet.valid = true;
+                    }
+                }
+                if (!meet.valid) continue;
+                const int wait = std::max(0, meet.supplyArrival - meet.patrolArrival);
+                const std::int64_t reward = benefit +
+                    (meet.required ? benefit * (n + 1) : 0) +
+                    unit * meet.fuelShortage;
+                edges[p][q] = flow.addEdge(
+                    p + 1, n + 1 + q, 1,
+                    4LL * wait + meet.supplyTravel - reward);
+            }
+        }
+        flow.run(0, sink, n);
+        for (int p = 0; p < n; ++p)
+            for (int q = 0; q < n; ++q)
+                if (edges[p][q] >= 0 && flow.capacity(p + 1, edges[p][q]) == 0)
+                    result[p] = pairs[p][q];
+        return result;
     }
 
     static EvaluationContext makeEvaluationContext(
@@ -752,6 +914,14 @@ private:
         context.scoreAtDayStart = scoreAtDayStart;
         std::array<std::int32_t, kMaxAgents> targets{};
         targets.fill(-1);
+        const TargetAssignments assignedTargets = assignPatrolTargets(
+            state, setting, matchState, spotDistances);
+        const RendezvousAssignments assignedRendezvous = assignRendezvous(
+            state,
+            setting,
+            matchState,
+            spotDistances,
+            assignedTargets);
 
         for (AgentIndex agentIndex = 0;
              agentIndex < state.agentCount;
@@ -791,74 +961,67 @@ private:
                 const std::size_t pos = static_cast<std::size_t>(projected);
                 const std::int32_t distance =
                     spotDistances.steps[spotIndex][pos];
-                const std::int32_t fuel =
-                    spotDistances.fuel[spotIndex][pos];
                 if (distance >= kImpassableCost ||
                     distance > availableSteps) {
                     continue;
                 }
                 hasTimeReachableCandidate = true;
-                if (fuel > projectedFuel) {
-                    continue;
-                }
-                const Spot& spot = setting.field.spots[spotIndex];
-                const BrandMask bit = brandBit(
-                    static_cast<std::size_t>(spot.brandIndex));
-                const bool newMatch = (state.score.matchBrands & bit) == 0;
-                const bool newDay = (state.dayBrands & bit) == 0;
-                const std::int32_t total = reservedSteps + distance;
-                nearestSpot = std::min(nearestSpot, total);
-                if (newMatch) {
-                    nearestNew = std::min(nearestNew, total);
-                }
-                if (newDay) {
-                    nearestDaily = std::min(nearestDaily, total);
-                }
             }
 
-            const PatrolTarget target = selectPatrolTarget(
-                state, agentIndex, setting, spotDistances);
+            const PatrolTarget target = assignedTargets[agentIndex];
             const bool waitsAtSpot = shouldWaitAtSpot(
-                state, agentIndex, setting, spotDistances);
+                state, agentIndex, setting, assignedTargets);
             if (target.valid) {
                 targets[agentIndex] =
                     static_cast<std::int32_t>(target.spotIndex);
             }
-            const RendezvousPlan rendezvous = findRendezvous(
-                state,
-                agentIndex,
-                target,
-                setting,
-                matchState,
-                spotDistances);
-            const bool directTarget = target.valid &&
-                spotDistances.fuel[target.spotIndex][
-                    static_cast<std::size_t>(projected)] <= projectedFuel;
+            const RendezvousPlan rendezvous =
+                assignedRendezvous[agentIndex];
+            const PathLabel* directPath = target.valid
+                ? constrainedPath(
+                    spotDistances,
+                    target.spotIndex,
+                    projected,
+                    availableSteps,
+                    projectedFuel)
+                : nullptr;
+            const bool directTarget = directPath != nullptr;
 
-            // 補給込みで到達できる目標も距離評価へ戻し、巡回車が
-            // 合流地点とスポットへ進む枝を残す。
-            if (target.valid && !directTarget && rendezvous.valid) {
-                const std::int32_t total = reservedSteps + target.steps;
-                nearestSpot = std::min(nearestSpot, total);
+            // 全体割当された目標だけを距離評価する。同系列の別スポットへ
+            // 複数台が向かうことを、距離評価側でも重複加点しない。
+            if (target.valid && (directTarget || rendezvous.valid)) {
+                const std::int32_t total = directTarget
+                    ? reservedSteps + directPath->steps
+                    : rendezvous.goalArrival;
+                nearestSpot = total;
                 if (target.priority == 0) {
-                    nearestNew = std::min(nearestNew, total);
+                    nearestNew = total;
                 }
                 if (target.priority <= 1) {
-                    nearestDaily = std::min(nearestDaily, total);
+                    nearestDaily = total;
                 }
+            }
+            // 距離そのものを罰するのではなく「残り時間に対する進捗」を
+            // 負値で保持する。到達不能(0点)が遠い到達可能状態より高く
+            // 評価される逆転を防ぐ。
+            const std::int32_t progressBase = state.remainingSteps() + 1;
+            if (nearestSpot < kImpassableCost) {
+                nearestSpot -= progressBase;
+            }
+            if (nearestNew < kImpassableCost) {
+                nearestNew -= progressBase;
+            }
+            if (nearestDaily < kImpassableCost) {
+                nearestDaily -= progressBase;
             }
             context.nearestValuableSpotSteps[agentIndex] = nearestSpot;
             context.nearestNewBrandSpotSteps[agentIndex] = nearestNew;
             context.nearestDailyBrandSpotSteps[agentIndex] = nearestDaily;
             if (target.valid && (directTarget || rendezvous.valid)) {
-                const std::int32_t wait = rendezvous.valid
-                    ? std::max(
-                          0,
-                          rendezvous.supplyArrival -
-                              rendezvous.patrolArrival)
-                    : 0;
                 context.targetSlack += std::max(
-                    0, availableSteps - target.steps - wait);
+                    0, state.remainingSteps() -
+                        (directTarget ? reservedSteps + directPath->steps
+                                      : rendezvous.goalArrival));
             } else if (hasCandidate && !waitsAtSpot) {
                 ++context.unreachableTargetCount;
                 if (hasTimeReachableCandidate) {
@@ -873,7 +1036,7 @@ private:
             const std::int32_t fuelNeed =
                 std::max(0, fuelThreshold - projectedFuel);
             if (rendezvous.valid &&
-                (rendezvous.required || fuelNeed > 0)) {
+                (rendezvous.required || rendezvous.fuelShortage > 0)) {
                 context.nearestSupplySteps[agentIndex] =
                     rendezvous.supplyTravel;
                 context.rendezvousMismatch += std::max(
@@ -881,33 +1044,6 @@ private:
                     rendezvous.supplyArrival - rendezvous.patrolArrival);
                 context.fuelRisk += std::max(
                     fuelNeed, rendezvous.fuelShortage);
-            } else if (waitsAtSpot &&
-                       projectedFuel < setting.fuelLimit) {
-                const std::size_t currentSpot = static_cast<std::size_t>(
-                    setting.field.at(projected).spotIndex);
-                std::int32_t supplyArrival = kImpassableCost;
-                for (AgentIndex other = 0;
-                     other < state.agentCount;
-                     ++other) {
-                    if (!state.agents[other].isSupply()) {
-                        continue;
-                    }
-                    const CellPos supplyPos =
-                        projectedPosition(state, other);
-                    const std::int32_t travel = spotDistances.steps[
-                        currentSpot][static_cast<std::size_t>(supplyPos)];
-                    if (travel >= kImpassableCost) {
-                        continue;
-                    }
-                    supplyArrival = std::min(
-                        supplyArrival,
-                        projectedDelay(state, other) + travel);
-                }
-                if (supplyArrival <= state.remainingSteps()) {
-                    context.nearestSupplySteps[agentIndex] = supplyArrival;
-                    context.fuelRisk +=
-                        setting.fuelLimit - projectedFuel;
-                }
             }
         }
 
@@ -924,6 +1060,70 @@ private:
             }
             context.concentrationCount += std::max(
                 0, assigned - state.remainingStocks[spotIndex]);
+        }
+
+        // スポット上で中間日を終えると、翌日のstep 1で在庫回復後の
+        // うどんを確定取得できる。終端直前だけ評価して当日の巡回を
+        // 早過ぎる段階で止めない。
+        if (static_cast<std::size_t>(state.day + 1) <
+                setting.dayCount() &&
+            state.remainingSteps() <= 4) {
+            std::array<std::int32_t, kMaxSpots> uses{};
+            BrandMask nextBrands = 0;
+            BrandMask nextNewBrands = 0;
+            for (AgentIndex agentIndex = 0;
+                 agentIndex < state.agentCount;
+                 ++agentIndex) {
+                if (!state.agents[agentIndex].isPatrol()) {
+                    continue;
+                }
+                const CellPos pos =
+                    projectedPosition(state, agentIndex);
+                if (!setting.field.contains(pos) ||
+                    !setting.field.at(pos).hasSpot()) {
+                    continue;
+                }
+                const std::size_t spotIndex = static_cast<std::size_t>(
+                    setting.field.at(pos).spotIndex);
+                const Spot& spot = setting.field.spots[spotIndex];
+                if (uses[spotIndex] >= spot.maxStock) {
+                    continue;
+                }
+                ++uses[spotIndex];
+                ++context.nextDayUdonCount;
+                const BrandMask bit = brandBit(
+                    static_cast<std::size_t>(spot.brandIndex));
+                nextBrands |= bit;
+                if ((state.score.matchBrands & bit) == 0) {
+                    nextNewBrands |= bit;
+                }
+            }
+            context.nextDayBrandCount = static_cast<std::int32_t>(
+                countBits(nextBrands));
+            context.nextDayNewBrandCount = static_cast<std::int32_t>(
+                countBits(nextNewBrands));
+
+            const TargetAssignments futureTargets = assignPatrolTargets(
+                state, setting, matchState, spotDistances, false);
+            const std::int32_t approachBase = static_cast<std::int32_t>(
+                std::min<std::size_t>(
+                    static_cast<std::size_t>(kImpassableCost - 1),
+                    setting.field.cellCount() * 4 + 1));
+            for (AgentIndex agentIndex = 0;
+                 agentIndex < state.agentCount;
+                 ++agentIndex) {
+                const PatrolTarget& target = futureTargets[agentIndex];
+                if (!target.valid || target.steps >= approachBase) {
+                    continue;
+                }
+                const std::int32_t progress = approachBase - target.steps;
+                if (target.priority == 0) {
+                    context.nextDayNewBrandApproach += progress;
+                }
+                if (target.priority <= 1) {
+                    context.nextDayBrandApproach += progress;
+                }
+            }
         }
         return context;
     }
@@ -979,32 +1179,6 @@ private:
         return weights;
     }
 
-    static bool canReuseEvaluation(const BeamNode& node) noexcept {
-        if (node.evaluationDirty) {
-            return false;
-        }
-        for (AgentIndex i = 0; i < node.state.agentCount; ++i) {
-            if (!node.state.pendingActions[i].active ||
-                node.state.pendingActions[i].remainingSteps <= 1) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    static void advanceCachedEvaluation(
-        EvaluationBreakdown& evaluation,
-        const EvaluationWeights& weights) noexcept {
-        --evaluation.unusedSteps;
-        evaluation.valuableSpotDistance -=
-            evaluation.valuableSpotAgentCount;
-        evaluation.newBrandSpotDistance -=
-            evaluation.newBrandSpotAgentCount;
-        evaluation.dailyBrandSpotDistance -=
-            evaluation.dailyBrandSpotAgentCount;
-        evaluation.total = evaluationTotal(evaluation, weights);
-    }
-
     static std::uint64_t appendOrderKey(
         std::uint64_t key,
         AgentIndex agent,
@@ -1017,13 +1191,130 @@ private:
         return key;
     }
 
+    static std::int32_t directionTo(const Field& field, CellPos from, CellPos to) {
+        for (std::int32_t d = 0; d < 6; ++d)
+            if (field.neighbor(from, static_cast<Direction>(d)) == to) return d;
+        return -1;
+    }
+
+    static AgentPlan routeTo(
+        const MatchSetting& s, const MatchState& ms, const SpotDistanceTables& dist,
+        CellPos start, CellPos goal, AgentKind kind, int time, int fuel,
+        std::size_t spot = kMaxSpots, const PathLabel* label = nullptr) {
+        AgentPlan route;
+        CellPos cell = start;
+        for (std::size_t guard = 0; cell != goal && guard < s.field.cellCount(); ++guard) {
+            const int steps = moveStepCost(s, ms, cell);
+            const int cost = moveFuelCost(s, kind, cell);
+            if (steps > time || cost > fuel) break;
+            const CellPos next = label ? label->next : dist.firstHop[cell][goal];
+            if (!s.field.contains(next)) break;
+            const int action = directionTo(s.field, cell, next);
+            if (action < 0) break;
+            const PathLabel* nextLabel = nullptr;
+            if (label) {
+                nextLabel = suffixLabel(dist, spot, next,
+                    label->steps - steps, label->fuel - cost);
+                if (!nextLabel) break;
+            }
+            route.push_back(action);
+            time -= steps;
+            fuel -= cost;
+            cell = next;
+            label = nextLabel;
+        }
+        return route;
+    }
+
+    static std::vector<AgentPlan> macroPlans(
+        const GameState& state, AgentIndex a, const MatchSetting& s,
+        const MatchState& ms, const SpotDistanceTables& dist,
+        const TargetAssignments& targets, const RendezvousAssignments& meets,
+        const BeamSearchConfig& cfg) {
+        std::vector<AgentPlan> plans;
+        const Agent& agent = state.agents[a];
+        const int available = state.remainingSteps();
+        auto add = [&](AgentPlan route) {
+            if (route.size() > 1 &&
+                std::find(plans.begin(), plans.end(), route) == plans.end())
+                plans.push_back(std::move(route));
+        };
+        if (agent.isPatrol()) {
+            std::vector<std::tuple<int, int, std::size_t>> spots;
+            const bool future = static_cast<std::size_t>(state.day + 1) < s.dayCount();
+            for (std::size_t i = 0; i < state.spotCount; ++i) {
+                if ((!future && state.hasAcquired(a, i)) ||
+                    (!future && state.remainingStocks[i] == 0)) continue;
+                const auto bit = brandBit(s.field.spots[i].brandIndex);
+                int priority = (state.score.matchBrands & bit) == 0 ? 0 :
+                    ((state.dayBrands & bit) == 0 ? 1 : 2);
+                if (targets[a].valid && targets[a].spotIndex == i) priority = -1;
+                spots.emplace_back(priority, dist.steps[i][agent.pos], i);
+            }
+            std::sort(spots.begin(), spots.end());
+            std::size_t used = 0;
+            for (const auto& entry : spots) {
+                if (used >= cfg.macroTargetLimit) break;
+                const auto i = std::get<2>(entry);
+                const auto* path = constrainedPath(
+                    dist, i, agent.pos, available, agent.fuel);
+                if (!path && future)
+                    path = constrainedPath(dist, i, agent.pos,
+                                           kImpassableCost - 1, agent.fuel);
+                if (!path) continue;
+                add(routeTo(s, ms, dist, agent.pos, s.field.spots[i].pos,
+                            agent.kind, available, agent.fuel, i, path));
+                ++used;
+            }
+            const auto& meet = meets[a];
+            if (meet.valid && targets[a].valid) {
+                const auto i = targets[a].spotIndex;
+                auto route = routeTo(s, ms, dist, agent.pos, meet.pos,
+                    agent.kind, available, agent.fuel, i, &meet.path);
+                CellPos reached = agent.pos;
+                int elapsed = 0;
+                for (const int action : route) {
+                    elapsed += moveStepCost(s, ms, reached);
+                    reached = s.field.neighbor(reached, static_cast<Direction>(action));
+                }
+                if (reached == meet.pos) {
+                    const int at = std::max({elapsed, meet.supplyArrival,
+                                             state.step == 0 ? 1 : 0});
+                    if (at > elapsed) route.push_back(-(at - elapsed));
+                    const auto* suffix = constrainedPath(dist, i, reached,
+                        available - at, s.fuelLimit);
+                    if (suffix) {
+                        const auto rest = routeTo(s, ms, dist, reached,
+                            s.field.spots[i].pos, agent.kind,
+                            available - at, s.fuelLimit, i, suffix);
+                        route.insert(route.end(), rest.begin(), rest.end());
+                        add(std::move(route));
+                    }
+                }
+            }
+        } else {
+            for (const auto& meet : meets) {
+                if (!meet.valid || meet.supply != a) continue;
+                auto route = routeTo(s, ms, dist, agent.pos, meet.pos,
+                                    agent.kind, available, s.fuelLimit);
+                const int travel = dist.travel[agent.pos][meet.pos];
+                const int wait = std::max({0, meet.patrolArrival - travel,
+                                           (state.step == 0 ? 1 : 0) - travel});
+                if (wait > 0 && travel + wait <= available) route.push_back(-wait);
+                add(std::move(route));
+            }
+        }
+        return plans;
+    }
+
     static double scheduledActionBonus(
         const GameState& state,
         AgentIndex agentIndex,
         const MatchSetting& setting,
-        const MatchState& matchState,
         const SpotDistanceTables& spotDistances,
-        const EvaluationWeights& weights) noexcept {
+        const EvaluationWeights& weights,
+        const TargetAssignments& targets,
+        const RendezvousAssignments& rendezvousAssignments) noexcept {
         const Agent& agent = state.agents[agentIndex];
         const PendingAction& pending =
             state.pendingActions[agentIndex];
@@ -1040,51 +1331,17 @@ private:
             for (AgentIndex patrolIndex = 0;
                  patrolIndex < state.agentCount;
                  ++patrolIndex) {
-                if (!state.agents[patrolIndex].isPatrol()) {
+                const RendezvousPlan& rendezvous =
+                    rendezvousAssignments[patrolIndex];
+                if (!rendezvous.valid ||
+                    rendezvous.supply != agentIndex) {
                     continue;
                 }
-                if (shouldWaitAtSpot(
-                        state,
-                        patrolIndex,
-                        setting,
-                        spotDistances) &&
-                    state.agents[patrolIndex].fuel < setting.fuelLimit) {
-                    const CellPos patrolPos =
-                        projectedPosition(state, patrolIndex);
-                    const std::size_t spotIndex =
-                        static_cast<std::size_t>(
-                            setting.field.at(patrolPos).spotIndex);
-                    const CellPos supplyPos =
-                        projectedPosition(state, agentIndex);
-                    const std::int32_t travel = spotDistances.steps[
-                        spotIndex][static_cast<std::size_t>(supplyPos)];
-                    const std::int32_t arrival =
-                        projectedDelay(state, agentIndex) + travel;
-                    if (travel < kImpassableCost &&
-                        arrival <= state.remainingSteps()) {
-                        bestGuidance = std::max(
-                            bestGuidance,
-                            -weights.fuelRisk * 0.5 +
-                                weights.supplyDistance * arrival);
-                    }
-                }
-                const PatrolTarget target = selectPatrolTarget(
-                    state, patrolIndex, setting, spotDistances);
-                const RendezvousPlan rendezvous = findRendezvous(
-                    state,
-                    patrolIndex,
-                    target,
-                    setting,
-                    matchState,
-                    spotDistances,
-                    agentIndex);
-                if (!rendezvous.valid) {
-                    continue;
-                }
-                const std::int32_t wait = std::max(
-                    0,
-                    rendezvous.supplyArrival -
-                        rendezvous.patrolArrival);
+                const int travel = spotDistances.travel[
+                    projectedPosition(state, agentIndex)][rendezvous.pos];
+                if (travel >= kImpassableCost) continue;
+                const int wait = std::max(0, projectedDelay(state, agentIndex) +
+                    travel - rendezvous.patrolArrival);
                 const double urgency = rendezvous.required
                     ? -weights.fuelRisk * 2.0
                     : -weights.fuelRisk * 0.25;
@@ -1092,7 +1349,7 @@ private:
                     bestGuidance,
                     urgency +
                         weights.supplyDistance *
-                            rendezvous.supplyTravel +
+                            travel +
                         weights.rendezvousMismatch * wait);
             }
             if (std::isfinite(bestGuidance)) {
@@ -1106,28 +1363,14 @@ private:
                                       : agent.pos;
         std::int32_t nearest = kImpassableCost;
         std::int32_t priority = 3;
-        for (std::size_t spotIndex = 0;
-             spotIndex < state.spotCount;
-             ++spotIndex) {
-            if (state.remainingStocks[spotIndex] <= 0 ||
-                state.hasAcquired(agentIndex, spotIndex)) {
-                continue;
-            }
-            const std::size_t pos = static_cast<std::size_t>(projected);
-            const std::int32_t distance =
-                spotDistances.steps[spotIndex][pos];
-            const Spot& spot = setting.field.spots[spotIndex];
-            const BrandMask bit = brandBit(
-                static_cast<std::size_t>(spot.brandIndex));
-            const std::int32_t kind =
-                (state.score.matchBrands & bit) == 0
-                    ? 0
-                    : ((state.dayBrands & bit) == 0 ? 1 : 2);
-            if (kind < priority ||
-                (kind == priority && distance < nearest)) {
-                priority = kind;
-                nearest = distance;
-            }
+        const PatrolTarget& target = targets[agentIndex];
+        if (target.valid) {
+            const auto* path = constrainedPath(spotDistances, target.spotIndex,
+                projected, state.remainingSteps() - pending.remainingSteps,
+                projectedFuel(state, agentIndex));
+            nearest = path ? path->steps :
+                spotDistances.steps[target.spotIndex][projected];
+            priority = target.priority;
         }
 
         double bonus = pending.isWait()
@@ -1142,8 +1385,27 @@ private:
             }
         }
 
+        // スポットは平地なので、日開始時に移動を予約してもstep 1では
+        // まだ元セルにいる。不要な1ステップ待機を選ばないよう、移動
+        // 完了前に確定する現在地の取得を全候補へ同じく加点する。
+        const Cell& currentCell = setting.field.at(agent.pos);
+        if (currentCell.hasSpot() &&
+            (pending.isWait() || pending.remainingSteps > 1)) {
+            const std::size_t currentSpot =
+                static_cast<std::size_t>(currentCell.spotIndex);
+            if (state.remainingStocks[currentSpot] > 0 &&
+                !state.hasAcquired(agentIndex, currentSpot)) {
+                const Spot& spot = setting.field.spots[currentSpot];
+                const BrandMask bit = brandBit(
+                    static_cast<std::size_t>(spot.brandIndex));
+                bonus += (state.score.matchBrands & bit) == 0
+                             ? weights.newBrand * 1.0e-6
+                             : weights.udon * 1.0e-2;
+            }
+        }
+
         const Cell& destination = setting.field.at(projected);
-        if (destination.hasSpot()) {
+        if (projected != agent.pos && destination.hasSpot()) {
             const std::size_t spotIndex =
                 static_cast<std::size_t>(destination.spotIndex);
             if (state.remainingStocks[spotIndex] > 0 &&
@@ -1186,12 +1448,14 @@ public:
 
         if (cfg.beamWidth == 0 || cfg.jointBeamWidth == 0 ||
             cfg.timeLimitMs < 0 || cfg.safetyMarginMs < 0 ||
-            cfg.incumbentInterval == 0) {
+            cfg.incumbentInterval == 0 || !std::isfinite(cfg.diversityFraction) ||
+            cfg.diversityFraction < 0 || cfg.diversityFraction > 1) {
             return finish(SearchStopReason::NoValidPlan);
         }
 
         GameState init;
-        if (!init.initialize(s, ms, prev)) {
+        if (!init.initialize(s, ms, prev) || init.agentCount == 0 ||
+            init.dayStepLimit <= 0) {
             return finish(SearchStopReason::NoValidPlan);
         }
 
@@ -1283,7 +1547,7 @@ public:
         arenaReserve = cappedProduct(
             arenaReserve, std::max<std::size_t>(1, init.agentCount));
         ActionArena actionArena(arenaReserve);
-        FlatStateSet stateSet;
+        ActionRoutes routes;
         std::vector<std::size_t> uniqueIndices;
         std::vector<BeamNode> dedupScratch;
         std::vector<std::vector<BeamNode>> workerChunks(threadCount);
@@ -1327,7 +1591,6 @@ public:
             evaluate(root.state, s, ms, prev, spotDist, weights);
         fullEvaluationCount.fetch_add(1, std::memory_order_relaxed);
         root.orderingScore = root.evaluation.total;
-        root.stateHash = GameStateHash{}(root.state);
         root.orderKey = UINT64_C(1469598103934665603);
 
         auto consider = [&](const BeamNode& node) {
@@ -1354,7 +1617,7 @@ public:
             if (hasBest &&
                 (eval.total < res.evaluation.total ||
                  (eval.total == res.evaluation.total &&
-                  !(plan < res.plan)))) {
+                  !preferPlan(plan, res.plan)))) {
                 return;
             }
             hasBest = true;
@@ -1375,23 +1638,58 @@ public:
                         : SearchStopReason::NoValidPlan);
         }
 
-        std::vector<BeamNode> beam{std::move(root)};
+        const std::size_t dayStepCount = static_cast<std::size_t>(
+            std::max(0, init.dayStepLimit));
+        std::vector<std::vector<BeamNode>> eventBuckets(dayStepCount + 1);
+        eventBuckets[0].push_back(std::move(root));
+        std::vector<BeamNode> beam;
         std::vector<BeamNode> ready;
         std::vector<BeamNode> staged;
         std::vector<BeamNode> advanced;
+        std::size_t lastIncumbentStep = 0;
+        std::size_t expansionRound = 0;
         ready.reserve(cfg.jointBeamWidth);
         staged.reserve(cfg.jointBeamWidth * 2);
         advanced.reserve(cfg.jointBeamWidth);
 
-        while (!beam.empty() &&
-               beam.front().state.step <
-                   beam.front().state.dayStepLimit) {
+        for (std::size_t eventStep = 0;
+             eventStep < dayStepCount;
+             ++eventStep) {
+            beam = std::move(eventBuckets[eventStep]);
+            if (beam.empty()) {
+                continue;
+            }
+            deduplicateAndLimit(
+                beam,
+                adaptiveLimit(cfg.beamWidth, cfg.minimumBeamWidth),
+                s.field, cfg,
+                uniqueIndices,
+                dedupScratch);
+            if (beam.empty()) {
+                continue;
+            }
+            if (eventStep >=
+                lastIncumbentStep + cfg.incumbentInterval) {
+                consider(beam.front());
+                lastIncumbentStep = eventStep;
+                if (expired(true)) {
+                    return finish(
+                        hasBest ? SearchStopReason::TimeLimit
+                                : SearchStopReason::NoValidPlan);
+                }
+            }
             ready.clear();
             ready.swap(beam);
 
             // 待機中でない各エージェントへ、合法な6方向移動または
             // 1ステップ待機を割り当てる。
-            for (AgentIndex a = 0; a < init.agentCount; ++a) {
+            const AgentIndex firstAgent = static_cast<AgentIndex>(
+                expansionRound++ % init.agentCount);
+            for (AgentIndex order = 0;
+                 order < init.agentCount;
+                 ++order) {
+                const AgentIndex a =
+                    (firstAgent + order) % init.agentCount;
                 staged.clear();
                 staged.reserve(std::min(
                     ready.size() * 7,
@@ -1402,14 +1700,56 @@ public:
                         continue;
                     }
 
+                    if (node.routes[a] != ActionRoutes::none) {
+                        const auto next = routes[node.routes[a]];
+                        BeamNode child = node;
+                        if (tryScheduleAction(child.state, s, ms, a, next.action).error ==
+                            SimulationError::None) {
+                            child.planTails[a] = actionArena.append(
+                                node.planTails[a], next.action);
+                            child.routes[a] = next.next;
+                            if (next.next == ActionRoutes::none) child.aims[a] = kInvalidCell;
+                            child.serial = nextSerial++;
+                            ++res.macroContinuations;
+                            staged.push_back(std::move(child));
+                            continue;
+                        }
+                        // 補給予定が実現しなかった等の場合は、その場から再計画。
+                    }
+
+                    const auto targets = assignPatrolTargets(node.state, s, ms, spotDist);
+                    const auto meets = assignRendezvous(node.state, s, ms, spotDist, targets);
+
                     constexpr std::array<std::int32_t, 7> actions = {
                         0, 1, 2, 3, 4, 5, -1,
                     };
-                    const bool forceWait = shouldWaitAtSpot(
-                        node.state, a, s, spotDist);
-                    std::array<ActionCandidate, actions.size()> candidates{};
+                    const bool forceWait =
+                        static_cast<std::size_t>(node.state.day + 1) >=
+                            s.dayCount() &&
+                        shouldWaitAtSpot(node.state, a, s, targets);
+                    std::vector<std::tuple<int, ActionRoutes::Id, CellPos>> options;
+                    for (const int action : actions)
+                        options.emplace_back(action, ActionRoutes::none, kInvalidCell);
+                    if (cfg.useMacroActions) {
+                        if (node.state.remainingSteps() > 1)
+                            options.emplace_back(-node.state.remainingSteps(), ActionRoutes::none, kInvalidCell);
+                        if (!forceWait) {
+                            for (const auto& plan : macroPlans(
+                                     node.state, a, s, ms, spotDist, targets, meets, cfg)) {
+                                const auto first = routes[routes.intern(plan)];
+                                CellPos goal = node.state.agents[a].pos;
+                                for (const auto action : plan)
+                                    if (isMoveAction(action)) goal = s.field.neighbor(
+                                        goal, static_cast<Direction>(action));
+                                options.emplace_back(first.action, first.next, goal);
+                            }
+                        }
+                    }
+                    std::vector<ActionCandidate> candidates(options.size());
                     std::size_t candidateCount = 0;
-                    for (const std::int32_t action : actions) {
+                    for (const auto& option : options) {
+                        const int action = std::get<0>(option);
+                        const auto continuation = std::get<1>(option);
                         if (expired()) {
                             return finish(
                                 hasBest ? SearchStopReason::TimeLimit
@@ -1434,27 +1774,56 @@ public:
                             continue;
                         }
                         candidate.action = action;
+                        candidate.route = continuation;
+                        candidate.aim = std::get<2>(option);
                         candidate.orderKey = appendOrderKey(
                             node.orderKey, a, action);
+                        if (continuation != ActionRoutes::none) {
+                            candidate.orderKey ^= continuation;
+                            ++res.macroCandidates;
+                        }
                         candidate.orderingScore =
                             node.orderingScore +
                             scheduledActionBonus(
                                 candidate.state,
                                 a,
                                 s,
-                                ms,
                                 spotDist,
-                                weights);
+                                weights, targets, meets) +
+                            (continuation != ActionRoutes::none ? 0.1 : 0.0);
                         ++candidateCount;
                         ++res.expandedNodes;
                     }
 
+                    double bestActionScore =
+                        -std::numeric_limits<double>::infinity();
+                    for (std::size_t i = 0; i < candidateCount; ++i) {
+                        bestActionScore = std::max(
+                            bestActionScore,
+                            candidates[i].orderingScore);
+                    }
+                    if (std::isfinite(bestActionScore)) {
+                        for (std::size_t i = 0; i < candidateCount; ++i) {
+                            // 親ごとの絶対的な誘導値を除き、最善行動からの
+                            // 損失だけを加える。異なる親同士の比較を歪めない。
+                            candidates[i].orderingScore =
+                                node.orderingScore +
+                                candidates[i].orderingScore -
+                                bestActionScore;
+                        }
+                    }
+                    std::size_t actionLimit = cfg.maxActionsPerAgent;
+                    if (cfg.adaptiveActionLimit && actionLimit > 3 &&
+                        (s.field.cellCount() >= 24U * 24U ||
+                         init.agentCount >= 6)) {
+                        actionLimit = 3;
+                    }
                     const std::size_t keep =
-                        cfg.maxActionsPerAgent == 0
+                        actionLimit == 0
                             ? candidateCount
                             : std::min(
                                   candidateCount,
-                                  cfg.maxActionsPerAgent);
+                                  actionLimit);
                     std::partial_sort(
                         candidates.begin(),
                         candidates.begin() +
@@ -1475,12 +1844,13 @@ public:
                         const ActionCandidate& candidate = candidates[i];
                         BeamNode child = node;
                         child.state = candidate.state;
+                        child.routes[a] = candidate.route;
+                        child.aims[a] = candidate.aim;
                         child.planTails[a] = actionArena.append(
                             node.planTails[a], candidate.action);
                         child.orderingScore = candidate.orderingScore;
                         child.orderKey = candidate.orderKey;
                         child.serial = nextSerial++;
-                        child.evaluationDirty = true;
                         staged.push_back(std::move(child));
                     }
                 }
@@ -1514,24 +1884,50 @@ public:
                         return;
                     }
                     BeamNode& node = ready[i];
-                    const bool reuse = canReuseEvaluation(node);
-                    const auto err = advanceSimulationStep(node.state, s);
-                    if (err.error != SimulationError::None) {
+                    std::int32_t delta = node.state.remainingSteps();
+                    for (AgentIndex a = 0;
+                         a < node.state.agentCount;
+                         ++a) {
+                        const PendingAction& pending =
+                            node.state.pendingActions[a];
+                        if (!pending.active || pending.remainingSteps <= 0) {
+                            delta = 0;
+                            break;
+                        }
+                        delta = std::min(delta, pending.remainingSteps);
+                    }
+                    if (delta <= 0) {
                         continue;
                     }
-                    if (reuse) {
-                        advanceCachedEvaluation(node.evaluation, weights);
-                        reusedEvaluationCount.fetch_add(
-                            1, std::memory_order_relaxed);
-                    } else {
-                        node.evaluation = evaluate(
-                            node.state, s, ms, prev, spotDist, weights);
-                        fullEvaluationCount.fetch_add(
-                            1, std::memory_order_relaxed);
+
+                    bool valid = true;
+                    for (std::int32_t elapsed = 0;
+                         elapsed < delta;
+                         ++elapsed) {
+                        if (expired()) {
+                            evaluationTimedOut.store(
+                                true, std::memory_order_relaxed);
+                            return;
+                        }
+                        const auto err = advanceSimulationStep(node.state, s);
+                        if (err.error != SimulationError::None) {
+                            valid = false;
+                            break;
+                        }
                     }
-                    node.evaluationDirty = false;
+                    if (!valid) {
+                        continue;
+                    }
+                    if (delta > 1) {
+                        reusedEvaluationCount.fetch_add(
+                            static_cast<std::size_t>(delta - 1),
+                            std::memory_order_relaxed);
+                    }
+                    node.evaluation = evaluate(
+                        node.state, s, ms, prev, spotDist, weights);
+                    fullEvaluationCount.fetch_add(
+                        1, std::memory_order_relaxed);
                     node.orderingScore = node.evaluation.total;
-                    node.stateHash = GameStateHash{}(node.state);
                     output.push_back(std::move(node));
                 }
             };
@@ -1568,19 +1964,23 @@ public:
                     hasBest ? SearchStopReason::TimeLimit
                             : SearchStopReason::NoValidPlan);
             }
-            deduplicateAndLimit(
-                advanced,
-                adaptiveLimit(cfg.beamWidth, cfg.minimumBeamWidth),
-                stateSet,
-                uniqueIndices,
-                dedupScratch);
-            beam.swap(advanced);
-            if (!beam.empty() &&
-                (static_cast<std::size_t>(beam.front().state.step) %
-                     cfg.incumbentInterval == 0 ||
-                 beam.front().state.step ==
-                     beam.front().state.dayStepLimit)) {
-                consider(beam.front());
+            std::sort(advanced.begin(), advanced.end(), betterNode);
+            std::vector<bool> touched(dayStepCount + 1, false);
+            for (BeamNode& node : advanced) {
+                const std::size_t nextEvent = static_cast<std::size_t>(
+                    node.state.step);
+                if (nextEvent <= eventStep || nextEvent > dayStepCount) {
+                    continue;
+                }
+                eventBuckets[nextEvent].push_back(std::move(node));
+                touched[nextEvent] = true;
+            }
+            // 長い待機マクロによる日末bucketへの蓄積を定期的に制限する。
+            const auto bucketLimit = adaptiveLimit(cfg.beamWidth, cfg.minimumBeamWidth);
+            for (std::size_t step = eventStep + 1; step <= dayStepCount; ++step) {
+                if (touched[step] && eventBuckets[step].size() / 4 > bucketLimit)
+                    deduplicateAndLimit(eventBuckets[step], bucketLimit,
+                        s.field, cfg, uniqueIndices, dedupScratch);
             }
             if (expired(true)) {
                 return finish(
@@ -1589,11 +1989,19 @@ public:
             }
         }
 
+        beam = std::move(eventBuckets[dayStepCount]);
         if (beam.empty()) {
             return finish(
                 hasBest ? SearchStopReason::Completed
                         : SearchStopReason::NoValidPlan);
         }
+
+        deduplicateAndLimit(
+            beam,
+            adaptiveLimit(cfg.beamWidth, cfg.minimumBeamWidth),
+            s.field, cfg,
+            uniqueIndices,
+            dedupScratch);
 
         for (BeamNode& node : beam) {
             if (!node.state.finishDay()) {
@@ -1620,7 +2028,7 @@ public:
             const BeamNode& best = beam.front();
             if (!hasBest || best.evaluation.total > res.evaluation.total ||
                 (best.evaluation.total == res.evaluation.total &&
-                 finalPlan < res.plan)) {
+                 preferPlan(finalPlan, res.plan))) {
                 res.success = true;
                 res.plan = finalPlan;
                 res.finalState = best.state;

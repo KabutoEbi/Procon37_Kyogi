@@ -32,6 +32,7 @@ struct DijkstraTable {
     std::vector<std::int32_t> distances;
     std::vector<CellPos> previous;
     std::vector<Direction> previousDirection;
+    std::vector<CellPos> firstHop;
 
     bool canReach(CellPos pos) const noexcept {
         return pos >= 0 &&

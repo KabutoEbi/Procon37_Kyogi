@@ -41,6 +41,10 @@ int main() {
     if (!ans.success) {
         return 1;
     }
-    procon37::printPlan(std::cout, ans.plan);
+    procon37::ConsoleConfig console;
+    console.showTrace = true;
+    console.traceEveryStep = false;
+    procon37::printConsoleReport(
+        std::cout, problem.setting, st, ans, {}, console);
     return 0;
 }

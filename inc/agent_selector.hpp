@@ -2,6 +2,7 @@
 
 #include "brain/brain0.hpp"
 #include "brain/brain1.hpp"
+#include "trial.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -24,6 +25,9 @@ struct AgentSelectorConfig {
     std::size_t trialBeamWidth = 32;
     std::size_t trialJointBeamWidth = 128;
     EvaluationWeights trialWeights{};
+    std::size_t trialDays = 2; // 0なら全日。実際の各日のステップ数を使う。
+    std::size_t trialScenarioCount = 3;
+    std::vector<TrialTraffic> trialScenarios;
 };
 
 struct AgentSelectionResult {
@@ -35,6 +39,9 @@ struct AgentSelectionResult {
     EvaluationBreakdown trialEvaluation{};
     std::size_t evaluatedAssignments = 0;
     std::size_t trialAssignments = 0;
+    std::size_t trialSimulations = 0;
+    TrialScore worstTrialScore{};
+    TrialScore totalTrialScore{};
 };
 
 class AgentSelector final {
@@ -83,19 +90,6 @@ private:
         }
     }
 
-    static MatchState makeState(
-        const MatchSetting& s,
-        const std::vector<AgentKind>& kinds) {
-        MatchState st;
-        st.day = 0;
-        st.trafficByPos.assign(s.field.cellCount(), TrafficStatus::Smooth);
-        st.agents.reserve(kinds.size());
-        for (std::size_t i = 0; i < kinds.size(); ++i) {
-            st.agents.push_back(
-                Agent{i, kinds[i], s.agentStarts[i], s.fuelLimit});
-        }
-        return st;
-    }
 
     static std::int32_t countBits(std::uint32_t value) noexcept {
         std::int32_t count = 0;
@@ -128,24 +122,6 @@ private:
         return lhs.supplyMask < rhs.supplyMask;
     }
 
-    static bool betterTrial(
-        const EvaluationBreakdown& lhs,
-        double lhsHeuristic,
-        const EvaluationBreakdown& rhs,
-        double rhsHeuristic) noexcept {
-        return std::tie(
-                   lhs.newBrandCount,
-                   lhs.dailyBrandCount,
-                   lhs.udonCount,
-                   lhs.remainingFuel,
-                   lhsHeuristic) >
-               std::tie(
-                   rhs.newBrandCount,
-                   rhs.dailyBrandCount,
-                   rhs.udonCount,
-                   rhs.remainingFuel,
-                   rhsHeuristic);
-    }
 
 public:
     static AgentSelectionResult select(
@@ -287,27 +263,42 @@ public:
 
         const Candidate* best = &cs.front();
         EvaluationBreakdown bestEval{};
+        TrialScore bestWorst{}, bestTotal{};
         bool tried = false;
         BeamSearchConfig beam;
         beam.beamWidth = cfg.trialBeamWidth;
         beam.jointBeamWidth = cfg.trialJointBeamWidth;
         beam.weights = cfg.trialWeights;
+        beam.threadCount = 1;
+        beam.useStateDeadline = false;
+        auto scenarios = cfg.trialScenarios.empty()
+            ? makeTrialScenarios(s, cfg.trialScenarioCount)
+            : cfg.trialScenarios;
+        if (cfg.trialCandidateLimit > 0 && scenarios.empty())
+            throw std::invalid_argument("at least one trial scenario is required");
         for (const std::size_t i : trials) {
             const Candidate& c = cs[i];
-            const BeamSearchResult trial =
-                Brain1::search(s, makeState(s, c.kinds), {}, beam);
-            ++res.trialAssignments;
-            if (!trial.success) {
-                continue;
+            TrialScore worst;
+            worst.fill(std::numeric_limits<std::int64_t>::max());
+            TrialScore total{};
+            EvaluationBreakdown worstEval{};
+            bool valid = true;
+            for (const auto& traffic : scenarios) {
+                const auto trial = runTrial(s, c.kinds, traffic, beam, cfg.trialDays);
+                ++res.trialSimulations;
+                if (!trial.success) { valid = false; break; }
+                const auto score = trialScore(trial.score);
+                if (score < worst) { worst = score; worstEval = trial.evaluation; }
+                for (std::size_t k = 0; k < total.size(); ++k) total[k] += score[k];
             }
-            if (!tried ||
-                betterTrial(
-                    trial.evaluation,
-                    c.heuristicScore,
-                    bestEval,
-                    best->heuristicScore)) {
+            ++res.trialAssignments;
+            if (!valid) continue;
+            if (!tried || std::tie(worst, total, c.heuristicScore) >
+                          std::tie(bestWorst, bestTotal, best->heuristicScore)) {
                 best = &c;
-                bestEval = trial.evaluation;
+                bestWorst = worst;
+                bestTotal = total;
+                bestEval = worstEval;
                 tried = true;
             }
         }
@@ -318,6 +309,8 @@ public:
         res.heuristicScore = best->heuristicScore;
         res.usedBeamTrial = tried;
         res.trialEvaluation = bestEval;
+        res.worstTrialScore = bestWorst;
+        res.totalTrialScore = bestTotal;
         return res;
     }
 };

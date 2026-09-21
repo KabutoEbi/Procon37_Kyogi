@@ -2,12 +2,12 @@
 
 #include "game.hpp"
 #include "path.hpp"
+#include "dial_queue.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <queue>
 #include <utility>
 #include <vector>
 
@@ -20,31 +20,28 @@ public:
     static DijkstraTable dijkstra(
         const MatchSetting& s,
         const MatchState& st,
-        CellPos start) {
+        CellPos start,
+        const std::function<bool()>& stop = {}) {
         const Field& f = s.field;
         DijkstraTable res;
         res.start = start;
         res.distances.assign(f.cellCount(), kImpassableCost);
         res.previous.assign(f.cellCount(), kInvalidCell);
         res.previousDirection.assign(f.cellCount(), Direction::UpperLeft);
+        res.firstHop.assign(f.cellCount(), kInvalidCell);
 
         if (!f.contains(start) || !f.at(start).isPassable()) {
             return res;
         }
 
-        using QueueEntry = std::pair<std::int32_t, CellPos>;
-        std::priority_queue<
-            QueueEntry,
-            std::vector<QueueEntry>,
-            std::greater<QueueEntry>>
-            q;
+        DialQueue<CellPos> q;
 
         res.distances[static_cast<std::size_t>(start)] = 0;
-        q.emplace(0, start);
+        q.push(0, start);
 
         while (!q.empty()) {
-            const auto [dist, from] = q.top();
-            q.pop();
+            if (stop && stop()) return res;
+            const auto [dist, from] = q.pop();
 
             if (dist != res.distances[static_cast<std::size_t>(from)]) {
                 continue;
@@ -71,7 +68,8 @@ public:
                 res.distances[i] = next;
                 res.previous[i] = from;
                 res.previousDirection[i] = dir;
-                q.emplace(next, to);
+                res.firstHop[i] = from == start ? to : res.firstHop[from];
+                q.push(next, to);
             }
         }
         return res;

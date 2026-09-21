@@ -24,6 +24,12 @@ struct EvaluationWeights {
     double fuelRisk = -1000.0;
     double unreachableTarget = -5000.0;
     double concentration = -250.0;
+    // 中間日の終端でスポット上にいることによる翌日step 1の確定取得。
+    double nextDayNewBrand = 2.5e11;
+    double nextDayBrand = 2.5e7;
+    double nextDayUdon = 2.5e3;
+    double nextDayNewBrandApproach = 1.0e5;
+    double nextDayBrandApproach = 1.0e3;
 };
 
 // スポット距離と補給合流指標は探索側で設定する。
@@ -40,6 +46,11 @@ struct EvaluationContext {
     std::int32_t rendezvousMismatch = 0;
     std::int32_t fuelRisk = 0;
     std::int32_t unreachableTargetCount = 0;
+    std::int32_t nextDayNewBrandCount = 0;
+    std::int32_t nextDayBrandCount = 0;
+    std::int32_t nextDayUdonCount = 0;
+    std::int32_t nextDayNewBrandApproach = 0;
+    std::int32_t nextDayBrandApproach = 0;
 
     EvaluationContext() noexcept {
         nearestValuableSpotSteps.fill(kImpassableCost);
@@ -64,6 +75,11 @@ struct EvaluationBreakdown {
     std::int32_t rendezvousMismatch = 0;
     std::int32_t fuelRisk = 0;
     std::int32_t unreachableTargetCount = 0;
+    std::int32_t nextDayNewBrandCount = 0;
+    std::int32_t nextDayBrandCount = 0;
+    std::int32_t nextDayUdonCount = 0;
+    std::int32_t nextDayNewBrandApproach = 0;
+    std::int32_t nextDayBrandApproach = 0;
     std::int32_t valuableSpotAgentCount = 0;
     std::int32_t newBrandSpotAgentCount = 0;
     std::int32_t dailyBrandSpotAgentCount = 0;
@@ -86,7 +102,12 @@ inline double evaluationTotal(
            w.rendezvousMismatch * res.rendezvousMismatch +
            w.fuelRisk * res.fuelRisk +
            w.unreachableTarget * res.unreachableTargetCount +
-           w.concentration * res.concentrationCount;
+           w.concentration * res.concentrationCount +
+           w.nextDayNewBrand * res.nextDayNewBrandCount +
+           w.nextDayBrand * res.nextDayBrandCount +
+           w.nextDayUdon * res.nextDayUdonCount +
+           w.nextDayNewBrandApproach * res.nextDayNewBrandApproach +
+           w.nextDayBrandApproach * res.nextDayBrandApproach;
 }
 
 inline EvaluationBreakdown evaluateGameState(
@@ -104,6 +125,11 @@ inline EvaluationBreakdown evaluateGameState(
     res.rendezvousMismatch = ctx.rendezvousMismatch;
     res.fuelRisk = ctx.fuelRisk;
     res.unreachableTargetCount = ctx.unreachableTargetCount;
+    res.nextDayNewBrandCount = ctx.nextDayNewBrandCount;
+    res.nextDayBrandCount = ctx.nextDayBrandCount;
+    res.nextDayUdonCount = ctx.nextDayUdonCount;
+    res.nextDayNewBrandApproach = ctx.nextDayNewBrandApproach;
+    res.nextDayBrandApproach = ctx.nextDayBrandApproach;
 
     for (std::size_t i = 0; i < st.agentCount; ++i) {
         const Agent& a = st.agents[i];

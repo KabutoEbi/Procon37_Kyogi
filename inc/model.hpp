@@ -6,6 +6,7 @@
 #include "brain/brain0.hpp"
 #include "brain/brain1.hpp"
 #include "cell.hpp"
+#include "console.hpp"
 #include "create.hpp"
 #include "evaluation.hpp"
 #include "field.hpp"
@@ -18,3 +19,4 @@
 #include "plan_validator.hpp"
 #include "simulator.hpp"
 #include "types.hpp"
+#include "weight_tuner.hpp"

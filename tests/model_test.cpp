@@ -144,6 +144,11 @@ void testHashAndEvaluation() {
     ctx.rendezvousMismatch = 5;
     ctx.fuelRisk = 6;
     ctx.unreachableTargetCount = 1;
+    ctx.nextDayNewBrandCount = 2;
+    ctx.nextDayBrandCount = 3;
+    ctx.nextDayUdonCount = 4;
+    ctx.nextDayNewBrandApproach = 5;
+    ctx.nextDayBrandApproach = 6;
     const auto eval = evaluateGameState(sim.state, ctx);
     assert(eval.newBrandCount == 1);
     assert(eval.dailyBrandCount == 1);
@@ -154,6 +159,11 @@ void testHashAndEvaluation() {
     assert(eval.rendezvousMismatch == 5);
     assert(eval.fuelRisk == 6);
     assert(eval.unreachableTargetCount == 1);
+    assert(eval.nextDayNewBrandCount == 2);
+    assert(eval.nextDayBrandCount == 3);
+    assert(eval.nextDayUdonCount == 4);
+    assert(eval.nextDayNewBrandApproach == 5);
+    assert(eval.nextDayBrandApproach == 6);
 }
 
 void testDijkstra() {
@@ -268,6 +278,79 @@ void testBeamSearch() {
     assert(slowResult.success);
     assert(slowResult.reusedEvaluations > 0);
     assert(validateDailyPlan(slow, slowState, slowResult.plan).valid);
+}
+
+void testDayStartMoveStillAcquiresOriginSpot() {
+    MatchSetting s;
+    s.daySteps = {2};
+    s.daySeconds = {60};
+    s.fuelLimit = 2;
+    s.playerCount = 2;
+    s.field.width = 2;
+    s.field.height = 1;
+    s.field.cells.assign(2, Cell{CellType::Plain, -1});
+    s.field.spots = {
+        Spot{10, 0, 1, -1},
+        Spot{20, 1, 1, -1},
+    };
+    s.agentStarts = {0};
+    assert(s.field.rebuildSpotIndex());
+
+    MatchState st;
+    st.day = 0;
+    st.agents = {Agent{0, AgentKind::Patrol, 0, 2}};
+    st.trafficByPos.assign(2, TrafficStatus::Smooth);
+
+    BeamSearchConfig cfg;
+    cfg.beamWidth = 32;
+    cfg.jointBeamWidth = 64;
+    cfg.threadCount = 1;
+    const auto result = brain1(s, st, {}, cfg);
+
+    assert(result.success);
+    assert(validateDailyPlan(s, st, result.plan).valid);
+    assert(result.finalState.dayUdon == 2);
+    assert(countBits(result.finalState.dayBrands) == 2);
+    assert(result.plan[0].size() == 1);
+    assert(result.plan[0][0] == static_cast<std::int32_t>(Direction::Right));
+}
+
+void testPatrolsSplitAcrossBrands() {
+    MatchSetting s;
+    s.daySteps = {2};
+    s.daySeconds = {60};
+    s.fuelLimit = 2;
+    s.playerCount = 2;
+    s.field.width = 3;
+    s.field.height = 1;
+    s.field.cells.assign(3, Cell{CellType::Plain, -1});
+    s.field.spots = {
+        Spot{10, 0, 1, -1},
+        Spot{20, 2, 1, -1},
+    };
+    s.agentStarts = {1, 1};
+    assert(s.field.rebuildSpotIndex());
+
+    MatchState st;
+    st.day = 0;
+    st.agents = {
+        Agent{0, AgentKind::Patrol, 1, 2},
+        Agent{1, AgentKind::Patrol, 1, 2},
+    };
+    st.trafficByPos.assign(3, TrafficStatus::Smooth);
+
+    BeamSearchConfig cfg;
+    cfg.beamWidth = 64;
+    cfg.jointBeamWidth = 256;
+    cfg.threadCount = 1;
+    const auto result = brain1(s, st, {}, cfg);
+
+    assert(result.success);
+    assert(validateDailyPlan(s, st, result.plan).valid);
+    assert(result.finalState.dayUdon == 2);
+    assert(countBits(result.finalState.dayBrands) == 2);
+    assert(result.finalState.agents[0].pos !=
+           result.finalState.agents[1].pos);
 }
 
 void testPathRendezvous() {
@@ -620,6 +703,8 @@ int main() {
     testHashAndEvaluation();
     testDijkstra();
     testBeamSearch();
+    testDayStartMoveStillAcquiresOriginSpot();
+    testPatrolsSplitAcrossBrands();
     testPathRendezvous();
     testWaitAtLastReachableSpotAndRefuel();
     testAgentSelector();
