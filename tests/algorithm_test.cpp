@@ -225,8 +225,11 @@ void testTrialsAndTuning() {
 }
 
 void testConsoleReport() {
-    const auto s = line(3, {4}, 3, {0}, {{1, 2, 1, -1}});
-    const auto ms = stateFor(s, {AgentKind::Patrol});
+    auto s = line(3, {4}, 3, {0}, {{1, 2, 1, -1}});
+    s.field.cells[1].type = CellType::Road;
+    assert(s.field.rebuildSpotIndex());
+    auto ms = stateFor(s, {AgentKind::Patrol});
+    ms.trafficByPos[1] = TrafficStatus::Busy;
     const auto result = brain1(s, ms, {}, smallBeam());
     assert(result.success);
 
@@ -236,19 +239,32 @@ void testConsoleReport() {
     printConsoleReport(output, s, ms, result, {}, config);
     const std::string text = output.str();
     assert(text.find("=== procon37 solver report ===") != std::string::npos);
-    assert(text.find("map 3x1") != std::string::npos);
-    assert(text.find("search success=true") != std::string::npos);
+    assert(text.find("map 3x1") == std::string::npos);
+    assert(text.find("0=plain") == std::string::npos);
+    assert(consoleCellToken(s.field, 0, &ms) == "0");
+    assert(consoleCellToken(s.field, 1, &ms) == "4");
+    assert(consoleCellToken(s.field, 2, &ms) == "[1]");
+    assert(text.find("[1]") != std::string::npos);
+    assert(text.find("[0]P [pos]0(0,0) [fuel]3/3") != std::string::npos);
+    assert(text.find("search\n  success=true") != std::string::npos);
     assert(text.find("macro-candidates=") != std::string::npos);
     assert(text.find("plan\n") != std::string::npos);
     assert(text.find("trace\n") != std::string::npos);
-    assert(text.find("evaluation total=") != std::string::npos);
-    assert(text.find("result udon=1") != std::string::npos);
+    assert(text.find("evaluation\n  total=") != std::string::npos);
+    assert(text.find("result\n  udon=1") != std::string::npos);
+    assert(text.find("final map") == std::string::npos);
 
     DailyPlan invalid(1);
     invalid[0] = {2};
     std::ostringstream error;
     assert(!printConsoleTrace(error, s, ms, invalid));
     assert(error.str().find("trace invalid:") != std::string::npos);
+
+    ms.trafficByPos[1] = TrafficStatus::Jammed;
+    std::ostringstream jammed;
+    printConsoleMap(jammed, s, &ms);
+    assert(consoleCellToken(s.field, 1, &ms) == "5");
+    assert(jammed.str().find(" 5 ") != std::string::npos);
 }
 
 }  // namespace

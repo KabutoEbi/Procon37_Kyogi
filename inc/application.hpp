@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -215,6 +216,18 @@ inline void printPlan(std::ostream& output, const DailyPlan& plan) {
                << (agent + 1 == compressed.size() ? "\n" : ",\n");
     }
     output << "]\n";
+}
+
+// POST / の本文と同じJSON配列をファイルへ保存する。
+inline bool writePlanJson(
+    const DailyPlan& plan,
+    const std::string& path = "answer.json") {
+    std::ofstream output(path);
+    if (!output) {
+        return false;
+    }
+    printPlan(output, plan);
+    return static_cast<bool>(output);
 }
 
 inline int create(

@@ -16,6 +16,7 @@ namespace procon37 {
 
 struct ConsoleConfig {
     bool showMap = true;
+    bool showFinalMap = false;
     bool showPlan = true;
     bool showEvaluation = true;
     bool showTrace = true;
@@ -61,39 +62,29 @@ inline const char* directionName(std::int32_t action) noexcept {
 inline std::string consoleCellToken(
     const Field& field,
     CellPos pos,
-    const std::vector<Agent>* agents = nullptr) {
-    std::size_t agentCount = 0;
-    const Agent* only = nullptr;
-    if (agents != nullptr) {
-        for (const Agent& agent : *agents) {
-            if (agent.pos == pos) {
-                ++agentCount;
-                only = &agent;
-            }
+    const MatchState* state = nullptr) {
+    std::int32_t value = static_cast<std::int32_t>(field.at(pos).type);
+    if (field.at(pos).type == CellType::Road && state != nullptr) {
+        switch (state->trafficAt(pos)) {
+            case TrafficStatus::Smooth:
+                value = 1;
+                break;
+            case TrafficStatus::Busy:
+                value = 4;
+                break;
+            case TrafficStatus::Jammed:
+                value = 5;
+                break;
         }
     }
+
     std::ostringstream token;
-    if (agentCount > 1) {
-        token << '*' << agentCount;
-    } else if (only != nullptr) {
-        token << (only->isPatrol() ? 'P' : 'S') << only->index;
-    } else if (field.at(pos).hasSpot()) {
-        token << 'U' << field.at(pos).spotIndex;
+    if (field.at(pos).hasSpot()) {
+        const auto spotIndex =
+            static_cast<std::size_t>(field.at(pos).spotIndex);
+        token << '[' << field.spots[spotIndex].brand << ']';
     } else {
-        switch (field.at(pos).type) {
-            case CellType::Plain:
-                token << "..";
-                break;
-            case CellType::Road:
-                token << "==";
-                break;
-            case CellType::Mountain:
-                token << "^^";
-                break;
-            case CellType::Pond:
-                token << "##";
-                break;
-        }
+        token << value;
     }
     return token.str();
 }
@@ -101,16 +92,14 @@ inline std::string consoleCellToken(
 inline void printConsoleMap(
     std::ostream& out,
     const MatchSetting& setting,
-    const std::vector<Agent>* agents = nullptr) {
+    const MatchState* state = nullptr) {
     const Field& field = setting.field;
-    out << "map " << field.width << 'x' << field.height
-        << "  (P=patrol S=supply U=spot ==road ^^mountain ##pond)\n";
     for (std::int32_t y = 0; y < field.height; ++y) {
         // この座標系では偶数行が右へずれる。
         out << ((y & 1) == 0 ? "  " : "");
         for (std::int32_t x = 0; x < field.width; ++x) {
             const CellPos pos = field.toPos({x, y});
-            out << std::setw(3) << consoleCellToken(field, pos, agents) << ' ';
+            out << consoleCellToken(field, pos, state) << ' ';
         }
         out << '\n';
     }
@@ -123,12 +112,10 @@ inline void printConsoleAgents(
     out << "agents\n";
     for (const Agent& agent : agents) {
         const Coord pos = setting.field.toCoord(agent.pos);
-        out << "  " << agent.index << ": " << agentKindName(agent.kind)
-            << " pos=" << agent.pos << "(" << pos.x << ',' << pos.y << ')';
-        if (agent.isPatrol()) {
-            out << " fuel=" << agent.fuel << '/' << setting.fuelLimit;
-        }
-        out << '\n';
+        out << '[' << agent.index << ']'
+            << (agent.isPatrol() ? 'P' : 'S')
+            << " [pos]" << agent.pos << '(' << pos.x << ',' << pos.y << ')'
+            << " [fuel]" << agent.fuel << '/' << setting.fuelLimit << '\n';
     }
 }
 
@@ -164,15 +151,15 @@ inline void printConsolePlan(
 inline void printConsoleEvaluation(
     std::ostream& out,
     const EvaluationBreakdown& evaluation) {
-    out << "evaluation"
-        << " total=" << std::setprecision(12) << evaluation.total
-        << " new-brands=" << evaluation.newBrandCount
-        << " daily-brands=" << evaluation.dailyBrandCount
-        << " udon=" << evaluation.udonCount
-        << " fuel=" << evaluation.remainingFuel
-        << " unreachable=" << evaluation.unreachableTargetCount
-        << " fuel-risk=" << evaluation.fuelRisk
-        << " next-day-udon=" << evaluation.nextDayUdonCount << '\n';
+    out << "evaluation\n"
+        << "  total=" << std::setprecision(12) << evaluation.total << '\n'
+        << "  new-brands=" << evaluation.newBrandCount << '\n'
+        << "  daily-brands=" << evaluation.dailyBrandCount << '\n'
+        << "  udon=" << evaluation.udonCount << '\n'
+        << "  fuel=" << evaluation.remainingFuel << '\n'
+        << "  unreachable=" << evaluation.unreachableTargetCount << '\n'
+        << "  fuel-risk=" << evaluation.fuelRisk << '\n'
+        << "  next-day-udon=" << evaluation.nextDayUdonCount << '\n';
 }
 
 inline bool printConsoleTrace(
@@ -292,23 +279,26 @@ inline void printConsoleReport(
     ScoreState previousScore = {},
     const ConsoleConfig& config = {}) {
     out << "=== procon37 solver report ===\n"
-        << "day=" << start.day
-        << " steps=" << setting.daySteps[static_cast<std::size_t>(start.day)]
-        << " fuel-limit=" << setting.fuelLimit
-        << " spots=" << setting.field.spots.size()
-        << " brands=" << setting.field.brands.size() << '\n';
+        << "day=" << start.day << '\n'
+        << "steps=" << setting.daySteps[static_cast<std::size_t>(start.day)]
+        << '\n'
+        << "fuel-limit=" << setting.fuelLimit << '\n'
+        << "spots=" << setting.field.spots.size() << '\n'
+        << "brands=" << setting.field.brands.size() << "\n\n";
     if (config.showMap) {
-        printConsoleMap(out, setting, &start.agents);
+        printConsoleMap(out, setting, &start);
+        out << '\n';
     }
     printConsoleAgents(out, setting, start.agents);
-    out << "search success=" << std::boolalpha << result.success
-        << " stop=" << searchStopReasonName(result.stopReason)
-        << " elapsed-ms=" << result.elapsedMs
-        << " expanded=" << result.expandedNodes
-        << " evaluations=" << result.fullEvaluations
-        << " skipped-evaluations=" << result.reusedEvaluations
-        << " macro-candidates=" << result.macroCandidates
-        << " macro-continuations=" << result.macroContinuations << '\n';
+    out << "\nsearch\n"
+        << "  success=" << std::boolalpha << result.success << '\n'
+        << "  stop=" << searchStopReasonName(result.stopReason) << '\n'
+        << "  elapsed-ms=" << result.elapsedMs << '\n'
+        << "  expanded=" << result.expandedNodes << '\n'
+        << "  evaluations=" << result.fullEvaluations << '\n'
+        << "  skipped-evaluations=" << result.reusedEvaluations << '\n'
+        << "  macro-candidates=" << result.macroCandidates << '\n'
+        << "  macro-continuations=" << result.macroContinuations << '\n';
     if (!result.success) {
         return;
     }
@@ -320,19 +310,23 @@ inline void printConsoleReport(
             out, setting, start, result.plan, previousScore, config);
     }
     if (config.showEvaluation) {
+        out << '\n';
         printConsoleEvaluation(out, result.evaluation);
     }
     std::vector<Agent> finalAgents(
         result.finalState.agents.begin(),
         result.finalState.agents.begin() + result.finalState.agentCount);
-    out << "result udon=" << result.finalState.dayUdon
-        << " daily-brands=" << countBits(result.finalState.dayBrands)
-        << " match-brands=" << countBits(result.finalState.score.matchBrands)
-        << " total-udon=" << result.finalState.score.totalUdon << '\n';
+    out << "\nresult\n"
+        << "  udon=" << result.finalState.dayUdon << '\n'
+        << "  daily-brands=" << countBits(result.finalState.dayBrands) << '\n'
+        << "  match-brands=" << countBits(result.finalState.score.matchBrands)
+        << '\n'
+        << "  total-udon=" << result.finalState.score.totalUdon << '\n';
+    out << '\n';
     printConsoleAgents(out, setting, finalAgents);
-    if (config.showMap) {
+    if (config.showFinalMap) {
         out << "final ";
-        printConsoleMap(out, setting, &finalAgents);
+        printConsoleMap(out, setting, &start);
     }
 }
 

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "brain/brain0.hpp"
-#include "evaluation.hpp"
-#include "game_state_hash.hpp"
-#include "plan_validator.hpp"
-#include "simulator.hpp"
-#include "min_cost_flow.hpp"
-#include "search_state.hpp"
-#include "action_routes.hpp"
+#include "brain0.hpp"
+#include "../action_routes.hpp"
+#include "../evaluation.hpp"
+#include "../game_state_hash.hpp"
+#include "../min_cost_flow.hpp"
+#include "../plan_validator.hpp"
+#include "../search_state.hpp"
+#include "../simulator.hpp"
 
 #include <algorithm>
 #include <array>

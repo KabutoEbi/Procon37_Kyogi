@@ -1,8 +1,8 @@
 #pragma once
 
-#include "game.hpp"
-#include "path.hpp"
-#include "dial_queue.hpp"
+#include "../dial_queue.hpp"
+#include "../game.hpp"
+#include "../path.hpp"
 
 #include <algorithm>
 #include <cstddef>
