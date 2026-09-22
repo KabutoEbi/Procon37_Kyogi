@@ -123,6 +123,7 @@ private:
         std::int32_t goalArrival = kImpassableCost;
         PathLabel path{};
         bool required = false;
+        bool repeatedRefuelRequired = false;
         bool valid = false;
     };
 
@@ -433,10 +434,11 @@ private:
         std::atomic<std::size_t> nextSpot{0};
         std::atomic<bool> aborted{false};
 
-        // 1回の補給を含む経路候補も保持する。直接到達時は残燃料で絞る。
+        // 複数回補給が必要な経路も保持できるよう、単純経路で必要になり得る
+        // 燃料量まで非劣ラベルを作る。直接到達時は残燃料で絞る。
         const std::int32_t fuelCap = static_cast<std::int32_t>(
             std::min<std::int64_t>(kImpassableCost - 1,
-                                  2LL * setting.fuelLimit));
+                                  2LL * field.cellCount()));
         auto buildRow = [&](std::size_t spotIndex) {
             const CellPos goal = field.spots[spotIndex].pos;
             if (!field.contains(goal) || !field.at(goal).isPassable()) {
@@ -801,17 +803,31 @@ private:
                     const auto* suffix = constrainedPath(
                         dist, target.spotIndex, cell,
                         available - meetAt, setting.fuelLimit);
-                    if (!suffix) continue;
-                    const int goalArrival = meetAt + suffix->steps;
+                    const bool repeated = suffix == nullptr;
+                    if (repeated &&
+                        (label == nullptr ||
+                         label->steps > available - meetAt)) {
+                        continue;
+                    }
+                    const int goalArrival = meetAt +
+                        (suffix != nullptr ? suffix->steps : label->steps);
                     const int wait = meetAt - arrival;
                     const int bestWait = best.valid
                         ? std::max({best.patrolArrival, best.supplyArrival,
                                     state.step == 0 ? 1 : 0}) - best.patrolArrival
                         : kImpassableCost;
                     if (!best.valid ||
-                        std::tie(goalArrival, wait, travel, q, cell) <
-                        std::tie(best.goalArrival, bestWait, best.supplyTravel,
-                                 best.supply, best.pos)) {
+                        std::make_tuple(
+                            goalArrival, repeated, wait, -arrival,
+                            travel, q, cell) <
+                        std::make_tuple(
+                            best.goalArrival,
+                            best.repeatedRefuelRequired,
+                            bestWait,
+                            -best.patrolArrival,
+                            best.supplyTravel,
+                            best.supply,
+                            best.pos)) {
                         best.pos = cell;
                         best.supply = q;
                         best.patrolArrival = arrival;
@@ -819,6 +835,7 @@ private:
                         best.supplyTravel = travel;
                         best.goalArrival = goalArrival;
                         best.path = route;
+                        best.repeatedRefuelRequired = repeated;
                         best.valid = true;
                     }
                 }
@@ -1235,7 +1252,7 @@ private:
         const Agent& agent = state.agents[a];
         const int available = state.remainingSteps();
         auto add = [&](AgentPlan route) {
-            if (route.size() > 1 &&
+            if (!route.empty() &&
                 std::find(plans.begin(), plans.end(), route) == plans.end())
                 plans.push_back(std::move(route));
         };
@@ -1288,6 +1305,14 @@ private:
                             s.field.spots[i].pos, agent.kind,
                             available - at, s.fuelLimit, i, suffix);
                         route.insert(route.end(), rest.begin(), rest.end());
+                        add(std::move(route));
+                    } else if (meet.repeatedRefuelRequired) {
+                        // この合流で満タンにした後も目的地まで一充填では
+                        // 届かない。ここでマクロを区切り、次のイベントで
+                        // 新しい合流点を計算する。
+                        if (route.empty() && available > 0) {
+                            route.push_back(-1);
+                        }
                         add(std::move(route));
                     }
                 }

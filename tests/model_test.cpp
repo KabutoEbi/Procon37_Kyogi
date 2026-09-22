@@ -195,6 +195,27 @@ void testDijkstra() {
     assert(supply.reachable);
     assert(supply.cost.fuel == 0);
 
+    MatchSetting tradeoff = s;
+    tradeoff.field.height = 2;
+    tradeoff.field.cells.assign(6, Cell{CellType::Pond, -1});
+    tradeoff.field.cells[0].type = CellType::Plain;
+    tradeoff.field.cells[1].type = CellType::Road;
+    tradeoff.field.cells[4].type = CellType::Plain;
+    tradeoff.field.cells[5].type = CellType::Plain;
+    tradeoff.field.spots.clear();
+    assert(tradeoff.field.rebuildSpotIndex());
+    MatchState tradeoffState;
+    tradeoffState.trafficByPos.assign(6, TrafficStatus::Smooth);
+    const auto constrained = brain0FuelConstrained(
+        tradeoff, tradeoffState, 0, 5, AgentKind::Patrol, 2);
+    assert(constrained.reachable);
+    assert(constrained.cost.steps == 4);
+    assert(constrained.cost.fuel == 2);
+    assert((constrained.positions == std::vector<CellPos>{0, 4, 5}));
+    assert(!brain0FuelConstrained(
+                tradeoff, tradeoffState, 0, 5,
+                AgentKind::Patrol, 1).reachable);
+
     // 直接経路を池で塞ぐと、4 -> 1 -> 2 の迂回路になる。
     s.field.cells[5].type = CellType::Pond;
     const PathResult detour = Brain0::shortestPath(s, st, 4, 2);
@@ -476,6 +497,43 @@ void testAgentSelector() {
     assert(fixed.supplyCount == 1);
     assert(fixed.evaluatedAssignments == 2);
     assert(fixed.trialAssignments == 0);
+
+    AgentSelectorConfig deadline = cfg;
+    deadline.timeLimitMs = 1;
+    deadline.safetyMarginMs = 1;
+    const auto timed = selectAgentKinds(s, deadline);
+    assert(timed.success);
+    assert(timed.timedOut);
+    assert(timed.kinds.size() == s.agentCount());
+}
+
+void testPersistentJsonAndFallback() {
+    std::ostringstream kinds;
+    printAgentKinds(kinds, {AgentKind::Patrol, AgentKind::Supply});
+    assert(kinds.str() == "[0, 1]\n");
+
+    ScoreCheckpoint checkpoint;
+    checkpoint.nextDay = 2;
+    checkpoint.score.matchBrands = brandBit(1) | brandBit(3);
+    checkpoint.score.totalUdon = 7;
+    checkpoint.score.sumOfDailyBrandCounts = 5;
+    std::ostringstream json;
+    printScoreCheckpoint(json, checkpoint);
+    const auto parsed = parseScoreCheckpointJson(json.str());
+    assert(parsed.nextDay == checkpoint.nextDay);
+    assert(parsed.score.matchBrands == checkpoint.score.matchBrands);
+    assert(parsed.score.totalUdon == checkpoint.score.totalUdon);
+    assert(parsed.score.sumOfDailyBrandCounts ==
+           checkpoint.score.sumOfDailyBrandCounts);
+
+    const MatchSetting s = makeSetting();
+    const MatchState st = makeState();
+    BeamSearchConfig invalid;
+    invalid.beamWidth = 0;
+    const auto fallback = solveDay(s, st, {}, invalid);
+    assert(fallback.success);
+    assert(validateDailyPlan(s, st, fallback.plan).valid);
+    assert((fallback.plan == DailyPlan{{-3}, {-3}}));
 }
 
 void testMatchRunner() {
@@ -663,6 +721,10 @@ void testProblemCreator() {
 
     stateCfg.day = 1;
     const MatchState later = ProblemCreator::generateMatchState(s, stateCfg);
+    assert(createMatchStateJson(
+        later,
+        s.field,
+        "/tmp/procon37-match-state-day1-test.json"));
     for (const Agent& agent : later.agents) {
         assert(s.field.contains(agent.pos));
         assert(s.field.at(agent.pos).isPassable());
@@ -708,6 +770,7 @@ int main() {
     testPathRendezvous();
     testWaitAtLastReachableSpotAndRefuel();
     testAgentSelector();
+    testPersistentJsonAndFallback();
     testMatchRunner();
     testProblemCreator();
 }

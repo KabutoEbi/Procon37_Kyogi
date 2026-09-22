@@ -22,6 +22,8 @@ auto setting =
     procon37::readMatchSettingJson("match-setting.json");
 auto state =
     procon37::readMatchStateJson("match-state.json", setting);
+auto score =
+    procon37::readScoreCheckpointJson("score-checkpoint.json");
 ```
 
 `MatchState`の解析には、セル数、台数、燃料上限などを照合するため`MatchSetting`が必要である。

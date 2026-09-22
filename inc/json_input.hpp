@@ -1,6 +1,6 @@
 #pragma once
 
-#include "game.hpp"
+#include "game_state.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -669,6 +669,28 @@ public:
         return st;
     }
 
+    static ScoreCheckpoint parseScoreCheckpoint(std::string_view text) {
+        using namespace json_detail;
+        const Value root = Parser(text).parse();
+        object(root, "$");
+        ScoreCheckpoint checkpoint;
+        checkpoint.nextDay = int32(
+            member(root, "nextDay", "$"), "$.nextDay", 0, 10);
+        const std::int64_t mask = integer(
+            member(root, "matchBrands", "$"),
+            "$.matchBrands",
+            0,
+            static_cast<std::int64_t>(UINT32_MAX));
+        checkpoint.score.matchBrands = static_cast<BrandMask>(mask);
+        checkpoint.score.totalUdon = int32(
+            member(root, "totalUdon", "$"), "$.totalUdon", 0);
+        checkpoint.score.sumOfDailyBrandCounts = int32(
+            member(root, "sumOfDailyBrandCounts", "$"),
+            "$.sumOfDailyBrandCounts",
+            0);
+        return checkpoint;
+    }
+
     static MatchSetting readMatchSetting(const std::string& path) {
         return parseMatchSetting(json_detail::readFile(path));
     }
@@ -677,6 +699,10 @@ public:
         const std::string& path,
         const MatchSetting& setting) {
         return parseMatchState(json_detail::readFile(path), setting);
+    }
+
+    static ScoreCheckpoint readScoreCheckpoint(const std::string& path) {
+        return parseScoreCheckpoint(json_detail::readFile(path));
     }
 };
 
@@ -698,6 +724,14 @@ inline MatchState readMatchStateJson(
     const std::string& path,
     const MatchSetting& setting) {
     return JsonInput::readMatchState(path, setting);
+}
+
+inline ScoreCheckpoint parseScoreCheckpointJson(std::string_view text) {
+    return JsonInput::parseScoreCheckpoint(text);
+}
+
+inline ScoreCheckpoint readScoreCheckpointJson(const std::string& path) {
+    return JsonInput::readScoreCheckpoint(path);
 }
 
 }  // namespace procon37

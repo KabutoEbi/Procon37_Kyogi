@@ -193,6 +193,27 @@ void testRendezvousObstaclesAndMultipleSupplies() {
     assert(two.plan == parallel.plan);
 }
 
+void testMultipleRefuelsInOneDay() {
+    const auto s = line(
+        6,
+        {10},
+        2,
+        {0, 0},
+        {{1, 5, 1, -1}});
+    const auto ms = stateFor(
+        s, {AgentKind::Patrol, AgentKind::Supply});
+    auto cfg = smallBeam();
+    cfg.beamWidth = 128;
+    cfg.jointBeamWidth = 512;
+    const auto result = brain1(s, ms, {}, cfg);
+    assert(result.success);
+    assert(validateDailyPlan(s, ms, result.plan).valid);
+    assert(result.finalState.dayUdon == 1);
+    assert(result.finalState.agents[0].pos == 5);
+    // 5燃料分を燃料上限2で走るため、少なくとも2回の補給が必要。
+    assert(result.finalState.agents[0].fuel == s.fuelLimit);
+}
+
 void testTrialsAndTuning() {
     const auto s = line(3, {2, 4}, 3, {0}, {{1, 0, 1, -1}, {2, 2, 1, -1}});
     auto cfg = smallBeam();
@@ -275,6 +296,7 @@ int main() {
     testSearchEquivalence();
     testFuelTimeTradeoff();
     testRendezvousObstaclesAndMultipleSupplies();
+    testMultipleRefuelsInOneDay();
     testTrialsAndTuning();
     testConsoleReport();
 }

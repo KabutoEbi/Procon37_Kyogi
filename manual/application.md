@@ -32,6 +32,8 @@ int main(int argc, char* argv[]) {
 - `solveDay()`: `brain1`失敗時に待機計画へフォールバック
 - `printPlan()`: APIへ送れる二次元整数配列を標準出力
 - `writePlanJson()`: `POST /`の本文と同じ二次元配列をJSONファイルへ保存
+- `writeAgentKindsJson()`: `POST /agent`の本文と同じ種別配列をJSONファイルへ保存
+- `writeScoreCheckpointJson()`: 次の日に引き継ぐ累積得点を保存
 - `create(argc, argv, defaults)`: createサブコマンド本体
 - `runLocalSolver()`: ランダム問題を生成して初日を解く
 
@@ -43,6 +45,9 @@ int main(int argc, char* argv[]) {
 c++ -std=c++17 -O2 -pthread main.cpp -o solver
 ./solver
 ./solver sample_maps/sample_16.json
+./solver setting.json state.json score-checkpoint.json
 ```
 
-引数を省略するとランダム問題を生成し、JSONファイルを1つ指定すると公式の`GET /setting`形式として読み込む。現在の`main.cpp`は探索後の計画を再検証し、成功した場合だけ`answer.json`へ保存する。待機は`-1, -14`ではなく`-15`のように連続分を圧縮して出力される。最終経路とステップ追跡はコンソールへ表示せず、探索統計と評価結果だけを確認できる。
+引数を省略するとランダム問題を生成し、JSONファイルを1つ指定すると公式の`GET /setting`形式として読み込む。2つ目には公式`GET /`の当日状態、3つ目には前日までの得点チェックポイントを指定できる。day 1以降ではチェックポイントが必須で、日番号の不一致を拒否する。
+
+現在の`main.cpp`は`agents.json`、`answer.json`、`score-next.json`を生成するが送信はしない。`score-next.json`は生成計画をローカル実行した予測値なので、将来通信を追加するときは回答が受理された後にだけ確定値として採用する。探索失敗時は検証済みの全車待機回答へ切り替える。待機は`-1, -14`ではなく`-15`のように連続分を圧縮して出力される。

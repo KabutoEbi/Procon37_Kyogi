@@ -28,5 +28,8 @@ if (selected.success) {
 - `trialDays`: 試走日数。0なら全日
 - `trialScenarioCount`: 自動生成する交通シナリオ数
 - `trialScenarios`: 明示的な交通条件
+- `timeLimitMs`: 種別選択全体の相対時間制限
+- `deadlineUnixSeconds`: 明示的に分かっている種別締切のUNIX時刻
+- `safetyMarginMs`: 締切前に残す余裕
 
-結果には選択種別、補給車数、評価候補数、試走回数、最悪・合計試走スコアが入る。設定不整合は`std::invalid_argument`になる。
+結果には選択種別、補給車数、評価候補数、試走回数、最悪・合計試走スコア、`timedOut`が入る。時間切れでも、距離評価済みの最良構成または安全な全巡回車構成を返す。設定不整合は`std::invalid_argument`になる。

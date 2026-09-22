@@ -27,4 +27,6 @@ auto count = procon37::countBits(brand);
 
 `ScoreState`の`matchBrands`、`totalUdon`、`sumOfDailyBrandCounts`は日をまたいで引き継ぐ。`finishDay()`は最終ステップ到達後に一度だけ呼び、当日の系列数を累積値へ確定する。
 
+`ScoreCheckpoint`は`nextDay`と`ScoreState`をまとめ、再起動後にどの日の開始状態へ適用できるかを検査できるようにする。
+
 通常は`tryAcquire()`、`refuelCoLocated()`、`advanceTo()`を直接組み合わせず、ルール順序を保証する`simulator.hpp`を使う。

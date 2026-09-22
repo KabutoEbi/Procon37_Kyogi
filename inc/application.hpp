@@ -218,6 +218,58 @@ inline void printPlan(std::ostream& output, const DailyPlan& plan) {
     output << "]\n";
 }
 
+inline void printAgentKinds(
+    std::ostream& output,
+    const std::vector<AgentKind>& kinds) {
+    output << '[';
+    for (std::size_t i = 0; i < kinds.size(); ++i) {
+        if (i != 0) output << ", ";
+        output << static_cast<std::int32_t>(kinds[i]);
+    }
+    output << "]\n";
+}
+
+inline bool writeAgentKindsJson(
+    const std::vector<AgentKind>& kinds,
+    const std::string& path = "agents.json") {
+    if (kinds.empty() || std::any_of(
+            kinds.begin(), kinds.end(), [](AgentKind kind) {
+                return kind != AgentKind::Patrol && kind != AgentKind::Supply;
+            })) {
+        return false;
+    }
+    std::ofstream output(path);
+    if (!output) return false;
+    printAgentKinds(output, kinds);
+    return static_cast<bool>(output);
+}
+
+inline void printScoreCheckpoint(
+    std::ostream& output,
+    const ScoreCheckpoint& checkpoint) {
+    output << "{\n"
+           << "  \"nextDay\": " << checkpoint.nextDay << ",\n"
+           << "  \"matchBrands\": " << checkpoint.score.matchBrands << ",\n"
+           << "  \"totalUdon\": " << checkpoint.score.totalUdon << ",\n"
+           << "  \"sumOfDailyBrandCounts\": "
+           << checkpoint.score.sumOfDailyBrandCounts << "\n"
+           << "}\n";
+}
+
+inline bool writeScoreCheckpointJson(
+    const ScoreCheckpoint& checkpoint,
+    const std::string& path = "score-next.json") {
+    if (checkpoint.nextDay < 0 || checkpoint.score.totalUdon < 0 ||
+        checkpoint.score.sumOfDailyBrandCounts < 0 ||
+        (checkpoint.score.matchBrands >> kMaxBrands) != 0) {
+        return false;
+    }
+    std::ofstream output(path);
+    if (!output) return false;
+    printScoreCheckpoint(output, checkpoint);
+    return static_cast<bool>(output);
+}
+
 // POST / の本文と同じJSON配列をファイルへ保存する。
 inline bool writePlanJson(
     const DailyPlan& plan,

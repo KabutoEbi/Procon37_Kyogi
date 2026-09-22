@@ -32,6 +32,12 @@ struct ScoreState {
     std::int32_t sumOfDailyBrandCounts = 0;
 };
 
+// 日をまたぐ累積得点を再起動後に復元するためのチェックポイント。
+struct ScoreCheckpoint {
+    std::int32_t nextDay = 0;
+    ScoreState score{};
+};
+
 // ステップ進行中の1エージェントの予約行動。
 // remainingSteps が0になった反映フェーズで、移動と燃料消費を確定する。
 struct PendingAction {
