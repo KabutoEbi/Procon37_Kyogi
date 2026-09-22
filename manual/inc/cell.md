@@ -1,6 +1,6 @@
 # `cell.hpp` の使い方
 
-対象: [`inc/cell.hpp`](../inc/cell.hpp)
+対象: [`inc/cell.hpp`](../../inc/cell.hpp)
 
 セル、スポット、道路状態1件を表すデータ型を定義する。
 

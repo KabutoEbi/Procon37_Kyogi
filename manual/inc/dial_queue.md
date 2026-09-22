@@ -1,6 +1,6 @@
 # `dial_queue.hpp` の使い方
 
-対象: [`inc/dial_queue.hpp`](../inc/dial_queue.hpp)
+対象: [`inc/dial_queue.hpp`](../../inc/dial_queue.hpp)
 
 非負整数の距離が単調に取り出され、1辺の最大コストが小さい場合に使うDial法のキューである。既定の最大辺コスト4は本問題の道路・平地・山地に対応する。
 

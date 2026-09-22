@@ -1,6 +1,6 @@
 # `field.hpp` の使い方
 
-対象: [`inc/field.hpp`](../inc/field.hpp)
+対象: [`inc/field.hpp`](../../inc/field.hpp)
 
 六角形盤面、セル列、スポット列、座標変換を管理する。
 

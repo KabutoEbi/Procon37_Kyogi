@@ -1,6 +1,6 @@
 # `path.hpp` の使い方
 
-対象: [`inc/path.hpp`](../inc/path.hpp)
+対象: [`inc/path.hpp`](../../inc/path.hpp)
 
 最短経路探索の入出力データ型を定義する。
 

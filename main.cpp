@@ -5,20 +5,62 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 int main(int argc, char* argv[]) {
     try {
-        if (argc > 4) {
+        const bool selectMode = argc >= 2 && std::string_view(argv[1]) == "select";
+        const bool solveMode = argc >= 2 && std::string_view(argv[1]) == "solve";
+        if (selectMode) {
+            if (argc < 3 || argc > 4) {
+                std::cerr << "usage: " << argv[0]
+                          << " select match-setting.json [agents.json]\n";
+                return 1;
+            }
+            const auto setting = procon37::readMatchSettingJson(argv[2]);
+            procon37::AgentSelectorConfig cfg;
+            cfg.trialCandidateLimit = 8;
+            cfg.trialBeamWidth = 32;
+            cfg.trialJointBeamWidth = 128;
+            const std::int32_t mapSize = std::max(
+                setting.field.width, setting.field.height);
+            cfg.timeLimitMs = mapSize <= 16
+                ? 60'000
+                : (mapSize <= 24 ? 90'000 : 120'000);
+            const auto selected = procon37::selectAgentKinds(setting, cfg);
+            if (!selected.success) {
+                std::cerr << "failed to select agent kinds\n";
+                return 1;
+            }
+            const std::string output = argc == 4 ? argv[3] : "agents.json";
+            if (!procon37::writeAgentKindsJson(selected.kinds, output)) {
+                std::cerr << "failed to write " << output << '\n';
+                return 1;
+            }
+            std::cout << "agents-json=" << output
+                      << "\ntimed-out="
+                      << (selected.timedOut ? "true" : "false") << '\n';
+            return 0;
+        }
+
+        const int firstArg = solveMode ? 2 : 1;
+        if ((solveMode && (argc < 4 || argc > 5)) ||
+            (!solveMode && argc > 4)) {
             std::cerr << "usage: " << argv[0]
                       << " [match-setting.json [match-state.json"
-                         " [score-checkpoint.json]]]\n";
+                         " [score-checkpoint.json]]]\n"
+                      << "       " << argv[0]
+                      << " select match-setting.json [agents.json]\n"
+                      << "       " << argv[0]
+                      << " solve match-setting.json match-state.json"
+                         " [score-checkpoint.json]\n";
             return 1;
         }
 
         procon37::MatchSetting setting;
-        if (argc >= 2) {
-            setting = procon37::readMatchSettingJson(argv[1]);
+        if (argc > firstArg) {
+            setting = procon37::readMatchSettingJson(argv[firstArg]);
         } else {
             procon37::CreateConfig cfg;
             cfg.width = 16;
@@ -35,8 +77,8 @@ int main(int argc, char* argv[]) {
 
         procon37::MatchState st;
         std::vector<procon37::AgentKind> kinds;
-        if (argc >= 3) {
-            st = procon37::readMatchStateJson(argv[2], setting);
+        if (argc > firstArg + 1) {
+            st = procon37::readMatchStateJson(argv[firstArg + 1], setting);
             kinds.reserve(st.agents.size());
             for (const auto& agent : st.agents) kinds.push_back(agent.kind);
         } else {
@@ -67,9 +109,9 @@ int main(int argc, char* argv[]) {
         }
 
         procon37::ScoreState previousScore;
-        if (argc >= 4) {
+        if (argc > firstArg + 2) {
             const auto checkpoint =
-                procon37::readScoreCheckpointJson(argv[3]);
+                procon37::readScoreCheckpointJson(argv[firstArg + 2]);
             if (checkpoint.nextDay != st.day) {
                 std::cerr << "score checkpoint day does not match state day\n";
                 return 1;

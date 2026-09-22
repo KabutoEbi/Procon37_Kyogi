@@ -1,6 +1,6 @@
 # `min_cost_flow.hpp` の使い方
 
-対象: [`inc/min_cost_flow.hpp`](../inc/min_cost_flow.hpp)
+対象: [`inc/min_cost_flow.hpp`](../../inc/min_cost_flow.hpp)
 
 小規模な割当問題用の最小費用流である。`brain1`では巡回車と目標、巡回車と補給車の一対一割当に使う。
 

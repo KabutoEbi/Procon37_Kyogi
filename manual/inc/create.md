@@ -1,6 +1,6 @@
 # `create.hpp` の使い方
 
-対象: [`inc/create.hpp`](../inc/create.hpp)
+対象: [`inc/create.hpp`](../../inc/create.hpp)
 
 ランダム問題、簡易サーバー設定JSON、公式API形式の試合設定・日開始状態を生成する。
 

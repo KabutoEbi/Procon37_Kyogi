@@ -1,6 +1,6 @@
 # `trial.hpp` の使い方
 
-対象: [`inc/trial.hpp`](../inc/trial.hpp)
+対象: [`inc/trial.hpp`](../../inc/trial.hpp)
 
 エージェント種別や評価重みを比較するため、固定交通条件で複数日をオフライン試走する。
 

@@ -1,6 +1,6 @@
 # `brain/brain0.hpp` の使い方
 
-対象: [`inc/brain/brain0.hpp`](../../inc/brain/brain0.hpp)
+対象: [`inc/brain/brain0.hpp`](../../../inc/brain/brain0.hpp)
 
 当日の道路状態を反映した最短ステップ経路をダイクストラ法で求める。
 

@@ -1,6 +1,6 @@
 # `agent.hpp` の使い方
 
-対象: [`inc/agent.hpp`](../inc/agent.hpp)
+対象: [`inc/agent.hpp`](../../inc/agent.hpp)
 
 エージェント、他チーム、および回答用の行動列を定義する。
 

@@ -1,6 +1,6 @@
 # `weight_tuner.hpp` の使い方
 
-対象: [`inc/weight_tuner.hpp`](../inc/weight_tuner.hpp)
+対象: [`inc/weight_tuner.hpp`](../../inc/weight_tuner.hpp)
 
 学習問題と独立した検証問題を使って、探索誘導用の`EvaluationWeights`をオフライン調整する。
 

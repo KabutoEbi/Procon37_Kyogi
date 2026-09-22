@@ -1,6 +1,6 @@
 # `brain/brain1.hpp` の使い方
 
-対象: [`inc/brain/brain1.hpp`](../../inc/brain/brain1.hpp)
+対象: [`inc/brain/brain1.hpp`](../../../inc/brain/brain1.hpp)
 
 全エージェントの1日分の行動計画をビームサーチで生成するソルバー本体である。
 

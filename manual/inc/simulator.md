@@ -1,6 +1,6 @@
 # `simulator.hpp` の使い方
 
-対象: [`inc/simulator.hpp`](../inc/simulator.hpp)
+対象: [`inc/simulator.hpp`](../../inc/simulator.hpp)
 
 1日分の計画を公式のフェーズ順で実行し、移動、取得、補給、得点を更新する。
 

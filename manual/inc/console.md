@@ -1,6 +1,6 @@
 # `console.hpp` の使い方
 
-対象: [`inc/console.hpp`](../inc/console.hpp)
+対象: [`inc/console.hpp`](../../inc/console.hpp)
 
 盤面、エージェント、探索結果、計画、ステップ追跡、評価内訳を開発用コンソールへ表示する。
 

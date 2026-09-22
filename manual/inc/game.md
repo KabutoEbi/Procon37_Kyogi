@@ -1,6 +1,6 @@
 # `game.hpp` の使い方
 
-対象: [`inc/game.hpp`](../inc/game.hpp)
+対象: [`inc/game.hpp`](../../inc/game.hpp)
 
 試合開始前の設定`MatchSetting`と、各日開始時の情報`MatchState`を定義する。
 

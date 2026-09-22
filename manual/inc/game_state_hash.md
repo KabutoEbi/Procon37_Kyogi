@@ -1,6 +1,6 @@
 # `game_state_hash.hpp` の使い方
 
-対象: [`inc/game_state_hash.hpp`](../inc/game_state_hash.hpp)
+対象: [`inc/game_state_hash.hpp`](../../inc/game_state_hash.hpp)
 
 `GameState`の完全比較とハッシュを提供する。得点、在庫、取得履歴、予約行動、燃料も比較対象に含む。
 

@@ -1,6 +1,6 @@
 # `model.hpp` の使い方
 
-対象: [`inc/model.hpp`](../inc/model.hpp)
+対象: [`inc/model.hpp`](../../inc/model.hpp)
 
 競技モデル、問題生成、JSON入力、探索、検証、複数日実行、表示、重み調整を一括でインクルードする入口である。
 

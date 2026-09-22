@@ -1,6 +1,6 @@
 # `match_runner.hpp` の使い方
 
-対象: [`inc/match_runner.hpp`](../inc/match_runner.hpp)
+対象: [`inc/match_runner.hpp`](../../inc/match_runner.hpp)
 
 同じエージェント種別で全日を順番に探索・シミュレーションし、位置、燃料、得点を翌日へ引き継ぐ。
 

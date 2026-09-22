@@ -1,6 +1,6 @@
 # `types.hpp` の使い方
 
-対象: [`inc/types.hpp`](../inc/types.hpp)
+対象: [`inc/types.hpp`](../../inc/types.hpp)
 
 競技全体で使う基本型、定数、列挙型を定義する最下層のhppである。
 

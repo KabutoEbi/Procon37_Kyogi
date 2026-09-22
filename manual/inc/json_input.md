@@ -1,6 +1,6 @@
 # `json_input.hpp` の使い方
 
-対象: [`inc/json_input.hpp`](../inc/json_input.hpp)
+対象: [`inc/json_input.hpp`](../../inc/json_input.hpp)
 
 公式の`GET /setting`と`GET /`のJSONを、競技モデルへ読み込む。外部JSONライブラリには依存しない。
 

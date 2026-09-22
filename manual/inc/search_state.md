@@ -1,6 +1,6 @@
 # `search_state.hpp` の使い方
 
-対象: [`inc/search_state.hpp`](../inc/search_state.hpp)
+対象: [`inc/search_state.hpp`](../../inc/search_state.hpp)
 
 ビームサーチで等価状態を統合し、燃料が劣る状態を除去するための補助関数を提供する。
 

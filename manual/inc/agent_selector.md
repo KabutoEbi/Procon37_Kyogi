@@ -1,6 +1,6 @@
 # `agent_selector.hpp` の使い方
 
-対象: [`inc/agent_selector.hpp`](../inc/agent_selector.hpp)
+対象: [`inc/agent_selector.hpp`](../../inc/agent_selector.hpp)
 
 試合開始前に、各エージェントを巡回車または補給車へ自動割当する。
 

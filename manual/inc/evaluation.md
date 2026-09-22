@@ -1,6 +1,6 @@
 # `evaluation.hpp` の使い方
 
-対象: [`inc/evaluation.hpp`](../inc/evaluation.hpp)
+対象: [`inc/evaluation.hpp`](../../inc/evaluation.hpp)
 
 ビームサーチ状態を評価する重み、補助情報、評価内訳を定義する。
 

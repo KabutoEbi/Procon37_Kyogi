@@ -1,6 +1,6 @@
 # `action_routes.hpp` の使い方
 
-対象: [`inc/action_routes.hpp`](../inc/action_routes.hpp)
+対象: [`inc/action_routes.hpp`](../../inc/action_routes.hpp)
 
 同じ残り行動列のsuffixを共有し、マクロ経路のメモリ使用量を抑える内部用コンテナである。
 

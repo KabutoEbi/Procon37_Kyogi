@@ -1,6 +1,6 @@
 # `game_state.hpp` の使い方
 
-対象: [`inc/game_state.hpp`](../inc/game_state.hpp)
+対象: [`inc/game_state.hpp`](../../inc/game_state.hpp)
 
 1日分の探索とシミュレーションで変化する状態を固定長配列で保持する。
 

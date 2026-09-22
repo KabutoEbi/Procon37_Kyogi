@@ -1,6 +1,6 @@
 # `plan_validator.hpp` の使い方
 
-対象: [`inc/plan_validator.hpp`](../inc/plan_validator.hpp)
+対象: [`inc/plan_validator.hpp`](../../inc/plan_validator.hpp)
 
 完成した`DailyPlan`がルール上有効かを検証する薄い入口である。
 
