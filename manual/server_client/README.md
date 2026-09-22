@@ -6,7 +6,7 @@ Python標準ライブラリだけで、問題取得、回答送信、C++ソル�
 
 ## 接続設定
 
-リポジトリ直下の[`.env.example`](../../.env.example)を参考に`.env`を作る。
+リポジトリ直下にGit管理外の`.env`を作る。
 
 ```dotenv
 PROCON_URL=http://127.0.0.1:8080

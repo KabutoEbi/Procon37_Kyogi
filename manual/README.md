@@ -22,11 +22,11 @@ c++ -std=c++17 -O2 -pthread main.cpp -o main
 ./main sample_maps/sample_16.json
 ```
 
-回答システムを使う場合は、まず`.env.example`を参考にGit管理外の`.env`へ接続情報を設定する。詳しくは[`server_client/README.md`](server_client/README.md)を参照する。
+回答システムを使う場合は、Git管理外の`.env`へ接続情報を設定する。詳しくは[`server_client/README.md`](server_client/README.md)を参照する。
 
 ## 注意
 
 - コマンド例はすべてリポジトリ直下から実行する。
 - JSON生成物、実行ファイル、`.env`、`runtime/`はGit管理対象外である。
-- `.env`には本物のトークンを保存し、`.env.example`には秘密情報を書かない。
+- `.env`には本物のトークンが入るため、Gitへ追加しない。
 - 実際に回答を送信するのは`send_answer.py`と`auto_submit.py`だけである。
