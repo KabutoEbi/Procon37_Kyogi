@@ -57,3 +57,5 @@ c++ -std=c++17 -O2 -pthread main.cpp -o solver
 `select`は種別選択と`agents.json`生成だけで終了する。`solve`は当日状態を必須入力とし、日次探索だけを実行する。Python通信クライアントはこの2モードを呼び分ける。
 
 通信を含む実行方法は[`server_client/README.md`](../server_client/README.md)を参照する。送信なしの確認には`auto_prepare.py`、全日の自動送信には`auto_submit.py`を使用する。
+
+`main.cpp`は[`solver_options.hpp`](solver_options.md)の探索オプションにも対応する。GUIではこの引数を通してビーム幅や時間制限を反映する。`runApplication()`独自のCLIとは引数形式が異なる。

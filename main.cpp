@@ -1,4 +1,5 @@
 #include "inc/application.hpp"
+#include "inc/solver_options.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -10,6 +11,9 @@
 
 int main(int argc, char* argv[]) {
     try {
+        auto options = procon37::SolverOptions::parse(argc, argv);
+        argc = static_cast<int>(options.positional.size());
+        argv = options.positional.data();
         const bool selectMode = argc >= 2 && std::string_view(argv[1]) == "select";
         const bool solveMode = argc >= 2 && std::string_view(argv[1]) == "solve";
         if (selectMode) {
@@ -19,15 +23,7 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             const auto setting = procon37::readMatchSettingJson(argv[2]);
-            procon37::AgentSelectorConfig cfg;
-            cfg.trialCandidateLimit = 8;
-            cfg.trialBeamWidth = 32;
-            cfg.trialJointBeamWidth = 128;
-            const std::int32_t mapSize = std::max(
-                setting.field.width, setting.field.height);
-            cfg.timeLimitMs = mapSize <= 16
-                ? 60'000
-                : (mapSize <= 24 ? 90'000 : 120'000);
+            const auto cfg = options.selectorFor(setting);
             const auto selected = procon37::selectAgentKinds(setting, cfg);
             if (!selected.success) {
                 std::cerr << "failed to select agent kinds\n";
@@ -82,15 +78,7 @@ int main(int argc, char* argv[]) {
             kinds.reserve(st.agents.size());
             for (const auto& agent : st.agents) kinds.push_back(agent.kind);
         } else {
-            procon37::AgentSelectorConfig selCfg;
-            selCfg.trialCandidateLimit = 8;
-            selCfg.trialBeamWidth = 32;
-            selCfg.trialJointBeamWidth = 128;
-            const std::int32_t mapSize = std::max(
-                setting.field.width, setting.field.height);
-            selCfg.timeLimitMs = mapSize <= 16
-                ? 60'000
-                : (mapSize <= 24 ? 90'000 : 120'000);
+            const auto selCfg = options.selectorFor(setting);
             const auto sel = procon37::selectAgentKinds(setting, selCfg);
             if (!sel.success) {
                 std::cerr << "failed to select agent kinds\n";
@@ -128,16 +116,20 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        procon37::BeamSearchConfig beam;
-        beam.beamWidth = 128;
-        beam.jointBeamWidth = 512;
-        if (st.endsAt == 0) {
+        auto beam = options.beam;
+        if (st.endsAt == 0 && !options.hasTimeLimit) {
             // sample_maps等のオフライン実行も無制限にしない。
             beam.timeLimitMs = std::min<std::int64_t>(
                 5000,
                 static_cast<std::int64_t>(setting.daySeconds[
                     static_cast<std::size_t>(st.day)]) * 1000);
         }
+
+        std::cout << "parameters beam-width=" << beam.beamWidth
+                  << " joint-beam-width=" << beam.jointBeamWidth
+                  << " threads=" << beam.threadCount
+                  << " time-limit-ms=" << beam.timeLimitMs
+                  << " safety-margin-ms=" << beam.safetyMarginMs << '\n';
 
         const auto ans = procon37::solveDay(
             setting, st, previousScore, beam);

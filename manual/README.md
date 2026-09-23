@@ -7,6 +7,7 @@
 - [`inc/`](inc/): C++ヘッダーのAPIと利用例
 - [`tests/`](tests/): テスト・ベンチマーク・重み調整ツールのビルド方法
 - [`server_client/`](server_client/): 回答システムとの取得・送信・自動実行方法
+- [`visualizer/`](visualizer.md): GUIでの取得・探索・送信とマップ表示
 
 ## 最初に行うこと
 

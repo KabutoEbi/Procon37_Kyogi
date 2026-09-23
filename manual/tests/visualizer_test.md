@@ -1,0 +1,29 @@
+# `visualizer_test.py` の使い方
+
+対象: [`tests/visualizer_test.py`](../../tests/visualizer_test.py)
+
+Tkウィンドウを表示せず、GUIバックエンドの設定読込、マップ用JSON変換、送信後のチェックポイント確定を検査するPythonテストである。
+
+```sh
+python3 -m unittest tests/visualizer_test.py
+```
+
+主な検査内容は次のとおり。
+
+- `.env`読込と環境変数による上書き
+- 簡易サーバー設定からのチーム名・TOKEN読込
+- 公式設定・当日状態JSONから表示用マップ、交通、エージェント情報への変換
+- 期待したdayと違う状態で既存ファイルを上書きしないこと
+- 回答が受理された場合だけ次日用得点チェックポイントを確定すること
+- 手動通信確認、認証失敗、先の日を検出した場合の停止
+- 旧dayの公開待ち、停止・再開、POST失敗時に繰り返し送信しないこと
+- 日番号や変更された回答の検出、停止時の探索プロセス終了
+
+HTTP送信はモックへ置き換えるため、回答システムへは接続せず、実トークンも必要ない。
+
+`PROCON_TEST_SOLVER`へ更新済みmainの実行ファイルを指定すると、`sample_maps/sample_16.json`と実ソルバーで4日分の通信フロー・指定日からの続行も検査する。
+
+```sh
+c++ -std=c++17 -O2 -pthread main.cpp -o /tmp/procon37_gui_main
+PROCON_TEST_SOLVER=/tmp/procon37_gui_main python3 -m unittest tests/visualizer_test.py
+```

@@ -1,0 +1,29 @@
+# `visualizer/` の使い方
+
+対象: [`visualizer/`](../visualizer/)
+
+取得、探索、送信をGUIから手動／自動で操作し、マップやJSON、実行ログを確認するためのデスクトップアプリである。
+
+```sh
+python3 visualizer/app.py
+```
+
+macOSのシステムPythonが古いTk 8.5を使用する場合は、対応するTkを持つインストール済みPythonへ自動で切り替える。`python3 visualizer/app.py --check-runtime`で選択されたPythonとTkを確認できる。詳しくは[`runtime.py`](visualizer/runtime.md)を参照。
+
+詳しい操作順と生成物は[`visualizer/README.md`](../visualizer/README.md)を参照する。
+
+## ファイル別マニュアル
+
+- [`app.py`](visualizer/app.md): 画面構成、手動／自動操作、簡易サーバー操作
+- [`backend.py`](visualizer/backend.md): 通信・ソルバー・簡易サーバー・チェックポイント管理
+- [`runtime.py`](visualizer/runtime.md): macOSでのPython/Tk実行環境選択
+
+TOKEN欄を直接編集して「通信確認（手動）」を押すと、GETで接続を確認できる。起動だけでは通信しない。トークンは伏せ字で表示し、GUIログでも伏せる。
+
+実サーバーを使わない確認では、画面上部の「同梱の簡易サーバー」で設定JSONとチームを選び「起動して使用」を押す。URL、TOKEN、作業フォルダがローカル確認用へ切り替わり、以降は通常と同じ手動／自動操作を使える。種別締切はサーバー起動時から進むため、手動操作では十分長く設定する。停止ボタンまたはGUI終了で子プロセスを停止する。実サーバー用`.env`は上書きしない。
+
+手動では各ボタンを順に押す。自動では問題取得、種別選択・送信、全日の状態取得・探索・送信を進める。自動開始は送信を含み、各送信の確認ダイアログは省略する。停止・同じ段階からの再開・指定日からの開始に対応する。
+
+「探索パラメータ」タブでビーム幅、同時行動幅、スレッド数、時間上限、マクロ行動、種別選択試走などを指定できる。C++側は[`solver_options.hpp`](inc/solver_options.md)で引数を読み取る。処理中も画面は応答し、当日状態の取得ごとにマップ・エージェント表を更新する。
+
+簡易サーバーを使う場合も先に`main`をビルドする。サーバーを起動した時点から種別締切の時計が進むためである。起動後の成果物は`runtime/simple-server/client/`、サーバーログは`runtime/simple-server/simple-server.log`へ保存する。

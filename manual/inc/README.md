@@ -17,6 +17,7 @@
 - [`json_input.hpp`](json_input.md): 公式JSONの読み込み
 - [`create.hpp`](create.md): ランダム問題とJSONの生成
 - [`application.hpp`](application.md): CLI補助、回答・チェックポイント出力
+- [`solver_options.hpp`](solver_options.md): mainの探索オプション解析
 - [`console.hpp`](console.md): 探索状況のコンソール表示
 - [`match_runner.hpp`](match_runner.md): オフライン複数日実行
 
