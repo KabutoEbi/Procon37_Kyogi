@@ -17,8 +17,10 @@
 namespace procon37 {
 
 struct AgentSelectorConfig {
-    // -1なら「全車が補給車」だけを除いた最大台数まで調べる。
-    std::int32_t minSupplyCount = 0;
+    // 既定では燃料切れで全車が行動不能になるのを避けるため、
+    // 補給車を最低1台残す。-1なら「全車が補給車」だけを除いた
+    // 最大台数まで調べる。
+    std::int32_t minSupplyCount = 1;
     std::int32_t maxSupplyCount = -1;
 
     // 距離評価後にbrain1で試走する候補数。0なら距離評価だけを使う。
@@ -133,6 +135,15 @@ private:
         return lhs.supplyMask < rhs.supplyMask;
     }
 
+    static std::vector<AgentKind> fallbackKinds(
+        std::size_t agentCount,
+        std::int32_t minSupplyCount) {
+        std::vector<AgentKind> kinds(agentCount, AgentKind::Patrol);
+        for (std::int32_t i = 0; i < minSupplyCount; ++i) {
+            kinds[static_cast<std::size_t>(i)] = AgentKind::Supply;
+        }
+        return kinds;
+    }
 
 public:
     static AgentSelectionResult select(
@@ -184,7 +195,8 @@ public:
                 AgentSelectionResult fallback;
                 fallback.success = true;
                 fallback.timedOut = true;
-                fallback.kinds.assign(n, AgentKind::Patrol);
+                fallback.kinds = fallbackKinds(n, cfg.minSupplyCount);
+                fallback.supplyCount = cfg.minSupplyCount;
                 return fallback;
             }
             dist.push_back(Brain0::dijkstra(
@@ -280,7 +292,8 @@ public:
             if (expired()) {
                 res.success = true;
                 res.timedOut = true;
-                res.kinds.assign(n, AgentKind::Patrol);
+                res.kinds = fallbackKinds(n, cfg.minSupplyCount);
+                res.supplyCount = cfg.minSupplyCount;
             }
             return res;
         }

@@ -478,8 +478,9 @@ void testAgentSelector() {
     assert(first.success);
     assert(first.kinds == again.kinds);
     assert(first.kinds.size() == s.agentCount());
-    assert(first.evaluatedAssignments == 3);
+    assert(first.evaluatedAssignments == 2);
     assert(first.trialAssignments == 2);
+    assert(first.supplyCount >= 1);
     assert(std::count(
                first.kinds.begin(),
                first.kinds.end(),
@@ -505,6 +506,11 @@ void testAgentSelector() {
     assert(timed.success);
     assert(timed.timedOut);
     assert(timed.kinds.size() == s.agentCount());
+    assert(timed.supplyCount == 1);
+    assert(std::count(
+               timed.kinds.begin(),
+               timed.kinds.end(),
+               AgentKind::Supply) == 1);
 }
 
 void testPersistentJsonAndFallback() {

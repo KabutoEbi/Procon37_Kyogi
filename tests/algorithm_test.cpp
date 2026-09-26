@@ -237,6 +237,10 @@ void testTrialsAndTuning() {
     assert(rejected);
 
     AgentSelectorConfig selection;
+    // このテスト盤面はエージェントが1台だけなので、巡回車を残すため
+    // 補給車0台を明示的に許可する。
+    selection.minSupplyCount = 0;
+    selection.maxSupplyCount = 0;
     selection.trialCandidateLimit = 1;
     selection.trialScenarios = {TrialTraffic(2, std::vector<TrafficStatus>(3, TrafficStatus::Smooth)),
                                 TrialTraffic(2, std::vector<TrafficStatus>(3, TrafficStatus::Jammed))};

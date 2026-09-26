@@ -6,7 +6,7 @@
 
 ```cpp
 procon37::AgentSelectorConfig config;
-config.minSupplyCount = 0;
+config.minSupplyCount = 1;
 config.maxSupplyCount = 2;
 config.trialCandidateLimit = 8;
 config.trialDays = 2;
@@ -18,11 +18,11 @@ if (selected.success) {
 }
 ```
 
-最初に全配置を距離ヒューリスティックで評価し、上位候補を`brain1`で複数日・複数交通シナリオ試走する。最低でも1台は巡回車として残す。
+最初に全配置を距離ヒューリスティックで評価し、上位候補を`brain1`で複数日・複数交通シナリオ試走する。既定では補給車を最低1台選び、最低でも1台は巡回車として残す。
 
 ## 主な設定
 
-- `minSupplyCount`, `maxSupplyCount`: 補給車台数の範囲。最大`-1`で自動上限
+- `minSupplyCount`, `maxSupplyCount`: 補給車台数の範囲。既定の最小は1、最大`-1`で自動上限
 - `trialCandidateLimit`: 試走する候補数。0なら距離評価だけ
 - `trialBeamWidth`, `trialJointBeamWidth`: 試走用探索幅
 - `trialDays`: 試走日数。0なら全日
@@ -32,4 +32,4 @@ if (selected.success) {
 - `deadlineUnixSeconds`: 明示的に分かっている種別締切のUNIX時刻
 - `safetyMarginMs`: 締切前に残す余裕
 
-結果には選択種別、補給車数、評価候補数、試走回数、最悪・合計試走スコア、`timedOut`が入る。時間切れでも、距離評価済みの最良構成または安全な全巡回車構成を返す。設定不整合は`std::invalid_argument`になる。
+結果には選択種別、補給車数、評価候補数、試走回数、最悪・合計試走スコア、`timedOut`が入る。時間切れでも、距離評価済みの最良構成または設定された最低補給車数を満たす構成を返す。設定不整合は`std::invalid_argument`になる。

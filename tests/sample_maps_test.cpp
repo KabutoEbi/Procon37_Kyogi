@@ -23,6 +23,11 @@ int main() {
         const AgentSelectionResult selected =
             selectAgentKinds(setting, selector);
         assert(selected.success);
+        assert(selected.supplyCount >= 1);
+        assert(std::count(
+                   selected.kinds.begin(),
+                   selected.kinds.end(),
+                   AgentKind::Supply) >= 1);
 
         const MatchState state = makeInitialState(setting, selected.kinds);
         BeamSearchConfig beam;

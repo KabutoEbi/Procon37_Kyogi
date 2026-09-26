@@ -33,6 +33,17 @@ class GUITest(unittest.TestCase):
             self.assertTrue(gui.winfo_viewable())
             self.assertTrue(gui.map_canvas.winfo_ismapped())
             self.assertGreater(gui.map_canvas.winfo_width(), 100)
+            self.assertEqual(gui.token_entry.cget("show"), "")
+            self.assertTrue(gui.simple_toggle_check.winfo_ismapped())
+            self.assertFalse(gui.simple_frame.winfo_ismapped())
+            self.assertNotEqual(gui.controls_frame.master.winfo_class(), "Canvas")
+            self.assertNotEqual(gui.parameters_frame.master.winfo_class(), "Canvas")
+            self.assertEqual(gui.files_frame.master, gui.config_frame)
+            self.assertEqual(gui.log_frame.master, gui.content_pane)
+            self.assertEqual(gui.controls_frame.master, gui.control_panel)
+            self.assertLess(gui.control_panel.winfo_width(), 320)
+            self.assertEqual(gui.agent_table.master.master, gui.map_state_panel)
+            self.assertEqual(gui.spot_table.master.master, gui.map_state_panel)
             gui.work_var.set(directory)
             gui.solver_var.set(sys.executable)
             gui.parameter_vars["beam_width"].set("19")
@@ -85,6 +96,8 @@ class GUITest(unittest.TestCase):
                 self.assertFalse(gui._busy)
 
             try:
+                gui.simple_toggle_check.invoke()
+                gui.update()
                 self.assertTrue(gui.simple_start_button.winfo_ismapped())
                 with mock.patch.object(
                     gui._simple_server,
@@ -100,6 +113,9 @@ class GUITest(unittest.TestCase):
                 self.assertEqual(gui.url_var.get(), "http://127.0.0.1:18080")
                 self.assertEqual(gui.token_var.get(), "local-token")
                 self.assertIn("runtime/simple-server/client", gui.work_var.get())
+                gui.simple_toggle_check.invoke()
+                gui.update()
+                self.assertFalse(gui.simple_frame.winfo_ismapped())
 
                 gui.work_var.set(directory)
                 gui.token_var.set("entered-token")
@@ -108,6 +124,19 @@ class GUITest(unittest.TestCase):
                     gui._check_connection()
                     drain()
                     self.assertEqual(probe.call_args.args[1], "entered-token")
+
+                setting_path = Path(directory) / "setting.json"
+                setting_path.write_text(json.dumps(setting))
+                gui.setting_var.set(str(setting_path))
+                gui.day_var.set(0)
+                with mock.patch("backend.fetch", side_effect=fetch), \
+                     mock.patch("backend.Workflow._run", autospec=True, side_effect=solver):
+                    gui._fetch_and_solve_day()
+                    drain()
+                self.assertTrue((Path(directory) / "state-day0.json").is_file())
+                self.assertTrue((Path(directory) / "answer.json").is_file())
+                self.assertEqual(gui._current_snapshot.day, 0)
+
                 gui.mode_var.set("auto")
                 gui._mode_changed(True)
                 with mock.patch("backend.fetch", side_effect=fetch), \
@@ -120,7 +149,13 @@ class GUITest(unittest.TestCase):
                 self.assertIn("score-day4.json", gui.score_var.get())
                 self.assertEqual(gui._current_snapshot.day, 3)
                 self.assertEqual(len(gui.agent_table.get_children()), 4)
+                self.assertEqual(
+                    len(gui.spot_table.get_children()), len(setting["spots"])
+                )
                 self.assertGreater(len(gui.map_canvas.find_all()), 256)
+                gui.update()
+                self.assertFalse(gui.map_xbar.winfo_ismapped())
+                self.assertFalse(gui.map_ybar.winfo_ismapped())
                 self.assertNotIn("entered-token", gui.log_text.get("1.0", "end"))
                 self.assertFalse(callback_errors)
                 error_dialog.assert_not_called()

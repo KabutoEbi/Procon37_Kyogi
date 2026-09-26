@@ -22,6 +22,7 @@ int main() {
     assert(!options.beam.useMacroActions && !options.beam.adaptiveBeamWidth);
     assert(options.hasTimeLimit && options.hasSelectionTimeLimit);
     assert(options.selection.trialCandidateLimit == 0);
+    assert(options.selection.minSupplyCount == 1);
     procon37::MatchSetting setting;
     setting.startsAt = 1800000000;
     assert(options.selectorFor(setting).deadlineUnixSeconds == setting.startsAt);

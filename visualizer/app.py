@@ -25,7 +25,6 @@ from dataclasses import replace
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 from typing import Any, Callable
 
 from backend import (
@@ -46,6 +45,17 @@ from backend import (
     read_json,
     simple_server_teams,
 )
+
+
+class AutoScrollbar(ttk.Scrollbar):
+    """内容が表示領域に収まるときは場所を取らないスクロールバー。"""
+
+    def set(self, first: str, last: str) -> None:
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            self.grid_remove()
+        else:
+            self.grid()
+        super().set(first, last)
 
 
 class SolverGUI(tk.Tk):
@@ -70,6 +80,7 @@ class SolverGUI(tk.Tk):
         self._action_buttons: list[ttk.Button] = []
         self._manual_buttons: list[ttk.Button] = []
         self._current_snapshot: MapSnapshot | None = None
+        self._map_redraw_job: str | None = None
         self._stop = threading.Event()
         self._automatic: AutomaticMatch | None = None
         self._closing = False
@@ -99,6 +110,7 @@ class SolverGUI(tk.Tk):
         self.status_var = tk.StringVar(value="準備完了")
         self.map_info_var = tk.StringVar(value="試合設定を取得または読み込んでください")
         self.simple_config_var = tk.StringVar(value=str(DEFAULT_SIMPLE_CONFIG))
+        self.simple_visible_var = tk.BooleanVar(value=False)
         self.simple_team_var = tk.StringVar()
         self.simple_port_var = tk.StringVar(value="8080")
         self.simple_kind_deadline_var = tk.StringVar(value="30")
@@ -147,7 +159,8 @@ class SolverGUI(tk.Tk):
         self._path_row(config, 1, 3, "work", self.work_var, self._choose_work_dir)
 
         ttk.Label(config, text="TOKEN").grid(row=2, column=0, sticky=tk.E, padx=(0, 5))
-        ttk.Entry(config, textvariable=self.token_var, show="●").grid(
+        self.token_entry = ttk.Entry(config, textvariable=self.token_var)
+        self.token_entry.grid(
             row=2, column=1, columnspan=2, sticky=tk.EW
         )
         ttk.Label(config, text="timeout(s)").grid(row=2, column=3, sticky=tk.E, padx=(12, 5))
@@ -155,10 +168,24 @@ class SolverGUI(tk.Tk):
         check = ttk.Button(config, text="通信確認（手動）", command=self._check_connection)
         check.grid(row=2, column=5, sticky=tk.E)
         self._action_buttons.append(check)
+        self._build_file_panel(config)
 
-        simple = ttk.LabelFrame(self, text="同梱の簡易サーバー", padding=8)
+        simple_row = ttk.Frame(self, padding=(12, 0, 12, 8))
+        self.simple_row = simple_row
+        simple_row.pack(fill=tk.X)
+        simple_row.columnconfigure(1, weight=1)
+        self.simple_toggle_check = ttk.Checkbutton(
+            simple_row,
+            text="簡易サーバー",
+            variable=self.simple_visible_var,
+            command=self._toggle_simple_server,
+        )
+        self.simple_toggle_check.grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+
+        simple = ttk.Frame(simple_row)
         self.simple_frame = simple
-        simple.pack(fill=tk.X, padx=12, pady=(0, 8))
+        simple.grid(row=0, column=1, sticky=tk.EW)
+        simple.grid_remove()
         simple.columnconfigure(1, weight=1)
         ttk.Label(simple, text="設定JSON").grid(row=0, column=0, sticky=tk.E, padx=(0, 5))
         ttk.Entry(simple, textvariable=self.simple_config_var).grid(
@@ -211,12 +238,18 @@ class SolverGUI(tk.Tk):
         self.stop_button.pack(side=tk.LEFT, padx=6)
         ttk.Label(mode, text="dayは0始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
 
-        vertical = ttk.Panedwindow(self, orient=tk.VERTICAL)
-        vertical.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
-        main = ttk.Panedwindow(vertical, orient=tk.HORIZONTAL)
-        vertical.add(main, weight=4)
+        content = ttk.Panedwindow(self, orient=tk.VERTICAL)
+        content.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
+        self.content_pane = content
+        main = ttk.Panedwindow(content, orient=tk.HORIZONTAL)
+        self.main_pane = main
+        content.add(main, weight=4)
 
-        control_panel, controls = self._scroll_panel(main, 330)
+        control_panel = ttk.Frame(main, width=260)
+        self.control_panel = control_panel
+        control_panel.columnconfigure(0, weight=1)
+        controls = ttk.Frame(control_panel, padding=8)
+        controls.grid(row=0, column=0, sticky=tk.NSEW)
         self.controls_frame = controls
         main.add(control_panel, weight=0)
         self._build_workflow(controls)
@@ -226,19 +259,38 @@ class SolverGUI(tk.Tk):
         self._build_map_tab(notebook)
         self._build_json_tab(notebook)
         self._build_parameters_tab(notebook)
-
-        log_frame = ttk.LabelFrame(vertical, text="実行ログ", padding=5)
-        vertical.add(log_frame, weight=1)
-        self.log_text = ScrolledText(log_frame, height=9, wrap=tk.WORD, state=tk.DISABLED)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        self._build_log_panel(content)
 
         status = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel", anchor=tk.W)
         status.pack(fill=tk.X, padx=8, pady=(0, 5))
         self._mode_changed()
 
+    def _toggle_simple_server(self) -> None:
+        if self.simple_visible_var.get():
+            self.simple_frame.grid()
+        else:
+            self.simple_frame.grid_remove()
+
+    def _build_file_panel(self, parent: ttk.LabelFrame) -> None:
+        files = ttk.LabelFrame(parent, text="使用ファイル", padding=6)
+        self.files_frame = files
+        files.grid(row=3, column=0, columnspan=6, sticky=tk.EW, pady=(8, 0))
+        files.columnconfigure(1, weight=1)
+        files.columnconfigure(4, weight=1)
+        self._path_row(files, 0, 0, "setting", self.setting_var, self._choose_setting)
+        self._path_row(files, 0, 3, "state", self.state_var, self._choose_state)
+        self._path_row(files, 1, 0, "score", self.score_var, self._choose_score)
+        local = ttk.Button(files, text="ローカル設定を探索", command=self._solve_local)
+        local.grid(row=1, column=3, columnspan=2, sticky=tk.EW, padx=(0, 5), pady=2)
+        self._action_buttons.append(local)
+        self._manual_buttons.append(local)
+        ttk.Button(files, text="表示を再読込", command=self._refresh_views).grid(
+            row=1, column=5, sticky=tk.EW, pady=2
+        )
+
     def _build_parameters_tab(self, notebook: ttk.Notebook) -> None:
-        panel, frame = self._scroll_panel(notebook, 650)
-        notebook.add(panel, text="探索パラメータ")
+        frame = ttk.Frame(notebook, padding=8)
+        notebook.add(frame, text="探索パラメータ")
         self.parameters_frame = frame
         fields = [
             ("beam_width", "ビーム幅", "各展開で保持する状態数"),
@@ -254,31 +306,34 @@ class SolverGUI(tk.Tk):
             ("trial_joint_beam_width", "種別選択の同時行動幅", "1以上"),
             ("selection_time_ms", "種別選択時間上限 (ms)", "0: 相対制限なし"),
         ]
-        for row, (key, label, hint) in enumerate(fields):
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
-            ttk.Entry(frame, textvariable=self.parameter_vars[key], width=12).grid(
-                row=row, column=1, padx=12, pady=4)
-            ttk.Label(frame, text=hint).grid(row=row, column=2, sticky=tk.W)
+        frame.columnconfigure(0, weight=1, uniform="parameter")
+        frame.columnconfigure(1, weight=1, uniform="parameter")
+        daily = ttk.LabelFrame(frame, text="日次探索", padding=8)
+        selection = ttk.LabelFrame(frame, text="種別選択・自動進行", padding=8)
+        daily.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
+        selection.grid(row=0, column=1, sticky=tk.NSEW, padx=(4, 0))
+
+        def add_fields(parent: ttk.LabelFrame, values: list[tuple[str, str, str]]) -> None:
+            parent.columnconfigure(2, weight=1)
+            for row, (key, label, hint) in enumerate(values):
+                ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
+                ttk.Entry(parent, textvariable=self.parameter_vars[key], width=10).grid(
+                    row=row, column=1, padx=8, pady=4
+                )
+                ttk.Label(parent, text=hint, wraplength=230).grid(
+                    row=row, column=2, sticky=tk.W
+                )
+
+        add_fields(daily, fields[:8])
+        add_fields(selection, fields[8:])
         for row, (variable, label) in enumerate(
             ((self.interval_var, "自動取得間隔 (秒、0.2以上)"),
-             (self.wait_var, "各日の公開待ち上限 (秒)")), start=len(fields)
+             (self.wait_var, "各日の公開待ち上限 (秒)")), start=len(fields[8:])
         ):
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
-            ttk.Entry(frame, textvariable=variable, width=12).grid(row=row, column=1, padx=12)
-
-    def _scroll_panel(self, parent: tk.Widget, width: int) -> tuple[ttk.Frame, ttk.Frame]:
-        panel = ttk.Frame(parent)
-        canvas = tk.Canvas(panel, width=width, height=350, highlightthickness=0,
-                           background=ttk.Style(self).lookup("TFrame", "background"))
-        scrollbar = ttk.Scrollbar(panel, orient=tk.VERTICAL, command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        inner = ttk.Frame(canvas, padding=8)
-        window = canvas.create_window(0, 0, window=inner, anchor=tk.NW)
-        inner.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
-        return panel, inner
+            ttk.Label(selection, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
+            ttk.Entry(selection, textvariable=variable, width=10).grid(
+                row=row, column=1, padx=8, pady=4
+            )
 
     def _path_row(
         self,
@@ -323,7 +378,7 @@ class SolverGUI(tk.Tk):
                 self._manual_buttons.append(button)
             row += 1
 
-        ttk.Separator(parent).grid(row=row, column=0, sticky=tk.EW, pady=10)
+        ttk.Separator(parent).grid(row=row, column=0, sticky=tk.EW, pady=8)
         row += 1
         day_row = ttk.Frame(parent)
         day_row.grid(row=row, column=0, sticky=tk.EW)
@@ -334,9 +389,8 @@ class SolverGUI(tk.Tk):
         row += 1
 
         for text, command, primary in [
-            ("4  当日状態を取得", self._fetch_state, True),
-            ("5  日次探索を実行", self._solve_day, True),
-            ("6  日次回答を送信", self._send_answer, False),
+            ("4  当日状態を取得・探索", self._fetch_and_solve_day, True),
+            ("5  日次回答を送信", self._send_answer, False),
         ]:
             button = ttk.Button(
                 parent,
@@ -349,41 +403,17 @@ class SolverGUI(tk.Tk):
             self._manual_buttons.append(button)
             row += 1
 
-        ttk.Separator(parent).grid(row=row, column=0, sticky=tk.EW, pady=10)
-        row += 1
-        ttk.Label(parent, text="使用ファイル", style="Section.TLabel").grid(
-            row=row, column=0, sticky=tk.W, pady=(0, 4)
-        )
-        row += 1
-        for label, variable, command in [
-            ("setting", self.setting_var, self._choose_setting),
-            ("state", self.state_var, self._choose_state),
-            ("score", self.score_var, self._choose_score),
-        ]:
-            frame = ttk.Frame(parent)
-            frame.grid(row=row, column=0, sticky=tk.EW, pady=2)
-            frame.columnconfigure(0, weight=1)
-            ttk.Label(frame, text=label).grid(row=0, column=0, sticky=tk.W)
-            ttk.Entry(frame, textvariable=variable, width=34).grid(
-                row=1, column=0, sticky=tk.EW
-            )
-            ttk.Button(frame, text="開く", command=command, width=6).grid(
-                row=1, column=1, padx=(4, 0)
-            )
-            row += 1
-
-        local = ttk.Button(
-            parent,
-            text="ローカル設定を探索",
-            command=self._solve_local,
-        )
-        local.grid(row=row, column=0, sticky=tk.EW, pady=(8, 3))
-        self._action_buttons.append(local)
-        self._manual_buttons.append(local)
-        row += 1
-        ttk.Button(parent, text="表示を再読込", command=self._refresh_views).grid(
-            row=row, column=0, sticky=tk.EW, pady=3
-        )
+    def _build_log_panel(self, parent: ttk.Panedwindow) -> None:
+        frame = ttk.LabelFrame(parent, text="実行ログ", padding=5)
+        self.log_frame = frame
+        parent.add(frame, weight=1)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        self.log_text = tk.Text(frame, wrap=tk.WORD, state=tk.DISABLED, height=8)
+        scrollbar = AutoScrollbar(frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        self.log_text.grid(row=0, column=0, sticky=tk.NSEW)
+        scrollbar.grid(row=0, column=1, sticky=tk.NS)
 
     def _build_map_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
@@ -391,23 +421,34 @@ class SolverGUI(tk.Tk):
         ttk.Label(frame, textvariable=self.map_info_var, anchor=tk.W).pack(
             fill=tk.X, padx=8, pady=6
         )
-        canvas_frame = ttk.Frame(frame)
+        body = ttk.Panedwindow(frame, orient=tk.HORIZONTAL)
+        body.pack(fill=tk.BOTH, expand=True)
+        map_panel = ttk.Frame(body)
+        state_panel = ttk.Frame(body, width=330, padding=(6, 0, 0, 0))
+        self.map_state_panel = state_panel
+        body.add(map_panel, weight=3)
+        body.add(state_panel, weight=1)
+
+        canvas_frame = ttk.Frame(map_panel)
         canvas_frame.pack(fill=tk.BOTH, expand=True)
         self.map_canvas = tk.Canvas(
             canvas_frame,
             background="#f6f7f8",
             highlightthickness=0,
         )
-        xbar = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.map_canvas.xview)
-        ybar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.map_canvas.yview)
+        xbar = AutoScrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.map_canvas.xview)
+        ybar = AutoScrollbar(canvas_frame, orient=tk.VERTICAL, command=self.map_canvas.yview)
+        self.map_xbar = xbar
+        self.map_ybar = ybar
         self.map_canvas.configure(xscrollcommand=xbar.set, yscrollcommand=ybar.set)
+        self.map_canvas.bind("<Configure>", self._map_resized)
         self.map_canvas.grid(row=0, column=0, sticky=tk.NSEW)
         ybar.grid(row=0, column=1, sticky=tk.NS)
         xbar.grid(row=1, column=0, sticky=tk.EW)
         canvas_frame.rowconfigure(0, weight=1)
         canvas_frame.columnconfigure(0, weight=1)
 
-        legend = ttk.Frame(frame, padding=6)
+        legend = ttk.Frame(map_panel, padding=6)
         legend.pack(fill=tk.X)
         for text, color in [
             ("平地", self.TERRAIN_COLORS[0]),
@@ -423,9 +464,60 @@ class SolverGUI(tk.Tk):
             ttk.Label(legend, text=text).pack(side=tk.LEFT)
         ttk.Label(legend, text="  [N]=系列  P=巡回車  S=補給車").pack(side=tk.LEFT, padx=8)
 
+        agents_frame = ttk.LabelFrame(state_panel, text="エージェント", padding=4)
+        agents_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+        agents_frame.rowconfigure(0, weight=1)
+        agents_frame.columnconfigure(0, weight=1)
+        self.agent_table = ttk.Treeview(
+            agents_frame,
+            columns=("id", "kind", "pos", "coord", "fuel"),
+            show="headings",
+            height=6,
+        )
+        for key, title, width in [
+            ("id", "ID", 36),
+            ("kind", "種別", 70),
+            ("pos", "pos", 50),
+            ("coord", "座標", 65),
+            ("fuel", "燃料", 65),
+        ]:
+            self.agent_table.heading(key, text=title)
+            self.agent_table.column(key, width=width, minwidth=35, anchor=tk.CENTER)
+        agent_scroll = AutoScrollbar(
+            agents_frame, orient=tk.VERTICAL, command=self.agent_table.yview
+        )
+        self.agent_table.configure(yscrollcommand=agent_scroll.set)
+        self.agent_table.grid(row=0, column=0, sticky=tk.NSEW)
+        agent_scroll.grid(row=0, column=1, sticky=tk.NS)
+
+        spots_frame = ttk.LabelFrame(state_panel, text="スポット", padding=4)
+        spots_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        spots_frame.rowconfigure(0, weight=1)
+        spots_frame.columnconfigure(0, weight=1)
+        self.spot_table = ttk.Treeview(
+            spots_frame,
+            columns=("pos", "coord", "brand", "stocks"),
+            show="headings",
+            height=8,
+        )
+        for key, title, width in [
+            ("pos", "pos", 50),
+            ("coord", "座標", 70),
+            ("brand", "系列", 55),
+            ("stocks", "在庫", 55),
+        ]:
+            self.spot_table.heading(key, text=title)
+            self.spot_table.column(key, width=width, minwidth=40, anchor=tk.CENTER)
+        spot_scroll = AutoScrollbar(
+            spots_frame, orient=tk.VERTICAL, command=self.spot_table.yview
+        )
+        self.spot_table.configure(yscrollcommand=spot_scroll.set)
+        self.spot_table.grid(row=0, column=0, sticky=tk.NSEW)
+        spot_scroll.grid(row=0, column=1, sticky=tk.NS)
+
     def _build_json_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
-        notebook.add(frame, text="JSON / エージェント")
+        notebook.add(frame, text="JSON")
         toolbar = ttk.Frame(frame, padding=6)
         toolbar.pack(fill=tk.X)
         ttk.Button(toolbar, text="setting", command=lambda: self._show_json(Path(self.setting_var.get()))).pack(side=tk.LEFT)
@@ -434,31 +526,17 @@ class SolverGUI(tk.Tk):
         ttk.Button(toolbar, text="answer", command=lambda: self._show_json(self._work_path("answer.json"))).pack(side=tk.LEFT, padx=4)
         ttk.Button(toolbar, text="score-next", command=lambda: self._show_json(self._work_path("score-next.json"))).pack(side=tk.LEFT)
 
-        panes = ttk.Panedwindow(frame, orient=tk.VERTICAL)
-        panes.pack(fill=tk.BOTH, expand=True)
-        table_frame = ttk.Frame(panes)
-        panes.add(table_frame, weight=1)
-        self.agent_table = ttk.Treeview(
-            table_frame,
-            columns=("id", "kind", "pos", "coord", "fuel"),
-            show="headings",
-            height=6,
-        )
-        for key, title, width in [
-            ("id", "ID", 50),
-            ("kind", "種別", 90),
-            ("pos", "pos", 70),
-            ("coord", "座標", 90),
-            ("fuel", "燃料", 90),
-        ]:
-            self.agent_table.heading(key, text=title)
-            self.agent_table.column(key, width=width, anchor=tk.CENTER)
-        self.agent_table.pack(fill=tk.BOTH, expand=True)
-
-        json_frame = ttk.Frame(panes)
-        panes.add(json_frame, weight=3)
-        self.json_text = ScrolledText(json_frame, wrap=tk.NONE, state=tk.DISABLED)
-        self.json_text.pack(fill=tk.BOTH, expand=True)
+        json_frame = ttk.Frame(frame)
+        json_frame.pack(fill=tk.BOTH, expand=True)
+        json_frame.rowconfigure(0, weight=1)
+        json_frame.columnconfigure(0, weight=1)
+        self.json_text = tk.Text(json_frame, wrap=tk.NONE, state=tk.DISABLED)
+        xbar = AutoScrollbar(json_frame, orient=tk.HORIZONTAL, command=self.json_text.xview)
+        ybar = AutoScrollbar(json_frame, orient=tk.VERTICAL, command=self.json_text.yview)
+        self.json_text.configure(xscrollcommand=xbar.set, yscrollcommand=ybar.set)
+        self.json_text.grid(row=0, column=0, sticky=tk.NSEW)
+        ybar.grid(row=0, column=1, sticky=tk.NS)
+        xbar.grid(row=1, column=0, sticky=tk.EW)
 
     def _workflow(self) -> Workflow:
         try:
@@ -807,21 +885,7 @@ class SolverGUI(tk.Tk):
         setting = Path(self.setting_var.get())
         self._run_task("エージェント種別送信", lambda: workflow.send_agents(payload, setting))
 
-    def _fetch_state(self) -> None:
-        workflow = self._workflow_or_dialog()
-        if workflow is None:
-            return
-        day = self._day_or_dialog()
-        if day is None:
-            return
-        output = self._work_path(f"state-day{day}.json")
-        self._run_task(
-            f"day={day} 状態取得",
-            lambda: workflow.fetch_state(day, output),
-            lambda path: (self.state_var.set(str(path)), self._state_loaded(path)),
-        )
-
-    def _solve_day(self) -> None:
+    def _fetch_and_solve_day(self) -> None:
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
@@ -829,13 +893,7 @@ class SolverGUI(tk.Tk):
         if day is None:
             return
         setting = Path(self.setting_var.get())
-        state = Path(self.state_var.get())
-        try:
-            if read_json(state).get("day") != day:
-                raise WorkflowError("対象dayと状態ファイルの日番号が一致しません")
-        except (WorkflowError, OSError, AttributeError) as error:
-            messagebox.showerror("探索", str(error), parent=self)
-            return
+        state = self._work_path(f"state-day{day}.json")
         checkpoint: Path | None = None
         if day > 0:
             score_text = self.score_var.get().strip()
@@ -843,14 +901,20 @@ class SolverGUI(tk.Tk):
                 score_text = str(self._work_path(f"score-day{day}.json"))
                 self.score_var.set(score_text)
             checkpoint = Path(score_text)
+
+        def fetch_and_solve() -> CommandResult:
+            workflow.fetch_state(day, state)
+            return workflow.solve_day(setting, state, checkpoint)
+
+        def completed(_result: CommandResult) -> None:
+            self.state_var.set(str(state))
+            self._state_loaded(state)
+            self._show_json(self._work_path("answer.json"))
+
         self._run_task(
-            f"day={day} 探索",
-            lambda: workflow.solve_day(
-                setting,
-                state,
-                checkpoint,
-            ),
-            lambda _: self._show_json(self._work_path("answer.json")),
+            f"day={day} 状態取得・探索",
+            fetch_and_solve,
+            completed,
         )
 
     def _solve_local(self) -> None:
@@ -926,6 +990,7 @@ class SolverGUI(tk.Tk):
         self._current_snapshot = snapshot
         self._draw_map(snapshot)
         self._fill_agents(snapshot)
+        self._fill_spots(snapshot)
         day_text = "未取得" if snapshot.day is None else str(snapshot.day)
         steps = "-"
         if snapshot.day is not None and snapshot.day < len(snapshot.day_steps):
@@ -938,11 +1003,24 @@ class SolverGUI(tk.Tk):
     def _draw_map(self, snapshot: MapSnapshot) -> None:
         canvas = self.map_canvas
         canvas.delete("all")
-        radius = 18 if max(snapshot.width, snapshot.height) <= 16 else (
+        preferred_radius = 18 if max(snapshot.width, snapshot.height) <= 16 else (
             14 if max(snapshot.width, snapshot.height) <= 24 else 11
         )
+        canvas_width = max(100, canvas.winfo_width())
+        canvas_height = max(100, canvas.winfo_height())
+        width_factor = 2.0 + math.sqrt(3) * (snapshot.width + 0.5)
+        height_factor = 2.0 + 1.5 * max(0, snapshot.height - 1)
+        fitting_radius = int(min(
+            (canvas_width - 28) / width_factor,
+            (canvas_height - 28) / height_factor,
+        ))
+        radius = max(6, min(preferred_radius, fitting_radius))
         hex_width = math.sqrt(3) * radius
         margin = radius + 12
+        total_width = margin * 2 + hex_width * (snapshot.width + 0.5)
+        total_height = margin * 2 + 1.5 * radius * max(0, snapshot.height - 1)
+        offset_x = max(0.0, (canvas_width - total_width) / 2.0)
+        offset_y = max(0.0, (canvas_height - total_height) / 2.0)
         agent_groups: dict[int, list[Any]] = {}
         for agent in snapshot.agents:
             agent_groups.setdefault(agent.pos, []).append(agent)
@@ -950,8 +1028,8 @@ class SolverGUI(tk.Tk):
         for y, row in enumerate(snapshot.cells):
             for x, terrain in enumerate(row):
                 pos = y * snapshot.width + x
-                cx = margin + hex_width * (x + (0.5 if y % 2 == 0 else 0.0))
-                cy = margin + 1.5 * radius * y
+                cx = offset_x + margin + hex_width * (x + (0.5 if y % 2 == 0 else 0.0))
+                cy = offset_y + margin + 1.5 * radius * y
                 points = []
                 for index in range(6):
                     angle = math.radians(30 + 60 * index)
@@ -997,9 +1075,24 @@ class SolverGUI(tk.Tk):
                         font=("TkDefaultFont", max(6, radius // 3), "bold"),
                     )
 
-        total_width = margin * 2 + hex_width * (snapshot.width + 0.5)
-        total_height = margin * 2 + 1.5 * radius * max(0, snapshot.height - 1)
-        canvas.configure(scrollregion=(0, 0, total_width, total_height))
+        canvas.configure(scrollregion=(
+            0,
+            0,
+            max(canvas_width, total_width),
+            max(canvas_height, total_height),
+        ))
+
+    def _map_resized(self, _event: tk.Event[Any]) -> None:
+        if self._current_snapshot is None:
+            return
+        if self._map_redraw_job is not None:
+            self.after_cancel(self._map_redraw_job)
+        self._map_redraw_job = self.after_idle(self._redraw_map_after_resize)
+
+    def _redraw_map_after_resize(self) -> None:
+        self._map_redraw_job = None
+        if self._current_snapshot is not None:
+            self._draw_map(self._current_snapshot)
 
     def _fill_agents(self, snapshot: MapSnapshot) -> None:
         self.agent_table.delete(*self.agent_table.get_children())
@@ -1016,6 +1109,17 @@ class SolverGUI(tk.Tk):
                     f"({x},{y})",
                     f"{agent.fuel}/{snapshot.fuel_limit}",
                 ),
+            )
+
+    def _fill_spots(self, snapshot: MapSnapshot) -> None:
+        self.spot_table.delete(*self.spot_table.get_children())
+        for pos, (brand, stocks) in sorted(snapshot.spots.items()):
+            x = pos % snapshot.width
+            y = pos // snapshot.width
+            self.spot_table.insert(
+                "",
+                tk.END,
+                values=(pos, f"({x},{y})", brand, stocks),
             )
 
     def _show_json(self, path: Path) -> None:
