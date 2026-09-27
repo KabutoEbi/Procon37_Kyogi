@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <queue>
 #include <utility>
 #include <vector>
 
@@ -17,6 +16,14 @@ public:
     struct Edge { int to; int reverse; int capacity; std::int64_t cost; };
 
     explicit MinCostFlow(int vertices) : graph_(static_cast<std::size_t>(vertices)) {}
+
+    // 辺配列の確保領域を再利用し、新しいネットワークとして初期化する。
+    void reset(int vertices) {
+        graph_.resize(static_cast<std::size_t>(vertices));
+        for (auto& edges : graph_) edges.clear();
+    }
+
+    void reserveEdges(int vertex, std::size_t count) { graph_[vertex].reserve(count); }
 
     int addEdge(int from, int to, int capacity, std::int64_t cost) {
         const int index = static_cast<int>(graph_[from].size());
@@ -31,21 +38,33 @@ public:
     std::pair<int, std::int64_t> run(int source, int sink, int limit) {
         const int n = static_cast<int>(graph_.size());
         const auto inf = std::numeric_limits<std::int64_t>::max() / 4;
-        std::vector<std::int64_t> dist(n);
-        std::vector<int> previous(n), edge(n);
-        std::vector<bool> queued(n);
+        distances_.resize(n);
+        previous_.resize(n);
+        edges_.resize(n);
+        queued_.resize(n);
+        queue_.resize(static_cast<std::size_t>(n) + 1);
+        auto& dist = distances_;
+        auto& previous = previous_;
+        auto& edge = edges_;
+        auto& queued = queued_;
         int flow = 0;
         std::int64_t cost = 0;
         while (flow < limit) {
             std::fill(dist.begin(), dist.end(), inf);
             std::fill(queued.begin(), queued.end(), false);
-            std::queue<int> queue;
+            // 同時にqueuedになる頂点は最大n個。固定容量FIFOで
+            // std::dequeのブロック割当を各増加路から取り除く。
+            std::size_t head = 0, tail = 0;
+            auto push = [&](int vertex) {
+                queue_[tail] = vertex;
+                if (++tail == queue_.size()) tail = 0;
+            };
             dist[source] = 0;
-            queue.push(source);
+            push(source);
             queued[source] = true;
-            while (!queue.empty()) {
-                const int v = queue.front();
-                queue.pop();
+            while (head != tail) {
+                const int v = queue_[head];
+                if (++head == queue_.size()) head = 0;
                 queued[v] = false;
                 for (int i = 0; i < static_cast<int>(graph_[v].size()); ++i) {
                     const Edge& e = graph_[v][i];
@@ -55,7 +74,7 @@ public:
                     edge[e.to] = i;
                     if (!queued[e.to]) {
                         queued[e.to] = true;
-                        queue.push(e.to);
+                        push(e.to);
                     }
                 }
             }
@@ -76,6 +95,9 @@ public:
 
 private:
     std::vector<std::vector<Edge>> graph_;
+    std::vector<std::int64_t> distances_;
+    std::vector<int> previous_, edges_, queue_;
+    std::vector<std::uint8_t> queued_;
 };
 
 }  // namespace procon37

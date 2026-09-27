@@ -30,6 +30,10 @@ struct MatchDayResult {
     EvaluationBreakdown evaluation{};
     std::vector<std::int32_t> roadStaySteps;
     std::size_t expandedNodes = 0;
+    std::int64_t elapsedMs = 0;
+    std::size_t assignmentCacheHits = 0;
+    std::size_t assignmentComputations = 0;
+    std::int64_t assignmentTimeNs = 0, flowTimeNs = 0, rendezvousTimeNs = 0;
     SearchStopReason stopReason = SearchStopReason::NoValidPlan;
 };
 
@@ -186,6 +190,12 @@ public:
             const BeamSearchResult search =
                 Brain1::search(s, st, score, cfg.beam);
             record.expandedNodes = search.expandedNodes;
+            record.elapsedMs = search.elapsedMs;
+            record.assignmentCacheHits = search.assignmentCacheHits;
+            record.assignmentComputations = search.assignmentComputations;
+            record.assignmentTimeNs = search.assignmentTimeNs;
+            record.flowTimeNs = search.flowTimeNs;
+            record.rendezvousTimeNs = search.rendezvousTimeNs;
             record.stopReason = search.stopReason;
             record.usedFallback = !search.success;
             if (search.success) {

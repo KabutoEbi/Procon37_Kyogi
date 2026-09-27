@@ -2,26 +2,50 @@
 
 対象: [`tests/solver_benchmark.cpp`](../../tests/solver_benchmark.cpp)
 
-ランダム生成した複数サイズの問題で、マクロ行動の有無による探索結果と速度を比較する簡易ベンチマークである。
+複数サイズ・複数シード・複数回の実行で、探索改善の有無による全日程の得点と速度を比較する。種別は巡回車と補給車1台に固定し、種別選択の差を混ぜない。
+
+2026-09-27の計測結果は[比較記録](benchmark-results-2026-09-27.md)を参照。
+
+同日の[高速化前後の比較](speed-results-2026-09-27.md)では、固定探索量で計画・得点を保った速度改善と、時間制限下で探索量が変わる効果を分けて記録している。
 
 ## 実行
 
 ```sh
 c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benchmark
 /tmp/solver_benchmark > benchmark.csv
+# 短い動作確認
+/tmp/solver_benchmark --seeds 2 --repeats 1 --size 16 --time-ms 300
+# 日ごとに異なる混雑・渋滞を与える
+/tmp/solver_benchmark --seeds 4 --repeats 2 --mixed-traffic > mixed.csv
+# キャッシュを外した場合の比較
+/tmp/solver_benchmark --variant no-cache --seeds 4 --repeats 2 > no-cache.csv
+# 時間制限を外し、同じ幅で最後まで探索する速度比較
+/tmp/solver_benchmark --fixed-work --seeds 3 --repeats 2 > fixed.csv
+# ボトルネックの計測（速度比較とは分けて実行）
+/tmp/solver_benchmark --fixed-work --profile --seeds 2 --repeats 1 > profile.csv
 ```
 
 出力は次のCSV形式である。
 
 ```text
-size,seed,macros,brands,udon,ms,nodes,valid
+size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns
 ```
 
-- `macros`: マクロ行動を有効にしたか
-- `brands`: 試合を通した取得系列数
-- `udon`: 当日の取得玉数
+- `variant`: 比較する機能構成
+- `brands`: その日までの試合取得系列数
+- `daily_brands`: その日までの日別系列数の合計
+- `udon`: その日までの総取得玉数
 - `ms`: 探索経過時間
 - `nodes`: 展開ノード数
-- `valid`: 生成計画を再検証した結果
+- `cache_hits`, `assignment_computations`: 割当のキャッシュ命中数と計算数
+- `valid`: 計画を前日得点込みで再シミュレーションし、終了状態の一致とフォールバック未使用を確認した結果。不一致時は終了コード1
+- `plan_hash`: エージェントごとの行動列・長さの64bit指紋。速度改善前後の同一設定で、得点・展開数と併せて比較する
+- `assignment_ns`, `flow_ns`, `rendezvous_ns`: `--profile`時の処理時間。未指定時は0。計測範囲が重複するため加算しない
 
-各探索は1スレッド、相対時間制限300 msで実行する。性能値はCPU負荷などに左右されるため、同じ環境・同じビルド設定で比較する。
+既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
+
+`--fixed-work`は時間制限と幅の自動調整を無効にし、ビーム幅32・同時行動幅128で最後まで探索する。高速化前後の実行ファイルを同じ引数で実行し、`plan_hash`・得点・展開数が一致した行の`ms`を比較する。時間制限付きの比較は探索量が変わるため、これと分けて評価する。
+
+各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
+
+標準エラーへ試合単位の得点合計、時間の中央値・最大値、展開数、辞書順（試合系列→日別系列累計→玉数）での勝ち・同点・負けを出力する。性能値はCPU負荷などに左右されるため、同じ環境・同じビルド設定で比較する。固定シードでも時間打切りの結果は変動し、生成問題での改善が本番問題での改善を保証するものではない。

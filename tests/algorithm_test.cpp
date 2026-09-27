@@ -93,8 +93,9 @@ void testDialAgainstHeap() {
 void testFlowAgainstEnumeration() {
     std::mt19937 random(19);
     constexpr int n = 4, sink = 2 * n + 1;
+    MinCostFlow flow(0);
     for (int test = 0; test < 40; ++test) {
-        MinCostFlow flow(sink + 1);
+        flow.reset(sink + 1);
         std::array<std::array<int, n>, n> cost{};
         for (int a = 0; a < n; ++a) {
             flow.addEdge(0, a + 1, 1, 0);
@@ -115,6 +116,16 @@ void testFlowAgainstEnumeration() {
         };
         const auto result = flow.run(0, sink, n);
         assert(result.first == n && result.second == enumerate(0, 0));
+    }
+    // 頂点数を縮小・拡大しても前の辺や最短路作業領域を引き継がない。
+    for (const int vertices : {2, 12, 3, 9}) {
+        flow.reset(vertices);
+        flow.reserveEdges(0, 4);
+        flow.addEdge(0, vertices - 1, 2, -7);
+        const auto first = flow.run(0, vertices - 1, 1);
+        const auto second = flow.run(0, vertices - 1, 2);
+        assert(first.first == 1 && first.second == -7);
+        assert(second.first == 1 && second.second == -7);
     }
 }
 
@@ -212,6 +223,66 @@ void testMultipleRefuelsInOneDay() {
     assert(result.finalState.agents[0].pos == 5);
     // 5燃料分を燃料上限2で走るため、少なくとも2回の補給が必要。
     assert(result.finalState.agents[0].fuel == s.fuelLimit);
+    // 経路を途中で再検討しても、補給後の燃料と合法性を維持する。
+    cfg.macroReplanInterval = 1;
+    const auto replanned = brain1(s, ms, {}, cfg);
+    assert(replanned.success && replanned.finalState.dayUdon == 1);
+    assert(validateDailyPlan(s, ms, replanned.plan).valid);
+}
+
+void testCoordinatedPlanningAndCache() {
+    auto s = line(7, {8}, 2, {0, 6, 3},
+        {{1, 2, 1, -1}, {2, 4, 1, -1}, {3, 0, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Patrol, AgentKind::Supply});
+    auto cfg = smallBeam();
+    const auto cached = brain1(s, ms, {}, cfg);
+    cfg.assignmentCacheLimit = 0;
+    const auto uncached = brain1(s, ms, {}, cfg);
+    assert(cached.success && uncached.success);
+    assert(cached.plan == uncached.plan);
+    assert(cached.finalState == uncached.finalState);
+    assert(cached.assignmentCacheHits > 0);
+    assert(uncached.assignmentCacheHits == 0);
+    assert(cached.assignmentComputations < uncached.assignmentComputations);
+    cfg.assignmentCacheLimit = 1; // 小容量での消去も結果を変えない。
+    cfg.threadCount = 2;
+    cfg.parallelThreshold = 1;
+    const auto tiny = brain1(s, ms, {}, cfg);
+    assert(tiny.plan == cached.plan);
+    assert(validateDailyPlan(s, ms, tiny.plan).valid);
+
+    s = line(5, {8}, 2, {0, 4, 2}, {{1, 1, 1, -1}, {2, 3, 1, -1}});
+    ms = stateFor(s, {AgentKind::Patrol, AgentKind::Patrol, AgentKind::Supply});
+    ms.agents[0].fuel = ms.agents[1].fuel = 0;
+    cfg = smallBeam();
+    const auto conflict = brain1(s, ms, {}, cfg);
+    assert(conflict.success && conflict.repairedAssignments > 0);
+    assert(validateDailyPlan(s, ms, conflict.plan).valid);
+}
+
+void testDetourRendezvousAndTwoSpots() {
+    // 時間・燃料が等しい目的地経路のうち、添字の小さい経路は
+    // 補給車から遠い。下側の経路で合流すれば4ステップで取得できる。
+    auto s = line(3, {4}, 1, {0, 3}, {});
+    s.field.height = 2;
+    s.field.cells.assign(6, {CellType::Plain, -1});
+    s.field.spots = {{1, 5, 1, -1}};
+    assert(s.field.rebuildSpotIndex());
+    auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    auto cfg = smallBeam();
+    const auto detour = brain1(s, ms, {}, cfg);
+    assert(detour.success && detour.finalState.dayUdon == 1);
+    assert(detour.detourPlans > 0);
+    assert(validateDailyPlan(s, ms, detour.plan).valid);
+
+    s = line(5, {8}, 4, {2}, {{1, 1, 1, -1}, {2, 0, 1, -1}, {3, 4, 1, -1}});
+    ms = stateFor(s, {AgentKind::Patrol});
+    cfg.beamWidth = 1;
+    cfg.jointBeamWidth = 1;
+    cfg.maxActionsPerAgent = 1;
+    const auto two = brain1(s, ms, {}, cfg);
+    assert(two.success && two.finalState.dayUdon >= 2);
+    assert(validateDailyPlan(s, ms, two.plan).valid);
 }
 
 void testTrialsAndTuning() {
@@ -301,6 +372,8 @@ int main() {
     testFuelTimeTradeoff();
     testRendezvousObstaclesAndMultipleSupplies();
     testMultipleRefuelsInOneDay();
+    testCoordinatedPlanningAndCache();
+    testDetourRendezvousAndTwoSpots();
     testTrialsAndTuning();
     testConsoleReport();
 }

@@ -20,6 +20,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <tuple>
@@ -60,6 +61,15 @@ struct BeamSearchConfig {
     bool autoTuneWeights = true;
     bool useMacroActions = true;
     std::size_t macroTargetLimit = 3;
+    // マクロ継続を残しつつ、定期的に別経路も探索する。0なら再検討しない。
+    std::size_t macroReplanInterval = 0;
+    bool coordinatedAssignments = true;
+    bool detourRendezvous = true;
+    bool twoSpotLookahead = true;
+    std::size_t assignmentCacheLimit = 4096;
+    std::size_t detourCandidateLimit = 6;
+    std::size_t lookaheadCandidateLimit = 6;
+    bool profilePlanning = false;
     bool dominancePruning = true;
     // 上位解を残しつつ、この割合を異なる系列・位置の候補へ確保する。
     double diversityFraction = 0.25;
@@ -81,6 +91,13 @@ struct BeamSearchResult {
     std::size_t reusedEvaluations = 0;
     std::size_t macroCandidates = 0;
     std::size_t macroContinuations = 0;
+    std::size_t assignmentCacheHits = 0;
+    std::size_t assignmentComputations = 0;
+    std::size_t repairedAssignments = 0;
+    std::size_t detourPlans = 0;
+    std::int64_t assignmentTimeNs = 0;
+    std::int64_t flowTimeNs = 0;
+    std::int64_t rendezvousTimeNs = 0;
     SearchStopReason stopReason = SearchStopReason::NoValidPlan;
     std::int64_t elapsedMs = 0;
 };
@@ -98,12 +115,35 @@ private:
         CellPos next = kInvalidCell;
     };
 
+    struct AssignmentCache;
+    struct PlanningTimings {
+        std::atomic<std::int64_t> assignment{0}, flow{0}, rendezvous{0};
+    };
+    class TimedPlanningScope {
+        std::atomic<std::int64_t>* counter_;
+        std::chrono::steady_clock::time_point started_;
+    public:
+        explicit TimedPlanningScope(std::atomic<std::int64_t>* counter)
+            : counter_(counter) {
+            if (counter_) started_ = std::chrono::steady_clock::now();
+        }
+        ~TimedPlanningScope() {
+            if (counter_) counter_->fetch_add(std::chrono::duration_cast<
+                std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started_).count(),
+                std::memory_order_relaxed);
+        }
+    };
     struct SpotDistanceTables {
         DistanceMatrix travel;
         std::vector<std::vector<CellPos>> firstHop;
         DistanceMatrix steps;
         DistanceMatrix fuel;
         std::vector<std::vector<std::vector<PathLabel>>> pareto;
+        BeamSearchConfig planning{};
+        std::shared_ptr<AssignmentCache> assignments;
+        std::shared_ptr<PlanningTimings> timings;
+        std::function<bool()> stop;
+        std::vector<std::vector<std::size_t>> nextSpots;
     };
 
     struct PatrolTarget {
@@ -122,9 +162,30 @@ private:
         std::int32_t fuelShortage = 0;
         std::int32_t goalArrival = kImpassableCost;
         PathLabel path{};
+        // 目的地への非劣経路から外れて合流する場合の巡回車経路。
+        std::shared_ptr<const AgentPlan> detourPrefix;
         bool required = false;
         bool repeatedRefuelRequired = false;
         bool valid = false;
+    };
+
+    // 1回の共同割当内では位置・燃料・予約・残時間は変わらない。
+    // 仮取得で変わる在庫・得点は合流経路計算には使われない。
+    struct RendezvousMemo {
+        static constexpr std::uint16_t missing = std::numeric_limits<std::uint16_t>::max();
+        std::array<std::uint16_t, kMaxAgents * kMaxSpots * (kMaxAgents + 1)> indices{};
+        std::vector<RendezvousPlan> plans;
+        AgentIndex soleSupply = kMaxAgents;
+
+        void reset(const GameState& state) {
+            indices.fill(missing);
+            plans.clear();
+            soleSupply = kMaxAgents;
+            std::size_t count = 0;
+            for (AgentIndex a = 0; a < state.agentCount; ++a)
+                if (state.agents[a].isSupply()) { soleSupply = a; ++count; }
+            if (count != 1) soleSupply = kMaxAgents;
+        }
     };
 
     struct ActionRecord {
@@ -559,6 +620,8 @@ private:
                 distances.pareto[spotIndex].size()) {
             return nullptr;
         }
+        if (distances.steps[spotIndex][from] > maxSteps ||
+            distances.fuel[spotIndex][from] > maxFuel) return nullptr;
         const PathLabel* best = nullptr;
         for (const PathLabel& label : distances.pareto[spotIndex][
                  static_cast<std::size_t>(from)]) {
@@ -629,6 +692,7 @@ private:
 
 
     using TargetAssignments = std::array<PatrolTarget, kMaxAgents>;
+    using ForbiddenTargets = std::array<std::array<bool, kMaxSpots>, kMaxAgents>;
 
     static std::int32_t projectedFuel(
         const GameState& state, AgentIndex a) noexcept {
@@ -650,7 +714,8 @@ private:
     static TargetAssignments assignPatrolTargets(
         const GameState& input, const MatchSetting& setting,
         const MatchState& matchState, const SpotDistanceTables& dist,
-        bool currentDay = true) {
+        bool currentDay = true, const ForbiddenTargets* forbidden = nullptr,
+        RendezvousMemo* memo = nullptr) {
         GameState state = input;
         // 現在の予約に基づく次ステップの取得を仮予約し、その先を割り当てる。
         // 他車のstep 1到着も添字順に反映する。実状態は変更しない。
@@ -677,13 +742,21 @@ private:
         const int brands = static_cast<int>(setting.field.brands.size());
         const int spotBase = n + 1, brandBase = spotBase + spots;
         const int sink = brandBase + brands;
-        MinCostFlow flow(sink + 1);
+        // 巡回先用と補給割当用は別workspace。スレッドごとに保持し、
+        // 探索状態間でネットワークの辺・最短路バッファだけを再利用する。
+        static thread_local MinCostFlow flow(0);
+        flow.reset(sink + 1);
+        flow.reserveEdges(0, n);
+        for (int a = 0; a < n; ++a) flow.reserveEdges(a + 1, spots + 2);
+        for (int i = 0; i < spots; ++i) flow.reserveEdges(spotBase + i, n + 1);
         std::array<std::array<int, kMaxSpots>, kMaxAgents> edges{};
         std::array<std::array<std::int32_t, kMaxSpots>, kMaxAgents> times{};
         for (auto& row : edges) row.fill(-1);
         const std::int64_t timeBound = std::max<std::int64_t>(
             state.dayStepLimit, 4LL * setting.field.cellCount());
-        const std::int64_t pickup = timeBound * (n + 1) + 1;
+        // 全車分の時間・先読み誘導値の差より1玉の報酬を大きくする。
+        const std::int64_t pickup = timeBound *
+            (currentDay && dist.planning.twoSpotLookahead ? 2 * n + 1 : n + 1) + 1;
         const std::int64_t daily = pickup * (n + 1);
         const std::int64_t fresh = daily * (n + 1);
         for (int a = 0; a < n; ++a) {
@@ -695,27 +768,62 @@ private:
             const int available = currentDay
                 ? state.remainingSteps() - delay : kImpassableCost - 1;
             for (int i = 0; i < spots; ++i) {
+                if (forbidden && (*forbidden)[a][i]) continue;
                 if (currentDay && (state.remainingStocks[i] <= 0 ||
                                    state.hasAcquired(a, i))) continue;
                 int travel = dist.steps[i][from];
                 if (travel >= kImpassableCost || travel > available) continue;
+                int arrivalFuel = 0;
                 if (currentDay) {
                     const auto* direct = constrainedPath(
                         dist, i, from, available, projectedFuel(state, a));
                     if (direct) {
                         travel = direct->steps;
+                        arrivalFuel = projectedFuel(state, a) - direct->fuel;
                     } else {
                         const PatrolTarget target{
                             static_cast<std::size_t>(i), 0, travel, true};
                         const auto meet = findRendezvous(
-                            state, a, target, setting, matchState, dist);
+                            state, a, target, setting, matchState, dist, kMaxAgents, memo);
                         if (!meet.valid) continue;
                         travel = meet.goalArrival - delay;
+                        const int at = std::max({meet.patrolArrival,
+                            meet.supplyArrival, state.step == 0 ? 1 : 0});
+                        const auto* suffix = constrainedPath(dist, i, meet.pos,
+                            state.remainingSteps() - at, setting.fuelLimit);
+                        if (suffix) arrivalFuel = setting.fuelLimit - suffix->fuel;
+                    }
+                }
+                // 次の1店も時間・残燃料内で到達できる場合だけ先読みする。
+                // 即時取得の辞書順を覆さない範囲で、巡回順序を誘導する。
+                std::int64_t continuation = 0;
+                if (currentDay && dist.planning.twoSpotLookahead) {
+                    const int left = available - travel;
+                    const auto firstBrand = setting.field.spots[i].brandIndex;
+                    std::size_t checked = 0;
+                    for (const auto next : dist.nextSpots[i]) {
+                        const int j = static_cast<int>(next);
+                        if (j == i || state.remainingStocks[j] <= 0 ||
+                            state.hasAcquired(a, j)) continue;
+                        if (checked++ >= dist.planning.lookaheadCandidateLimit) break;
+                        if (dist.steps[j][setting.field.spots[i].pos] > left) break;
+                        const auto* second = constrainedPath(dist, j,
+                            setting.field.spots[i].pos, left, arrivalFuel);
+                        if (!second) continue;
+                        const auto b = setting.field.spots[j].brandIndex;
+                        const auto bit = brandBit(b);
+                        const int value = b != firstBrand &&
+                            (state.score.matchBrands & bit) == 0 ? 3 :
+                            (b != firstBrand && (state.dayBrands & bit) == 0 ? 2 : 1);
+                        continuation = std::max(continuation,
+                            std::min(timeBound / 2,
+                                static_cast<std::int64_t>(value) *
+                                (left - second->steps + 1)));
                     }
                 }
                 times[a][i] = travel;
                 edges[a][i] = flow.addEdge(
-                    a + 1, spotBase + i, 1, travel - pickup);
+                    a + 1, spotBase + i, 1, travel - pickup - continuation);
             }
         }
         for (int i = 0; i < spots; ++i) {
@@ -731,7 +839,10 @@ private:
             flow.addEdge(brandBase + b, sink, 1, -reward);
             flow.addEdge(brandBase + b, sink, n, 0);
         }
-        flow.run(0, sink, n);
+        {
+            TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->flow : nullptr);
+            flow.run(0, sink, n);
+        }
         std::array<AgentIndex, kMaxBrands> owners{};
         owners.fill(kMaxAgents);
         for (int a = 0; a < n; ++a) {
@@ -769,7 +880,21 @@ private:
         const GameState& state, AgentIndex patrolIndex,
         const PatrolTarget& target, const MatchSetting& setting,
         const MatchState& matchState, const SpotDistanceTables& dist,
-        AgentIndex onlySupply = kMaxAgents) noexcept {
+        AgentIndex onlySupply = kMaxAgents, RendezvousMemo* memo = nullptr) {
+        if (memo && target.valid) {
+            if (onlySupply == kMaxAgents && memo->soleSupply < kMaxAgents)
+                onlySupply = memo->soleSupply;
+            const auto key = (patrolIndex * kMaxSpots + target.spotIndex) *
+                (kMaxAgents + 1) + onlySupply;
+            const auto index = memo->indices[key];
+            if (index != RendezvousMemo::missing) return memo->plans[index];
+            const auto result = findRendezvous(state, patrolIndex, target,
+                setting, matchState, dist, onlySupply);
+            memo->indices[key] = static_cast<std::uint16_t>(memo->plans.size());
+            memo->plans.push_back(result);
+            return result;
+        }
+        TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->rendezvous : nullptr);
         RendezvousPlan best;
         if (!target.valid || !state.agents[patrolIndex].isPatrol()) return best;
         const CellPos start = projectedPosition(state, patrolIndex);
@@ -811,6 +936,9 @@ private:
                     }
                     const int goalArrival = meetAt +
                         (suffix != nullptr ? suffix->steps : label->steps);
+                    // 直接到達できる車を、任意の補給で遅らせない。
+                    if (direct != nullptr &&
+                        goalArrival > delay + direct->steps) continue;
                     const int wait = meetAt - arrival;
                     const int bestWait = best.valid
                         ? std::max({best.patrolArrival, best.supplyArrival,
@@ -853,6 +981,68 @@ private:
                 cell = next;
             }
         }
+        // 巡回車だけの時間・燃料では劣る迂回でも、補給車に近づくことで
+        // 合流込みでは早くなる。到着時刻の下界で候補を絞って実経路を確認。
+        if (best.required && !best.valid && dist.planning.detourRendezvous &&
+            dist.planning.detourCandidateLimit > 0 && fuel > 0) {
+            using Candidate = std::tuple<int, int, AgentIndex, CellPos>;
+            std::vector<Candidate> candidates;
+            for (AgentIndex q = 0; q < state.agentCount; ++q) {
+                if (!state.agents[q].isSupply() ||
+                    (onlySupply < kMaxAgents && q != onlySupply)) continue;
+                for (CellPos cell = 0;
+                     cell < static_cast<CellPos>(setting.field.cellCount()); ++cell) {
+                    const int patrol = dist.travel[start][cell];
+                    const int supply = dist.travel[projectedPosition(state, q)][cell];
+                    if (patrol >= kImpassableCost || supply >= kImpassableCost)
+                        continue;
+                    const int at = std::max({delay + patrol,
+                        projectedDelay(state, q) + supply, state.step == 0 ? 1 : 0});
+                    if (dist.fuel[target.spotIndex][cell] > setting.fuelLimit) continue;
+                    const int suffixSteps = dist.steps[target.spotIndex][cell];
+                    if (suffixSteps > available - at) continue;
+                    const int lower = at + suffixSteps;
+                    if (best.valid && lower >= best.goalArrival) continue;
+                    candidates.emplace_back(lower, supply, q, cell);
+                }
+            }
+            const auto retained = std::min(candidates.size(), dist.planning.detourCandidateLimit);
+            std::partial_sort(candidates.begin(), candidates.begin() +
+                static_cast<std::ptrdiff_t>(retained), candidates.end());
+            std::size_t checked = 0;
+            for (const auto& entry : candidates) {
+                if (checked++ >= dist.planning.detourCandidateLimit ||
+                    (dist.stop && dist.stop())) break;
+                const auto q = std::get<2>(entry);
+                const auto cell = std::get<3>(entry);
+                const auto prefix = Brain0::shortestFuelConstrainedPath(
+                    setting, matchState, start, cell, AgentKind::Patrol,
+                    fuel, dist.stop);
+                if (!prefix.reachable) continue;
+                const int arrival = delay + prefix.cost.steps;
+                const int supply = std::get<1>(entry);
+                const int supplyArrival = projectedDelay(state, q) + supply;
+                const int at = std::max({arrival, supplyArrival,
+                                        state.step == 0 ? 1 : 0});
+                const auto* suffix = constrainedPath(dist, target.spotIndex,
+                    cell, available - at, setting.fuelLimit);
+                if (!suffix) continue;
+                const int goalArrival = at + suffix->steps;
+                if (best.valid && goalArrival >= best.goalArrival) continue;
+                AgentPlan actions;
+                for (const auto direction : prefix.directions)
+                    actions.push_back(static_cast<int>(direction));
+                best.pos = cell;
+                best.supply = q;
+                best.patrolArrival = arrival;
+                best.supplyArrival = supplyArrival;
+                best.supplyTravel = supply;
+                best.goalArrival = goalArrival;
+                best.detourPrefix = std::make_shared<const AgentPlan>(std::move(actions));
+                best.repeatedRefuelRequired = false;
+                best.valid = true;
+            }
+        }
         return best;
     }
 
@@ -863,10 +1053,12 @@ private:
     static RendezvousAssignments assignRendezvous(
         const GameState& state, const MatchSetting& setting,
         const MatchState& matchState, const SpotDistanceTables& dist,
-        const TargetAssignments& targets) {
+        const TargetAssignments& targets, RendezvousMemo* memo = nullptr) {
         RendezvousAssignments result{};
         const int n = static_cast<int>(state.agentCount), sink = 2 * n + 1;
-        MinCostFlow flow(sink + 1);
+        static thread_local MinCostFlow flow(0);
+        flow.reset(sink + 1);
+        for (int vertex = 0; vertex <= sink; ++vertex) flow.reserveEdges(vertex, n + 2);
         std::array<std::array<RendezvousPlan, kMaxAgents>, kMaxAgents> pairs{};
         std::array<std::array<int, kMaxAgents>, kMaxAgents> edges{};
         for (auto& row : edges) row.fill(-1);
@@ -886,7 +1078,7 @@ private:
                 auto& meet = pairs[p][q];
                 if (targets[p].valid) {
                     meet = findRendezvous(
-                        state, p, targets[p], setting, matchState, dist, q);
+                        state, p, targets[p], setting, matchState, dist, q, memo);
                 } else if (setting.field.at(pos).hasSpot() && fuel < setting.fuelLimit) {
                     const int travel = dist.travel[projectedPosition(state, q)][pos];
                     const int arrival = projectedDelay(state, q) + travel;
@@ -907,17 +1099,89 @@ private:
                 const int wait = std::max(0, meet.supplyArrival - meet.patrolArrival);
                 const std::int64_t reward = benefit +
                     (meet.required ? benefit * (n + 1) : 0) +
+                    (meet.required && targets[p].valid
+                         ? benefit * (2 - targets[p].priority) : 0) +
                     unit * meet.fuelShortage;
                 edges[p][q] = flow.addEdge(
                     p + 1, n + 1 + q, 1,
-                    4LL * wait + meet.supplyTravel - reward);
+                    4LL * meet.goalArrival + 4LL * wait +
+                        meet.supplyTravel - reward);
             }
         }
-        flow.run(0, sink, n);
+        {
+            TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->flow : nullptr);
+            flow.run(0, sink, n);
+        }
         for (int p = 0; p < n; ++p)
             for (int q = 0; q < n; ++q)
                 if (edges[p][q] >= 0 && flow.capacity(p + 1, edges[p][q]) == 0)
                     result[p] = pairs[p][q];
+        return result;
+    }
+
+    struct Assignments {
+        TargetAssignments targets{};
+        RendezvousAssignments meets{};
+    };
+
+    struct AssignmentCache {
+        std::mutex mutex;
+        std::unordered_map<GameState, Assignments, GameStateHash, GameStateEqual> entries;
+        std::atomic<std::size_t> hits{0};
+        std::atomic<std::size_t> computations{0};
+        std::atomic<std::size_t> repairs{0};
+        std::atomic<std::size_t> detours{0};
+    };
+
+    static Assignments coordinatedAssignments(
+        const GameState& state, const MatchSetting& setting,
+        const MatchState& matchState, const SpotDistanceTables& dist) {
+        const auto key = canonicalSearchState(state);
+        auto& cache = *dist.assignments;
+        if (dist.planning.assignmentCacheLimit > 0) {
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            const auto found = cache.entries.find(key);
+            if (found != cache.entries.end()) {
+                ++cache.hits;
+                return found->second;
+            }
+        }
+        ++cache.computations;
+        TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->assignment : nullptr);
+        Assignments result;
+        static thread_local RendezvousMemo memo;
+        memo.reset(state);
+        ForbiddenTargets forbidden{};
+        for (std::size_t round = 0; round <= state.agentCount; ++round) {
+            result.targets = assignPatrolTargets(
+                state, setting, matchState, dist, true, &forbidden, &memo);
+            result.meets = assignRendezvous(
+                state, setting, matchState, dist, result.targets, &memo);
+            if (!dist.planning.coordinatedAssignments) break;
+            bool retry = false;
+            for (AgentIndex a = 0; a < state.agentCount; ++a) {
+                const auto target = result.targets[a];
+                if (!target.valid) continue;
+                const auto* direct = constrainedPath(dist, target.spotIndex,
+                    projectedPosition(state, a),
+                    state.remainingSteps() - projectedDelay(state, a),
+                    projectedFuel(state, a));
+                if (direct || result.meets[a].valid) continue;
+                forbidden[a][target.spotIndex] = true;
+                ++cache.repairs;
+                result.targets[a] = PatrolTarget{};
+                retry = true;
+            }
+            if (!retry || (dist.stop && dist.stop())) break;
+        }
+        for (const auto& meet : result.meets)
+            if (meet.detourPrefix) ++cache.detours;
+        if (dist.planning.assignmentCacheLimit > 0) {
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            if (cache.entries.size() >= dist.planning.assignmentCacheLimit)
+                cache.entries.clear();
+            cache.entries.emplace(key, result);
+        }
         return result;
     }
 
@@ -931,14 +1195,9 @@ private:
         context.scoreAtDayStart = scoreAtDayStart;
         std::array<std::int32_t, kMaxAgents> targets{};
         targets.fill(-1);
-        const TargetAssignments assignedTargets = assignPatrolTargets(
-            state, setting, matchState, spotDistances);
-        const RendezvousAssignments assignedRendezvous = assignRendezvous(
-            state,
-            setting,
-            matchState,
-            spotDistances,
-            assignedTargets);
+        const auto assignment = coordinatedAssignments(state, setting, matchState, spotDistances);
+        const auto& assignedTargets = assignment.targets;
+        const auto& assignedRendezvous = assignment.meets;
 
         for (AgentIndex agentIndex = 0;
              agentIndex < state.agentCount;
@@ -1286,8 +1545,9 @@ private:
             const auto& meet = meets[a];
             if (meet.valid && targets[a].valid) {
                 const auto i = targets[a].spotIndex;
-                auto route = routeTo(s, ms, dist, agent.pos, meet.pos,
-                    agent.kind, available, agent.fuel, i, &meet.path);
+                auto route = meet.detourPrefix ? *meet.detourPrefix :
+                    routeTo(s, ms, dist, agent.pos, meet.pos,
+                        agent.kind, available, agent.fuel, i, &meet.path);
                 CellPos reached = agent.pos;
                 int elapsed = 0;
                 for (const int action : route) {
@@ -1455,6 +1715,8 @@ public:
         using Clock = std::chrono::steady_clock;
         const auto started = Clock::now();
         BeamSearchResult res;
+        auto assignmentCache = std::make_shared<AssignmentCache>();
+        auto planningTimings = std::make_shared<PlanningTimings>();
         std::atomic<std::size_t> fullEvaluationCount{0};
         std::atomic<std::size_t> reusedEvaluationCount{0};
         auto finish = [&](SearchStopReason reason) {
@@ -1468,6 +1730,13 @@ public:
                 fullEvaluationCount.load(std::memory_order_relaxed);
             res.reusedEvaluations =
                 reusedEvaluationCount.load(std::memory_order_relaxed);
+            res.assignmentCacheHits = assignmentCache->hits.load();
+            res.assignmentComputations = assignmentCache->computations.load();
+            res.repairedAssignments = assignmentCache->repairs.load();
+            res.detourPlans = assignmentCache->detours.load();
+            res.assignmentTimeNs = planningTimings->assignment.load();
+            res.flowTimeNs = planningTimings->flow.load();
+            res.rendezvousTimeNs = planningTimings->rendezvous.load();
             return res;
         };
 
@@ -1598,17 +1867,31 @@ public:
         }
 
         bool prepStopped = false;
-        const SpotDistanceTables spotDist = buildSpotDistances(
+        SpotDistanceTables spotDist = buildSpotDistances(
             s,
             ms,
             [&]() { return expired(); },
             threadCount,
             executor,
             prepStopped);
+        spotDist.planning = cfg;
+        spotDist.assignments = assignmentCache;
+        spotDist.timings = planningTimings;
+        spotDist.stop = [&]() { return expired(); };
         if (prepStopped) {
             return finish(
                 hasBest ? SearchStopReason::TimeLimit
                         : SearchStopReason::NoValidPlan);
+        }
+        spotDist.nextSpots.resize(s.field.spots.size());
+        for (std::size_t i = 0; i < s.field.spots.size(); ++i) {
+            auto& next = spotDist.nextSpots[i];
+            for (std::size_t j = 0; j < s.field.spots.size(); ++j)
+                if (j != i) next.push_back(j);
+            std::sort(next.begin(), next.end(), [&](std::size_t lhs, std::size_t rhs) {
+                return std::make_pair(spotDist.steps[lhs][s.field.spots[i].pos], lhs) <
+                       std::make_pair(spotDist.steps[rhs][s.field.spots[i].pos], rhs);
+            });
         }
         BeamNode root;
         root.state = init;
@@ -1737,13 +2020,27 @@ public:
                             child.serial = nextSerial++;
                             ++res.macroContinuations;
                             staged.push_back(std::move(child));
-                            continue;
+                            // 継続候補は必ず残す。一定間隔では予約済み経路を
+                            // 中断する候補も作り、在庫・合流の変化に追従する。
+                            const CellPos aim = node.aims[a];
+                            const bool depletedTarget =
+                                node.state.agents[a].isPatrol() &&
+                                s.field.contains(aim) &&
+                                s.field.at(aim).hasSpot() &&
+                                node.state.remainingStocks[
+                                    s.field.at(aim).spotIndex] == 0;
+                            const bool periodicReplan =
+                                cfg.macroReplanInterval != 0 &&
+                                eventStep % cfg.macroReplanInterval == 0;
+                            if (!depletedTarget && !periodicReplan)
+                                continue;
                         }
                         // 補給予定が実現しなかった等の場合は、その場から再計画。
                     }
 
-                    const auto targets = assignPatrolTargets(node.state, s, ms, spotDist);
-                    const auto meets = assignRendezvous(node.state, s, ms, spotDist, targets);
+                    const auto assignment = coordinatedAssignments(node.state, s, ms, spotDist);
+                    const auto& targets = assignment.targets;
+                    const auto& meets = assignment.meets;
 
                     constexpr std::array<std::int32_t, 7> actions = {
                         0, 1, 2, 3, 4, 5, -1,

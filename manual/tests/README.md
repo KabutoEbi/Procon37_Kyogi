@@ -9,7 +9,7 @@
 | [`algorithm_test.cpp`](algorithm_test.md) | 低レベル探索アルゴリズムと最適化の回帰テスト |
 | [`model_test.cpp`](model_test.md) | モデルから複数日実行までの総合回帰テスト |
 | [`sample_maps_test.cpp`](sample_maps_test.md) | `sample_maps/`を使うスモークテスト |
-| [`solver_benchmark.cpp`](solver_benchmark.md) | マクロ行動の速度・探索量比較 |
+| [`solver_benchmark.cpp`](solver_benchmark.md) | 複数シード・全日程・交通変化・機能別の得点と速度比較 |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
 | [`visualizer_gui_test.py`](visualizer_gui_test.md) | Tk上での手動通信確認・自動進行テスト |
