@@ -40,4 +40,16 @@ python3 server_client/auto_submit.py \
   --timeout 10
 ```
 
-途中で失敗した場合は終了コード1となる。現状は途中日から自動再開する機能を持たないため、ログ、受理済みrevision、チェックポイントを確認してから手動で続行する。
+途中で失敗した場合は終了コード1となる。停止位置は`automatic-progress.json`へ保存され、GUIと共通のバックエンドで復旧できる。
+
+```sh
+python3 server_client/auto_submit.py --work-dir runtime --resume
+```
+
+同じ接続先・TOKEN・作業フォルダを指定し、保存ファイルを変更しないこと。POST結果不明の場合、明示再開時だけ同じ日・状態・回答を再送する。日が進んだ場合や締切後は得点を確定せず停止する。受理記録があればPOSTせずチェックポイントを復元する。別の回答への置換は拒否する。種別送信も同じ保存済み候補だけを使用し、開始締切後には再送しない。
+
+`--start-day N --checkpoint score-dayN.json`で指定日から開始することもできる。新規開始は未使用の作業フォルダで行い、再試合もフォルダを分ける。同じフォルダをGUIとCLIから同時に操作しない。
+
+`--time-limit-ms`（既定5000）、`--send-reserve-ms`（既定12000）、`--clock-margin-ms`（既定1000）を指定できる。サーバー締切から通信timeout＋時刻余裕＋保存余裕以上を確保する。POSTのtimeoutは残時間以内に短縮し、締切後は送信を開始しない。余裕不足時やソルバーが返らない場合は停止する。時刻同期と実サーバー通信試験は別途必要。
+
+追加保存物: `submission-*.json`（pending／acceptedとrevision）、`submitted-*.json`（不変の回答・種別・得点候補）。これらの削除による強制再開は行わない。

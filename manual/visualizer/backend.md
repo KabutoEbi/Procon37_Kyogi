@@ -46,4 +46,8 @@ finally:
 
 ## 自動フローの停止
 
-`AutomaticMatch`は`setting → select → send_agents → state → solve → send_answer`の段階を保持する。`threading.Event`による停止では探索プロセスも終了する。POST直前から応答確認までを自動再開不可として扱い、受理結果が不明な回答を勝手に再送しない。
+`AutomaticMatch`は`setting → select → send_agents → state → solve → send_answer`を`automatic-progress.json`へ原子的に保存する。`restore()`は接続先・TOKENのハッシュと使用ファイルのハッシュを検査して復旧する。`threading.Event`による停止では探索プロセスも終了する。
+
+POST前に`submission-agents.json`／`submission-dayN.json`と不変の候補`submitted-*.json`を保存する。受理記録を先に保存し、その後にチェックポイントを確定するため、途中終了しても受理済み候補から復元できる。結果不明の別回答への置換を拒否し、明示再開時だけ当日状態を再取得して同一回答を再送する。締切後や日程進行後は未確定のまま停止する。APIには最後の有効回答を照会する機能がないため、その場合の自動確定は行わない。
+
+サーバー締切がある場合、`max(safety_margin_ms, send_reserve_ms, timeout*1000 + clock_margin_ms + 1200)`を探索から確保する。相対探索予算を保つためCLIへ渡す相対上限を補正する。プロセス監視とPOST直前・レート制限待機後の締切検査も行う。時刻差は指定余裕で吸収する方式で、自動同期や受理保証ではない。同じ作業フォルダの同時使用は禁止。

@@ -103,6 +103,13 @@ class BackendTest(unittest.TestCase):
             self.assertEqual(checkpoint.read_text(encoding="utf-8"), '{"nextDay":1}\n')
 
             checkpoint.unlink()
+            with mock.patch("backend.send") as post:
+                workflow.send_answer(0, answer, score)
+                post.assert_not_called()
+            self.assertTrue(checkpoint.exists())
+
+            checkpoint.unlink()
+            (work / "submission-day0.json").unlink()
             with mock.patch("backend.send", side_effect=WorkflowError("rejected")):
                 with self.assertRaises(WorkflowError):
                     workflow.send_answer(0, answer, score)
@@ -309,7 +316,8 @@ class BackendTest(unittest.TestCase):
             self.assertIn("beam-width=16 joint-beam-width=64 threads=1 time-limit-ms=200", logs)
             current_day = 2
             requests.clear()
-            continuation = AutomaticMatch(w, lambda *_: None, start_day=2,
+            resumed = Workflow(w.connection, w.solver, work / "resumed", w.parameters)
+            continuation = AutomaticMatch(resumed, lambda *_: None, start_day=2,
                                           checkpoint=work / "score-day2.json")
             with mock.patch.object(get_problem.urllib.request, "urlopen", side_effect=http):
                 continuation.run()

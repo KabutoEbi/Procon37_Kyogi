@@ -1,27 +1,17 @@
 #!/usr/bin/env python3
-"""設定取得、種別送信、全日探索・送信を自動実行する。"""
+"""全日程の自動送信。--resumeで保存済み停止位置から復旧する。"""
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
 
-from get_problem import ApiError, load_configured_dotenv, wait_and_fetch
-from send_answer import send
-
-
-def run_solver(solver: Path, arguments: list[str], work_dir: Path) -> None:
-    command = [str(solver), *arguments]
-    completed = subprocess.run(command, cwd=work_dir, check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"solver exited with status {completed.returncode}: {command}")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "visualizer"))
+from backend import (AutomaticMatch, ConnectionConfig, SearchParameters,
+                     Workflow, WorkflowError, read_json)
+from get_problem import load_configured_dotenv
 
 
 def parser() -> argparse.ArgumentParser:
@@ -34,107 +24,54 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--wait", type=float, default=3600.0)
     result.add_argument("--interval", type=float, default=0.5)
     result.add_argument("--timeout", type=float, default=10.0)
+    result.add_argument("--resume", action="store_true",
+                        help="送信結果不明の場合は同じ日・同じ回答だけを再送")
+    result.add_argument("--start-day", type=int)
+    result.add_argument("--checkpoint", type=Path)
+    result.add_argument("--time-limit-ms", type=int, default=5000)
+    result.add_argument("--send-reserve-ms", type=int, default=12000)
+    result.add_argument("--clock-margin-ms", type=int, default=1000)
     return result
 
 
 def main() -> int:
     load_configured_dotenv()
     args = parser().parse_args()
-    if not args.url or not args.token:
-        print("--url/PROCON_URL and --token/PROCON_TOKEN are required", file=sys.stderr)
-        return 2
-    if args.interval < 0.2:
-        print("--interval must be at least 0.2 seconds", file=sys.stderr)
-        return 2
-
-    solver = args.solver.expanduser().resolve()
-    if not solver.is_file():
-        print(f"solver not found: {solver}", file=sys.stderr)
-        return 2
-    work_dir = args.work_dir.expanduser().resolve()
-    work_dir.mkdir(parents=True, exist_ok=True)
-    log_dir = work_dir / "logs"
-    setting_path = work_dir / "setting.json"
-    agents_path = work_dir / "agents.json"
-
     try:
-        setting = wait_and_fetch(
-            args.url,
-            args.token,
-            "setting",
-            setting_path,
-            wait_seconds=args.wait,
-            interval=args.interval,
-            timeout=args.timeout,
-            log_dir=log_dir,
-        )
-        run_solver(
-            solver,
-            ["select", str(setting_path), str(agents_path)],
-            work_dir,
-        )
-        send(
-            args.url,
-            args.token,
-            "agent",
-            agents_path,
-            timeout=args.timeout,
-            log_dir=log_dir,
-        )
-        print("agent kinds accepted", flush=True)
+        if args.resume and (args.start_day is not None or args.checkpoint is not None):
+            raise WorkflowError("--resume cannot be combined with --start-day/--checkpoint")
+        connection = ConnectionConfig(args.url or "", args.token or "", args.timeout)
+        connection.validate()
+        parameters = SearchParameters(time_limit_ms=args.time_limit_ms,
+                                      send_reserve_ms=args.send_reserve_ms,
+                                      clock_margin_ms=args.clock_margin_ms)
+        parameters.arguments()
+        workflow = Workflow(connection, args.solver, args.work_dir, parameters)
+        if not workflow.solver.is_file():
+            raise WorkflowError(f"solver not found: {workflow.solver}")
+        if args.start_day is not None and args.start_day > 0:
+            if args.checkpoint is None or read_json(args.checkpoint).get("nextDay") != args.start_day:
+                raise WorkflowError("開始dayに対応する--checkpointが必要です")
 
-        day_count = len(setting.get("daySteps", []))
-        if day_count <= 0:
-            raise RuntimeError("setting has no days")
-        checkpoint: Path | None = None
-        for day in range(day_count):
-            state_path = work_dir / f"state-day{day}.json"
-            wait_and_fetch(
-                args.url,
-                args.token,
-                "state",
-                state_path,
-                wait_seconds=args.wait,
-                interval=args.interval,
-                timeout=args.timeout,
-                log_dir=log_dir,
-                expected_day=day,
-            )
-            command = ["solve", str(setting_path), str(state_path)]
-            if checkpoint is not None:
-                command.append(str(checkpoint))
-            run_solver(solver, command, work_dir)
+        def emit(kind, value):
+            if kind in ("phase", "log"):
+                print(str(value).replace(connection.token, "[TOKEN]"), flush=True)
+            elif kind == "accepted":
+                revision, checkpoint, day = value
+                print(f"day={day - 1} accepted revision={revision} checkpoint={checkpoint.name}", flush=True)
 
-            answer = work_dir / "answer.json"
-            candidate_score = work_dir / "score-next.json"
-            archived_answer = work_dir / f"answer-day{day}.json"
-            shutil.copy2(answer, archived_answer)
-            revision = send(
-                args.url,
-                args.token,
-                "action",
-                archived_answer,
-                timeout=args.timeout,
-                log_dir=log_dir,
-            )
-            checkpoint = work_dir / f"score-day{day + 1}.json"
-            shutil.copy2(candidate_score, checkpoint)
-            print(
-                f"day={day} accepted revision={revision} "
-                f"checkpoint={checkpoint.name}",
-                flush=True,
-            )
-            if day + 1 < day_count:
-                time.sleep(args.interval)
-    except (
-        ApiError,
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as error:
-        print(f"error: {error}", file=sys.stderr)
+        if args.resume:
+            runner = AutomaticMatch.restore(workflow, emit, args.interval, args.wait)
+        else:
+            runner = AutomaticMatch(workflow, emit, args.start_day,
+                                    args.checkpoint.resolve() if args.checkpoint else None,
+                                    args.interval, args.wait)
+        runner.run()
+    except (WorkflowError, OSError, ValueError) as error:
+        message = str(error)
+        if args.token:
+            message = message.replace(args.token, "[TOKEN]")
+        print(f"error: {message}", file=sys.stderr)
         return 1
     return 0
 

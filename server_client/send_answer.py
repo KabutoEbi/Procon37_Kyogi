@@ -37,6 +37,7 @@ def send(
     *,
     timeout: float = 10.0,
     log_dir: Path | None = None,
+    deadline: float | None = None,
 ) -> int | None:
     payload = load_payload(kind, payload_path)
     endpoint = "/agent" if kind == "agent" else "/"
@@ -47,6 +48,7 @@ def send(
         method="POST",
         payload=payload,
         timeout=timeout,
+        deadline=deadline,
     )
     save_raw_log(log_dir, f"post-{kind}-response", raw)
     if status != 200:

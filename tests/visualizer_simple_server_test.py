@@ -56,6 +56,8 @@ class SimpleServerIntegrationTest(unittest.TestCase):
                     trial_beam_width=8,
                     trial_joint_beam_width=16,
                     selection_time_ms=600,
+                    send_reserve_ms=1000,
+                    clock_margin_ms=100,
                 )
                 work = root / "client"
                 workflow = Workflow(

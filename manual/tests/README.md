@@ -12,6 +12,7 @@
 | [`solver_benchmark.cpp`](solver_benchmark.md) | 複数シード・全日程・交通変化・機能別の得点と速度比較 |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
+| [`recovery_test.py`](recovery_test.md) | 永続復旧・同一回答再送・送信時間確保の回帰テスト |
 | [`visualizer_gui_test.py`](visualizer_gui_test.md) | Tk上での手動通信確認・自動進行テスト |
 | [`visualizer_runtime_test.py`](visualizer_runtime_test.md) | 対応するPython/Tkの選択テスト |
 | [`visualizer_simple_server_test.py`](visualizer_simple_server_test.md) | 同梱簡易サーバーと実ソルバーの結合テスト |

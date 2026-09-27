@@ -69,11 +69,16 @@ def request_json(
     method: str = "GET",
     payload: Any = None,
     timeout: float = 10.0,
+    deadline: float | None = None,
 ) -> tuple[Any, bytes, int]:
     global _last_request_at
     remaining = _minimum_request_interval - (time.monotonic() - _last_request_at)
     if remaining > 0:
         time.sleep(remaining)
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.time())
+        if timeout <= 0:
+            raise ApiError(0, "request deadline has passed (not sent)")
     url = base_url.rstrip("/") + endpoint
     data = None
     headers = {
@@ -97,6 +102,8 @@ def request_json(
         raise ApiError(error.code, f"HTTP {error.code}: {body}", body) from error
     except urllib.error.URLError as error:
         raise ApiError(0, f"connection failed: {error.reason}") from error
+    except (TimeoutError, OSError) as error:
+        raise ApiError(0, f"connection failed: {error}") from error
 
     if not raw.strip():
         return None, raw, status

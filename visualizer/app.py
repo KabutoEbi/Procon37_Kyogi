@@ -341,6 +341,8 @@ class SolverGUI(tk.Tk):
             ("trial_beam_width", "種別選択の試走ビーム幅", "1以上"),
             ("trial_joint_beam_width", "種別選択の同時行動幅", "1以上"),
             ("selection_time_ms", "種別選択時間上限 (ms)", "0: 相対制限なし"),
+            ("send_reserve_ms", "送信確保時間 (ms)", "通信timeout＋保存余裕以上を自動確保"),
+            ("clock_margin_ms", "時刻余裕 (ms)", "OSとサーバーの時刻ずれ用"),
         ]
         frame.columnconfigure(0, weight=1, uniform="parameter")
         frame.columnconfigure(1, weight=1, uniform="parameter")
@@ -814,10 +816,12 @@ class SolverGUI(tk.Tk):
             workflow.connection.validate()
             if self.scope_var.get() == "停止位置から再開":
                 runner = self._automatic
-                if runner is None or runner.phase == "done":
+                if runner is None:
+                    runner = AutomaticMatch.restore(
+                        workflow, lambda key, data: self._messages.put(("event", key, data)),
+                        float(self.interval_var.get()), float(self.wait_var.get()))
+                if runner.phase == "done":
                     raise WorkflowError("再開できる自動実行がありません")
-                if not runner.retryable:
-                    raise WorkflowError("送信が失敗しました。受理状況を確認し、手動操作で続行してください")
                 if (workflow.identity() != runner.workflow.identity()
                         or workflow.work_dir != runner.workflow.work_dir):
                     raise WorkflowError("再開時は同じ接続先・TOKEN・作業フォルダを使用してください")
