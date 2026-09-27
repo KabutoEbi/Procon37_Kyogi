@@ -4,6 +4,7 @@
 
 ## ディレクトリ
 
+- [`build.md`](build.md): Makefileによるビルド・一括テスト
 - [`inc/`](inc/): C++ヘッダーのAPIと利用例
 - [`tests/`](tests/): テスト・ベンチマーク・重み調整ツールのビルド方法
 - [`server_client/`](server_client/): 回答システムとの取得・送信・自動実行方法
@@ -14,7 +15,8 @@
 リポジトリ直下でソルバーをビルドする。
 
 ```sh
-c++ -std=c++17 -O2 -pthread main.cpp -o main
+make
+make test
 ```
 
 ローカルの問題を解くだけなら次のように実行する。

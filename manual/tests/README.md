@@ -21,18 +21,17 @@
 ## 回帰テストをまとめて実行
 
 ```sh
-for name in model_test algorithm_test sample_maps_test; do
-  c++ -std=c++17 -O2 -pthread -Iinc "tests/${name}.cpp" -o "/tmp/${name}"
-  "/tmp/${name}"
-done
+make -j3 test
 ```
 
-`model_test`と`algorithm_test`は成功時に出力しない。`sample_maps_test`は各マップの探索結果を表示する。3つとも終了コード0なら成功である。
+モデル・探索・引数・サンプルのC++4テストと、実ソルバー連携を含むPythonテストを実行する。どれかが失敗するとmakeも非ゼロで終了する。サンプルJSONが未配置ならエラーになるため、その環境では`make test-core`を使用する。
+
+`make test-all`でGUI表示・同梱簡易サーバー・ASan/UBSanも含めて実行できる。環境要件と個別ターゲットは[`ビルド手順`](../build.md)を参照。
 
 `solver_benchmark`と`tune_weights`は結果を比較・調整するためのツールなので、通常の回帰テストとは分けて実行する。
 
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 
 ```sh
-python3 -m unittest tests/visualizer_test.py
+make test-python
 ```
