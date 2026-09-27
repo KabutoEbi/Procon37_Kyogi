@@ -22,6 +22,6 @@
 | `--trial-beam-width`, `--trial-joint-beam-width` | 種別選択の試走幅 |
 | `--selection-time-ms` | 種別選択の相対時間上限 |
 
-`selectorFor(setting)`で盤面サイズに応じた既定時間上限と`startsAt`の締切を適用する。日次探索では`endsAt`も引き続き有効。時間オプションを省略した従来CLIの既定値は維持する。GUIは入力値を明示的に渡す。
+`selectorFor(setting)`で盤面サイズに応じた既定時間上限と`startsAt`の締切を適用する。種別選択の`minSupplyCount`は既定で1で、時間切れ時のフォールバックにも適用される。日次探索では`endsAt`も引き続き有効。時間オプションを省略した従来CLIの既定値は維持する。GUIは入力値を明示的に渡す。
 
 `positional`は元の`argv`へのポインタを保持するため、呼び出し側はその寿命を維持する。

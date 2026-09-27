@@ -141,34 +141,12 @@ class SolverGUI(tk.Tk):
             text="取得 → 種別選択 → 状態取得 → 探索 → 送信",
             foreground="#59636e",
         ).pack(side=tk.LEFT, padx=18)
-
-        config = ttk.LabelFrame(self, text="実行設定", padding=8)
-        self.config_frame = config
-        config.pack(fill=tk.X, padx=12, pady=(0, 8))
-        for column in (1, 4, 5):
-            config.columnconfigure(column, weight=1)
-
-        self._path_row(config, 0, 0, ".env", self.env_var, self._choose_env)
-        ttk.Button(config, text="再読込", command=self._reload_env).grid(
-            row=0, column=3, padx=(5, 14), sticky=tk.W
+        self.settings_button = ttk.Button(
+            header,
+            text="実行設定・使用ファイル",
+            command=self._show_settings_window,
         )
-        ttk.Label(config, text="URL").grid(row=0, column=4, sticky=tk.E, padx=(0, 5))
-        ttk.Entry(config, textvariable=self.url_var).grid(row=0, column=5, sticky=tk.EW)
-
-        self._path_row(config, 1, 0, "solver", self.solver_var, self._choose_solver)
-        self._path_row(config, 1, 3, "work", self.work_var, self._choose_work_dir)
-
-        ttk.Label(config, text="TOKEN").grid(row=2, column=0, sticky=tk.E, padx=(0, 5))
-        self.token_entry = ttk.Entry(config, textvariable=self.token_var)
-        self.token_entry.grid(
-            row=2, column=1, columnspan=2, sticky=tk.EW
-        )
-        ttk.Label(config, text="timeout(s)").grid(row=2, column=3, sticky=tk.E, padx=(12, 5))
-        ttk.Entry(config, textvariable=self.timeout_var, width=8).grid(row=2, column=4, sticky=tk.W)
-        check = ttk.Button(config, text="通信確認（手動）", command=self._check_connection)
-        check.grid(row=2, column=5, sticky=tk.E)
-        self._action_buttons.append(check)
-        self._build_file_panel(config)
+        self.settings_button.pack(side=tk.RIGHT)
 
         simple_row = ttk.Frame(self, padding=(12, 0, 12, 8))
         self.simple_row = simple_row
@@ -263,7 +241,65 @@ class SolverGUI(tk.Tk):
 
         status = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel", anchor=tk.W)
         status.pack(fill=tk.X, padx=8, pady=(0, 5))
+        self._build_settings_window()
         self._mode_changed()
+
+    def _build_settings_window(self) -> None:
+        window = tk.Toplevel(self)
+        self.settings_window = window
+        window.title("Procon37 実行設定・使用ファイル")
+        window.geometry("1000x300")
+        window.minsize(820, 260)
+        window.protocol("WM_DELETE_WINDOW", self._hide_settings_window)
+
+        header = ttk.Frame(window, padding=(12, 10, 12, 6))
+        header.pack(fill=tk.X)
+        ttk.Label(
+            header,
+            text="実行設定・使用ファイル",
+            style="Title.TLabel",
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            header,
+            text="閉じる",
+            command=self._hide_settings_window,
+        ).pack(side=tk.RIGHT)
+
+        config = ttk.LabelFrame(window, text="実行設定", padding=8)
+        self.config_frame = config
+        config.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        for column in (1, 4, 5):
+            config.columnconfigure(column, weight=1)
+
+        self._path_row(config, 0, 0, ".env", self.env_var, self._choose_env)
+        ttk.Button(config, text="再読込", command=self._reload_env).grid(
+            row=0, column=3, padx=(5, 14), sticky=tk.W
+        )
+        ttk.Label(config, text="URL").grid(row=0, column=4, sticky=tk.E, padx=(0, 5))
+        ttk.Entry(config, textvariable=self.url_var).grid(row=0, column=5, sticky=tk.EW)
+
+        self._path_row(config, 1, 0, "solver", self.solver_var, self._choose_solver)
+        self._path_row(config, 1, 3, "work", self.work_var, self._choose_work_dir)
+
+        ttk.Label(config, text="TOKEN").grid(row=2, column=0, sticky=tk.E, padx=(0, 5))
+        self.token_entry = ttk.Entry(config, textvariable=self.token_var)
+        self.token_entry.grid(row=2, column=1, columnspan=2, sticky=tk.EW)
+        ttk.Label(config, text="timeout(s)").grid(row=2, column=3, sticky=tk.E, padx=(12, 5))
+        ttk.Entry(config, textvariable=self.timeout_var, width=8).grid(row=2, column=4, sticky=tk.W)
+        check = ttk.Button(config, text="通信確認（手動）", command=self._check_connection)
+        check.grid(row=2, column=5, sticky=tk.E)
+        self._action_buttons.append(check)
+        self._build_file_panel(config)
+        window.withdraw()
+
+    def _show_settings_window(self) -> None:
+        self.settings_window.deiconify()
+        self.settings_window.lift()
+        self.settings_window.focus_force()
+
+    def _hide_settings_window(self) -> None:
+        self.settings_window.withdraw()
+        self.lift()
 
     def _toggle_simple_server(self) -> None:
         if self.simple_visible_var.get():
