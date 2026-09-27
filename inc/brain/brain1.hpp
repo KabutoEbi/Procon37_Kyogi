@@ -119,18 +119,20 @@ private:
     struct PlanningTimings {
         std::atomic<std::int64_t> assignment{0}, flow{0}, rendezvous{0};
     };
-    class TimedPlanningScope {
+    class PlanningTimer {
         std::atomic<std::int64_t>* counter_;
         std::chrono::steady_clock::time_point started_;
     public:
-        explicit TimedPlanningScope(std::atomic<std::int64_t>* counter)
+        explicit PlanningTimer(std::atomic<std::int64_t>* counter)
             : counter_(counter) {
             if (counter_) started_ = std::chrono::steady_clock::now();
         }
-        ~TimedPlanningScope() {
-            if (counter_) counter_->fetch_add(std::chrono::duration_cast<
-                std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started_).count(),
-                std::memory_order_relaxed);
+        ~PlanningTimer() {
+            if (!counter_) return;
+            const auto elapsed = std::chrono::steady_clock::now() - started_;
+            const auto ns = std::chrono::duration_cast<
+                std::chrono::nanoseconds>(elapsed).count();
+            counter_->fetch_add(ns, std::memory_order_relaxed);
         }
     };
     struct SpotDistanceTables {
@@ -165,7 +167,7 @@ private:
         // 目的地への非劣経路から外れて合流する場合の巡回車経路。
         std::shared_ptr<const AgentPlan> detourPrefix;
         bool required = false;
-        bool repeatedRefuelRequired = false;
+        bool needsRefuelAgain = false;
         bool valid = false;
     };
 
@@ -787,8 +789,8 @@ private:
                             state, a, target, setting, matchState, dist, kMaxAgents, memo);
                         if (!meet.valid) continue;
                         travel = meet.goalArrival - delay;
-                        const int at = std::max({meet.patrolArrival,
-                            meet.supplyArrival, state.step == 0 ? 1 : 0});
+                        const int at = meetingStep(
+                            state, meet.patrolArrival, meet.supplyArrival);
                         const auto* suffix = constrainedPath(dist, i, meet.pos,
                             state.remainingSteps() - at, setting.fuelLimit);
                         if (suffix) arrivalFuel = setting.fuelLimit - suffix->fuel;
@@ -840,7 +842,8 @@ private:
             flow.addEdge(brandBase + b, sink, n, 0);
         }
         {
-            TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->flow : nullptr);
+            PlanningTimer timer(
+                dist.planning.profilePlanning ? &dist.timings->flow : nullptr);
             flow.run(0, sink, n);
         }
         std::array<AgentIndex, kMaxBrands> owners{};
@@ -875,6 +878,11 @@ private:
                setting.field.at(pos).hasSpot() && !targets[a].valid;
     }
 
+    // step 0では補給されないため、同位置での合流もstep 1以降。
+    static int meetingStep(const GameState& state, int patrol, int supply) {
+        return std::max({patrol, supply, state.step == 0 ? 1 : 0});
+    }
+
     // 非劣経路ごとの実際のprefixをたどり、補給車の実距離で合流を判定。
     static RendezvousPlan findRendezvous(
         const GameState& state, AgentIndex patrolIndex,
@@ -894,7 +902,8 @@ private:
             memo->plans.push_back(result);
             return result;
         }
-        TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->rendezvous : nullptr);
+        PlanningTimer timer(
+            dist.planning.profilePlanning ? &dist.timings->rendezvous : nullptr);
         RendezvousPlan best;
         if (!target.valid || !state.agents[patrolIndex].isPatrol()) return best;
         const CellPos start = projectedPosition(state, patrolIndex);
@@ -922,9 +931,7 @@ private:
                     const int travel = dist.travel[projectedPosition(state, q)][cell];
                     if (travel >= kImpassableCost) continue;
                     const int supplyArrival = projectedDelay(state, q) + travel;
-                    // step 0に補給はない。同位置でも最低step 1まで待つ。
-                    const int meetAt = std::max({arrival, supplyArrival,
-                                                state.step == 0 ? 1 : 0});
+                    const int meetAt = meetingStep(state, arrival, supplyArrival);
                     const auto* suffix = constrainedPath(
                         dist, target.spotIndex, cell,
                         available - meetAt, setting.fuelLimit);
@@ -941,8 +948,8 @@ private:
                         goalArrival > delay + direct->steps) continue;
                     const int wait = meetAt - arrival;
                     const int bestWait = best.valid
-                        ? std::max({best.patrolArrival, best.supplyArrival,
-                                    state.step == 0 ? 1 : 0}) - best.patrolArrival
+                        ? meetingStep(state, best.patrolArrival, best.supplyArrival)
+                            - best.patrolArrival
                         : kImpassableCost;
                     if (!best.valid ||
                         std::make_tuple(
@@ -950,7 +957,7 @@ private:
                             travel, q, cell) <
                         std::make_tuple(
                             best.goalArrival,
-                            best.repeatedRefuelRequired,
+                            best.needsRefuelAgain,
                             bestWait,
                             -best.patrolArrival,
                             best.supplyTravel,
@@ -963,7 +970,7 @@ private:
                         best.supplyTravel = travel;
                         best.goalArrival = goalArrival;
                         best.path = route;
-                        best.repeatedRefuelRequired = repeated;
+                        best.needsRefuelAgain = repeated;
                         best.valid = true;
                     }
                 }
@@ -996,8 +1003,8 @@ private:
                     const int supply = dist.travel[projectedPosition(state, q)][cell];
                     if (patrol >= kImpassableCost || supply >= kImpassableCost)
                         continue;
-                    const int at = std::max({delay + patrol,
-                        projectedDelay(state, q) + supply, state.step == 0 ? 1 : 0});
+                    const int at = meetingStep(
+                        state, delay + patrol, projectedDelay(state, q) + supply);
                     if (dist.fuel[target.spotIndex][cell] > setting.fuelLimit) continue;
                     const int suffixSteps = dist.steps[target.spotIndex][cell];
                     if (suffixSteps > available - at) continue;
@@ -1006,7 +1013,8 @@ private:
                     candidates.emplace_back(lower, supply, q, cell);
                 }
             }
-            const auto retained = std::min(candidates.size(), dist.planning.detourCandidateLimit);
+            const auto retained = std::min(
+                candidates.size(), dist.planning.detourCandidateLimit);
             std::partial_sort(candidates.begin(), candidates.begin() +
                 static_cast<std::ptrdiff_t>(retained), candidates.end());
             std::size_t checked = 0;
@@ -1022,8 +1030,7 @@ private:
                 const int arrival = delay + prefix.cost.steps;
                 const int supply = std::get<1>(entry);
                 const int supplyArrival = projectedDelay(state, q) + supply;
-                const int at = std::max({arrival, supplyArrival,
-                                        state.step == 0 ? 1 : 0});
+                const int at = meetingStep(state, arrival, supplyArrival);
                 const auto* suffix = constrainedPath(dist, target.spotIndex,
                     cell, available - at, setting.fuelLimit);
                 if (!suffix) continue;
@@ -1039,7 +1046,7 @@ private:
                 best.supplyTravel = supply;
                 best.goalArrival = goalArrival;
                 best.detourPrefix = std::make_shared<const AgentPlan>(std::move(actions));
-                best.repeatedRefuelRequired = false;
+                best.needsRefuelAgain = false;
                 best.valid = true;
             }
         }
@@ -1083,8 +1090,8 @@ private:
                     const int travel = dist.travel[projectedPosition(state, q)][pos];
                     const int arrival = projectedDelay(state, q) + travel;
                     if (travel < kImpassableCost &&
-                        std::max({arrival, projectedDelay(state, p),
-                                  state.step == 0 ? 1 : 0}) <= state.remainingSteps()) {
+                        meetingStep(state, projectedDelay(state, p), arrival)
+                            <= state.remainingSteps()) {
                         meet.pos = pos;
                         meet.supply = q;
                         meet.patrolArrival = projectedDelay(state, p);
@@ -1109,7 +1116,8 @@ private:
             }
         }
         {
-            TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->flow : nullptr);
+            PlanningTimer timer(
+                dist.planning.profilePlanning ? &dist.timings->flow : nullptr);
             flow.run(0, sink, n);
         }
         for (int p = 0; p < n; ++p)
@@ -1147,7 +1155,8 @@ private:
             }
         }
         ++cache.computations;
-        TimedPlanningScope timer(dist.planning.profilePlanning ? &dist.timings->assignment : nullptr);
+        PlanningTimer timer(
+            dist.planning.profilePlanning ? &dist.timings->assignment : nullptr);
         Assignments result;
         static thread_local RendezvousMemo memo;
         memo.reset(state);
@@ -1555,8 +1564,7 @@ private:
                     reached = s.field.neighbor(reached, static_cast<Direction>(action));
                 }
                 if (reached == meet.pos) {
-                    const int at = std::max({elapsed, meet.supplyArrival,
-                                             state.step == 0 ? 1 : 0});
+                    const int at = meetingStep(state, elapsed, meet.supplyArrival);
                     if (at > elapsed) route.push_back(-(at - elapsed));
                     const auto* suffix = constrainedPath(dist, i, reached,
                         available - at, s.fuelLimit);
@@ -1566,7 +1574,7 @@ private:
                             available - at, s.fuelLimit, i, suffix);
                         route.insert(route.end(), rest.begin(), rest.end());
                         add(std::move(route));
-                    } else if (meet.repeatedRefuelRequired) {
+                    } else if (meet.needsRefuelAgain) {
                         // この合流で満タンにした後も目的地まで一充填では
                         // 届かない。ここでマクロを区切り、次のイベントで
                         // 新しい合流点を計算する。
@@ -1715,10 +1723,10 @@ public:
         using Clock = std::chrono::steady_clock;
         const auto started = Clock::now();
         BeamSearchResult res;
-        auto assignmentCache = std::make_shared<AssignmentCache>();
-        auto planningTimings = std::make_shared<PlanningTimings>();
-        std::atomic<std::size_t> fullEvaluationCount{0};
-        std::atomic<std::size_t> reusedEvaluationCount{0};
+        auto cache = std::make_shared<AssignmentCache>();
+        auto timings = std::make_shared<PlanningTimings>();
+        std::atomic<std::size_t> fullEvals{0};
+        std::atomic<std::size_t> reusedEvals{0};
         auto finish = [&](SearchStopReason reason) {
             if (res.success) {
                 res.plan = compressWaitActions(res.plan);
@@ -1727,16 +1735,16 @@ public:
             res.elapsedMs = std::chrono::duration_cast<
                 std::chrono::milliseconds>(Clock::now() - started).count();
             res.fullEvaluations =
-                fullEvaluationCount.load(std::memory_order_relaxed);
+                fullEvals.load(std::memory_order_relaxed);
             res.reusedEvaluations =
-                reusedEvaluationCount.load(std::memory_order_relaxed);
-            res.assignmentCacheHits = assignmentCache->hits.load();
-            res.assignmentComputations = assignmentCache->computations.load();
-            res.repairedAssignments = assignmentCache->repairs.load();
-            res.detourPlans = assignmentCache->detours.load();
-            res.assignmentTimeNs = planningTimings->assignment.load();
-            res.flowTimeNs = planningTimings->flow.load();
-            res.rendezvousTimeNs = planningTimings->rendezvous.load();
+                reusedEvals.load(std::memory_order_relaxed);
+            res.assignmentCacheHits = cache->hits.load();
+            res.assignmentComputations = cache->computations.load();
+            res.repairedAssignments = cache->repairs.load();
+            res.detourPlans = cache->detours.load();
+            res.assignmentTimeNs = timings->assignment.load();
+            res.flowTimeNs = timings->flow.load();
+            res.rendezvousTimeNs = timings->rendezvous.load();
             return res;
         };
 
@@ -1875,8 +1883,8 @@ public:
             executor,
             prepStopped);
         spotDist.planning = cfg;
-        spotDist.assignments = assignmentCache;
-        spotDist.timings = planningTimings;
+        spotDist.assignments = cache;
+        spotDist.timings = timings;
         spotDist.stop = [&]() { return expired(); };
         if (prepStopped) {
             return finish(
@@ -1897,7 +1905,7 @@ public:
         root.state = init;
         root.evaluation =
             evaluate(root.state, s, ms, prev, spotDist, weights);
-        fullEvaluationCount.fetch_add(1, std::memory_order_relaxed);
+        fullEvals.fetch_add(1, std::memory_order_relaxed);
         root.orderingScore = root.evaluation.total;
         root.orderKey = UINT64_C(1469598103934665603);
 
@@ -1921,7 +1929,7 @@ public:
             }
             const EvaluationBreakdown eval = evaluate(
                 sim.state, s, ms, prev, spotDist, weights);
-            fullEvaluationCount.fetch_add(1, std::memory_order_relaxed);
+            fullEvals.fetch_add(1, std::memory_order_relaxed);
             if (hasBest &&
                 (eval.total < res.evaluation.total ||
                  (eval.total == res.evaluation.total &&
@@ -1937,7 +1945,7 @@ public:
         if (hasBest) {
             res.evaluation = evaluate(
                 res.finalState, s, ms, prev, spotDist, weights);
-            fullEvaluationCount.fetch_add(1, std::memory_order_relaxed);
+            fullEvals.fetch_add(1, std::memory_order_relaxed);
         }
         consider(root);
         if (expired(true)) {
@@ -2241,13 +2249,13 @@ public:
                         continue;
                     }
                     if (delta > 1) {
-                        reusedEvaluationCount.fetch_add(
+                        reusedEvals.fetch_add(
                             static_cast<std::size_t>(delta - 1),
                             std::memory_order_relaxed);
                     }
                     node.evaluation = evaluate(
                         node.state, s, ms, prev, spotDist, weights);
-                    fullEvaluationCount.fetch_add(
+                    fullEvals.fetch_add(
                         1, std::memory_order_relaxed);
                     node.orderingScore = node.evaluation.total;
                     output.push_back(std::move(node));
@@ -2333,7 +2341,7 @@ public:
             }
             node.evaluation =
                 evaluate(node.state, s, ms, prev, spotDist, weights);
-            fullEvaluationCount.fetch_add(1, std::memory_order_relaxed);
+            fullEvals.fetch_add(1, std::memory_order_relaxed);
             node.orderingScore = node.evaluation.total;
         }
         sortAndLimit(beam, 1);

@@ -9,6 +9,55 @@
 #include <string_view>
 #include <vector>
 
+namespace {
+
+using namespace procon37;
+
+int runSelection(int argc, char* argv[], const SolverOptions& options) {
+    if (argc < 3 || argc > 4) {
+        std::cerr << "usage: " << argv[0]
+                  << " select match-setting.json [agents.json]\n";
+        return 1;
+    }
+    const auto setting = readMatchSettingJson(argv[2]);
+    const auto selected = selectAgentKinds(setting, options.selectorFor(setting));
+    if (!selected.success) {
+        std::cerr << "failed to select agent kinds\n";
+        return 1;
+    }
+    const std::string output = argc == 4 ? argv[3] : "agents.json";
+    if (!writeAgentKindsJson(selected.kinds, output)) {
+        std::cerr << "failed to write " << output << '\n';
+        return 1;
+    }
+    std::cout << "agents-json=" << output
+              << "\ntimed-out=" << (selected.timedOut ? "true" : "false") << '\n';
+    return 0;
+}
+
+bool loadScore(const char* path, const MatchSetting& setting,
+               const MatchState& state, ScoreState& score) {
+    if (!path) {
+        if (state.day == 0) return true;
+        std::cerr << "a score checkpoint is required after day 0\n";
+        return false;
+    }
+    const auto checkpoint = readScoreCheckpointJson(path);
+    if (checkpoint.nextDay != state.day) {
+        std::cerr << "score checkpoint day does not match state day\n";
+        return false;
+    }
+    score = checkpoint.score;
+    const auto brandCount = setting.field.brands.size();
+    if (brandCount < kMaxBrands && (score.matchBrands >> brandCount) != 0) {
+        std::cerr << "score checkpoint contains an unknown brand\n";
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 int main(int argc, char* argv[]) {
     try {
         auto options = procon37::SolverOptions::parse(argc, argv);
@@ -16,29 +65,7 @@ int main(int argc, char* argv[]) {
         argv = options.positional.data();
         const bool selectMode = argc >= 2 && std::string_view(argv[1]) == "select";
         const bool solveMode = argc >= 2 && std::string_view(argv[1]) == "solve";
-        if (selectMode) {
-            if (argc < 3 || argc > 4) {
-                std::cerr << "usage: " << argv[0]
-                          << " select match-setting.json [agents.json]\n";
-                return 1;
-            }
-            const auto setting = procon37::readMatchSettingJson(argv[2]);
-            const auto cfg = options.selectorFor(setting);
-            const auto selected = procon37::selectAgentKinds(setting, cfg);
-            if (!selected.success) {
-                std::cerr << "failed to select agent kinds\n";
-                return 1;
-            }
-            const std::string output = argc == 4 ? argv[3] : "agents.json";
-            if (!procon37::writeAgentKindsJson(selected.kinds, output)) {
-                std::cerr << "failed to write " << output << '\n';
-                return 1;
-            }
-            std::cout << "agents-json=" << output
-                      << "\ntimed-out="
-                      << (selected.timedOut ? "true" : "false") << '\n';
-            return 0;
-        }
+        if (selectMode) return runSelection(argc, argv, options);
 
         const int firstArg = solveMode ? 2 : 1;
         if ((solveMode && (argc < 4 || argc > 5)) ||
@@ -58,17 +85,8 @@ int main(int argc, char* argv[]) {
         if (argc > firstArg) {
             setting = procon37::readMatchSettingJson(argv[firstArg]);
         } else {
-            procon37::CreateConfig cfg;
-            cfg.width = 16;
-            cfg.height = 16;
-            cfg.agentCount = 4;
-            cfg.spotCount = 16;
-            cfg.brandCount = 12;
-            cfg.dayCount = 4;
-            cfg.daySeconds = 60;
-            cfg.teamCount = 2;
-            cfg.seed = 1;
-            setting = procon37::create(cfg, "problem.json").setting;
+            setting = procon37::create(
+                procon37::CreateConfig{}, "problem.json").setting;
         }
 
         procon37::MatchState st;
@@ -78,8 +96,8 @@ int main(int argc, char* argv[]) {
             kinds.reserve(st.agents.size());
             for (const auto& agent : st.agents) kinds.push_back(agent.kind);
         } else {
-            const auto selCfg = options.selectorFor(setting);
-            const auto sel = procon37::selectAgentKinds(setting, selCfg);
+            const auto sel = procon37::selectAgentKinds(
+                setting, options.selectorFor(setting));
             if (!sel.success) {
                 std::cerr << "failed to select agent kinds\n";
                 return 1;
@@ -97,24 +115,8 @@ int main(int argc, char* argv[]) {
         }
 
         procon37::ScoreState previousScore;
-        if (argc > firstArg + 2) {
-            const auto checkpoint =
-                procon37::readScoreCheckpointJson(argv[firstArg + 2]);
-            if (checkpoint.nextDay != st.day) {
-                std::cerr << "score checkpoint day does not match state day\n";
-                return 1;
-            }
-            previousScore = checkpoint.score;
-            if (setting.field.brands.size() < procon37::kMaxBrands &&
-                (previousScore.matchBrands >>
-                 setting.field.brands.size()) != 0) {
-                std::cerr << "score checkpoint contains an unknown brand\n";
-                return 1;
-            }
-        } else if (st.day != 0) {
-            std::cerr << "a score checkpoint is required after day 0\n";
-            return 1;
-        }
+        const char* scorePath = argc > firstArg + 2 ? argv[firstArg + 2] : nullptr;
+        if (!loadScore(scorePath, setting, st, previousScore)) return 1;
 
         auto beam = options.beam;
         if (st.endsAt == 0 && !options.hasTimeLimit) {
