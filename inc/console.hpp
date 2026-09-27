@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct ConsoleConfig {
     bool showMap = true;
@@ -330,4 +330,4 @@ inline void printConsoleReport(
     }
 }
 
-}  // namespace procon37
+}  // namespace benzen

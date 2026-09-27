@@ -5,11 +5,11 @@
 同じ残り行動列のsuffixを共有し、マクロ経路のメモリ使用量を抑える内部用コンテナである。
 
 ```cpp
-procon37::ActionRoutes routes;
-procon37::AgentPlan actions = {2, 2, 3};
+benzen::ActionRoutes routes;
+benzen::AgentPlan actions = {2, 2, 3};
 auto id = routes.intern(actions);
 
-while (id != procon37::ActionRoutes::none) {
+while (id != benzen::ActionRoutes::none) {
     auto entry = routes[id];
     int action = entry.action;
     id = entry.next;

@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct CreateTeam {
     std::string name;
@@ -631,4 +631,4 @@ inline MatchState createMatchStateJson(
     return state;
 }
 
-}  // namespace procon37
+}  // namespace benzen

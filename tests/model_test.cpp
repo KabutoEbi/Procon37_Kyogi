@@ -7,7 +7,7 @@
 
 namespace {
 
-using namespace procon37;
+using namespace benzen;
 
 MatchSetting makeSetting() {
     MatchSetting s;

@@ -7,11 +7,11 @@
 ## 主な型
 
 ```cpp
-procon37::Spot spot{10, 42, 3, -1};
+benzen::Spot spot{10, 42, 3, -1};
 // brand=10, pos=42, maxStock=3
 
-procon37::Cell road{procon37::CellType::Road, -1};
-int steps = road.moveSteps(procon37::TrafficStatus::Jammed); // 4
+benzen::Cell road{benzen::CellType::Road, -1};
+int steps = road.moveSteps(benzen::TrafficStatus::Jammed); // 4
 int fuel = road.patrolFuelCost();                            // 2
 ```
 

@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 // 小さい割当ネットワーク用。負の報酬辺と残余辺を含めて最短増加路を求める。
 // 呼び出し側は初期グラフに負閉路を作らないこと。
@@ -100,4 +100,4 @@ private:
     std::vector<std::uint8_t> queued_;
 };
 
-}  // namespace procon37
+}  // namespace benzen

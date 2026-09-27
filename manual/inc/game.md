@@ -11,10 +11,10 @@
 
 ```cpp
 // json_input.hppを併用する例
-procon37::MatchSetting setting =
-    procon37::readMatchSettingJson("match-setting.json");
-procon37::MatchState state =
-    procon37::readMatchStateJson("match-state.json", setting);
+benzen::MatchSetting setting =
+    benzen::readMatchSettingJson("match-setting.json");
+benzen::MatchState state =
+    benzen::readMatchStateJson("match-state.json", setting);
 
 auto days = setting.dayCount();
 auto agents = setting.agentCount();
@@ -24,9 +24,9 @@ auto traffic = state.trafficAt(10);
 ## コスト取得
 
 ```cpp
-int steps = procon37::moveStepCost(setting, state, from);
-int fuel = procon37::moveFuelCost(
-    setting, procon37::AgentKind::Patrol, from);
+int steps = benzen::moveStepCost(setting, state, from);
+int fuel = benzen::moveFuelCost(
+    setting, benzen::AgentKind::Patrol, from);
 ```
 
 どちらも「移動元セル」のコストを返す。道路のステップ数だけが`MatchState::trafficByPos`の影響を受ける。補給車の燃料コストは常に0である。

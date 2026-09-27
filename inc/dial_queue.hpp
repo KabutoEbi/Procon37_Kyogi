@@ -7,7 +7,7 @@
 #include <deque>
 #include <utility>
 
-namespace procon37 {
+namespace benzen {
 
 // 単調な距離と最大増分4のDialキュー。平地2、山3、道路1/2/4に対応。
 template <class T, std::size_t MaxEdge = 4>
@@ -43,4 +43,4 @@ private:
     std::size_t size_ = 0;
 };
 
-}  // namespace procon37
+}  // namespace benzen

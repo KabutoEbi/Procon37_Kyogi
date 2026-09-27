@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace procon37 {
+namespace benzen {
 
 struct Spot {
     BrandId brand = 0;
@@ -76,4 +76,4 @@ struct TrafficInfo {
     TrafficStatus status = TrafficStatus::Smooth;
 };
 
-}  // namespace procon37
+}  // namespace benzen

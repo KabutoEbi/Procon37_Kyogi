@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 class JsonInputError : public std::runtime_error {
 public:
@@ -734,4 +734,4 @@ inline ScoreCheckpoint readScoreCheckpointJson(const std::string& path) {
     return JsonInput::readScoreCheckpoint(path);
 }
 
-}  // namespace procon37
+}  // namespace benzen

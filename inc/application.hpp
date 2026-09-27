@@ -13,7 +13,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace procon37 {
+namespace benzen {
 
 struct ApplicationConfig {
     CreateConfig createConfig{};
@@ -371,4 +371,4 @@ inline int runApplication(
     }
 }
 
-}  // namespace procon37
+}  // namespace benzen

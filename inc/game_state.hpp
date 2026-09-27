@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace procon37 {
+namespace benzen {
 
 constexpr std::uint32_t countBits(BrandMask bits) noexcept {
     std::uint32_t count = 0;
@@ -211,4 +211,4 @@ public:
     }
 };
 
-}  // namespace procon37
+}  // namespace benzen

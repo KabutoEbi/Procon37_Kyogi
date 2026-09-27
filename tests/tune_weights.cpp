@@ -4,7 +4,7 @@
 #include <iostream>
 
 int main() {
-    using namespace procon37;
+    using namespace benzen;
     std::vector<WeightTuningCase> training, validation;
     for (std::uint64_t seed = 1; seed <= 6; ++seed) {
         CreateConfig create;

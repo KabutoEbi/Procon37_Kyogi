@@ -8,7 +8,7 @@
 #include <set>
 #include <string>
 
-namespace procon37 {
+namespace benzen {
 
 struct WeightTuningCase {
     std::uint64_t id = 0; // 学習・検証で同じ問題を使わないための識別子。
@@ -133,7 +133,7 @@ inline WeightTuningResult tuneWeights(
 
 inline void printTunedWeights(std::ostream& out, const EvaluationWeights& weights) {
     out.precision(17);
-    out << "procon37::EvaluationWeights weights;\n";
+    out << "benzen::EvaluationWeights weights;\n";
     out << "weights.newBrand = " << weights.newBrand << ";\n"
         << "weights.dailyBrand = " << weights.dailyBrand << ";\n"
         << "weights.udon = " << weights.udon << ";\n"
@@ -143,4 +143,4 @@ inline void printTunedWeights(std::ostream& out, const EvaluationWeights& weight
             << weights.*(parameter.member) << ";\n";
 }
 
-}  // namespace procon37
+}  // namespace benzen

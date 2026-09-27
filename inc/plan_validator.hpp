@@ -2,7 +2,7 @@
 
 #include "simulator.hpp"
 
-namespace procon37 {
+namespace benzen {
 
 struct PlanValidationResult {
     bool valid = false;
@@ -21,4 +21,4 @@ inline PlanValidationResult validateDailyPlan(
     return {result.valid, result.failure};
 }
 
-}  // namespace procon37
+}  // namespace benzen

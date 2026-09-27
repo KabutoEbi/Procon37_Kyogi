@@ -5,15 +5,15 @@
 試合開始前に、各エージェントを巡回車または補給車へ自動割当する。
 
 ```cpp
-procon37::AgentSelectorConfig config;
+benzen::AgentSelectorConfig config;
 config.minSupplyCount = 1;
 config.maxSupplyCount = 2;
 config.trialCandidateLimit = 8;
 config.trialDays = 2;
 
-auto selected = procon37::selectAgentKinds(setting, config);
+auto selected = benzen::selectAgentKinds(setting, config);
 if (selected.success) {
-    const std::vector<procon37::AgentKind>& kinds = selected.kinds;
+    const std::vector<benzen::AgentKind>& kinds = selected.kinds;
     // kindsを試合開始時のPOST /agentやrunMatch()へ渡す
 }
 ```

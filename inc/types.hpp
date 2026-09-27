@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <limits>
 
-namespace procon37 {
+namespace benzen {
 
 using CellPos = std::int32_t;
 using BrandId = std::int32_t;
@@ -81,4 +81,4 @@ constexpr std::int32_t waitSteps(std::int32_t action) noexcept {
     return isWaitAction(action) ? -action : 0;
 }
 
-}  // namespace procon37
+}  // namespace benzen

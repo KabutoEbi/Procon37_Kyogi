@@ -6,7 +6,7 @@
 #include <limits>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct Agent {
     // setting.agents および state.agents 内での不変な添字。
@@ -69,4 +69,4 @@ inline DailyPlan compressWaitActions(const DailyPlan& plan) {
     return result;
 }
 
-}  // namespace procon37
+}  // namespace benzen

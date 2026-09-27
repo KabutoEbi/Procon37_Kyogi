@@ -10,7 +10,7 @@
 #include <vector>
 
 int main(int argc, char** argv) {
-    using namespace procon37;
+    using namespace benzen;
     int seeds = 8, repeats = 3, timeMs = 300, sizeOnly = 0;
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
     std::string variant = "improved";

@@ -5,17 +5,17 @@
 学習問題と独立した検証問題を使って、探索誘導用の`EvaluationWeights`をオフライン調整する。
 
 ```cpp
-std::vector<procon37::WeightTuningCase> training = /* ... */;
-std::vector<procon37::WeightTuningCase> validation = /* ... */;
+std::vector<benzen::WeightTuningCase> training = /* ... */;
+std::vector<benzen::WeightTuningCase> validation = /* ... */;
 
-procon37::WeightTuningConfig config;
+benzen::WeightTuningConfig config;
 config.candidates = 24;
 config.scale = 1.5;
 config.seed = 1;
 
-auto tuned = procon37::tuneWeights(
+auto tuned = benzen::tuneWeights(
     training, validation, {}, config);
-procon37::printTunedWeights(std::cout, tuned.weights);
+benzen::printTunedWeights(std::cout, tuned.weights);
 ```
 
 各`WeightTuningCase::id`は学習・検証集合を通して一意にする。同じ問題IDの重複は例外になる。

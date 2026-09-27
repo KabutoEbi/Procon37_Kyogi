@@ -9,9 +9,9 @@
 #include <unordered_set>
 
 std::unordered_set<
-    procon37::GameState,
-    procon37::GameStateHash,
-    procon37::GameStateEqual> visited;
+    benzen::GameState,
+    benzen::GameStateHash,
+    benzen::GameStateEqual> visited;
 
 visited.insert(state);
 bool seen = visited.find(other) != visited.end();

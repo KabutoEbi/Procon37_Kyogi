@@ -12,10 +12,10 @@
 - `FuelPathState`, `FuelPathLabel`: 燃料を状態に含む経路探索用ラベル
 
 ```cpp
-auto table = procon37::brain0(setting, state, start);
+auto table = benzen::brain0(setting, state, start);
 if (table.canReach(goal)) {
-    auto path = procon37::Brain0::restorePath(
-        setting, table, goal, procon37::AgentKind::Patrol);
+    auto path = benzen::Brain0::restorePath(
+        setting, table, goal, benzen::AgentKind::Patrol);
     // path.positions.front() == start
     // path.positions.back() == goal
 }

@@ -5,11 +5,11 @@
 同じエージェント種別で全日を順番に探索・シミュレーションし、位置、燃料、得点を翌日へ引き継ぐ。
 
 ```cpp
-procon37::MatchRunnerConfig config;
+benzen::MatchRunnerConfig config;
 config.beam.beamWidth = 128;
 config.fallbackToWait = true;
 
-auto result = procon37::runMatch(setting, kinds, config);
+auto result = benzen::runMatch(setting, kinds, config);
 if (result.success) {
     auto finalScore = result.score;
     for (const auto& day : result.days) {

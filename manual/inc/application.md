@@ -10,9 +10,9 @@
 #include "application.hpp"
 
 int main(int argc, char* argv[]) {
-    procon37::ApplicationConfig defaults;
+    benzen::ApplicationConfig defaults;
     defaults.beamConfig.beamWidth = 128;
-    return procon37::runApplication(argc, argv, defaults);
+    return benzen::runApplication(argc, argv, defaults);
 }
 ```
 

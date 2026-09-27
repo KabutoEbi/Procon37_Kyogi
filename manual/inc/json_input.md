@@ -8,9 +8,9 @@
 
 ```cpp
 try {
-    auto setting = procon37::parseMatchSettingJson(settingText);
-    auto state = procon37::parseMatchStateJson(stateText, setting);
-} catch (const procon37::JsonInputError& error) {
+    auto setting = benzen::parseMatchSettingJson(settingText);
+    auto state = benzen::parseMatchStateJson(stateText, setting);
+} catch (const benzen::JsonInputError& error) {
     std::cerr << error.what() << '\n';
 }
 ```
@@ -19,11 +19,11 @@ try {
 
 ```cpp
 auto setting =
-    procon37::readMatchSettingJson("match-setting.json");
+    benzen::readMatchSettingJson("match-setting.json");
 auto state =
-    procon37::readMatchStateJson("match-state.json", setting);
+    benzen::readMatchStateJson("match-state.json", setting);
 auto score =
-    procon37::readScoreCheckpointJson("score-checkpoint.json");
+    benzen::readScoreCheckpointJson("score-checkpoint.json");
 ```
 
 `MatchState`の解析には、セル数、台数、燃料上限などを照合するため`MatchSetting`が必要である。

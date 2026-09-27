@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 using TrialTraffic = std::vector<std::vector<TrafficStatus>>;
 using TrialScore = std::array<std::int64_t, 3>;
@@ -87,4 +87,4 @@ inline std::vector<TrialTraffic> makeTrialScenarios(
     return scenarios;
 }
 
-}  // namespace procon37
+}  // namespace benzen

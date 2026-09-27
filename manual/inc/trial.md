@@ -5,17 +5,17 @@
 エージェント種別や評価重みを比較するため、固定交通条件で複数日をオフライン試走する。
 
 ```cpp
-auto scenarios = procon37::makeTrialScenarios(setting, 3);
+auto scenarios = benzen::makeTrialScenarios(setting, 3);
 
-procon37::BeamSearchConfig beam;
+benzen::BeamSearchConfig beam;
 beam.beamWidth = 32;
 beam.jointBeamWidth = 128;
 
-auto trial = procon37::runTrial(
+auto trial = benzen::runTrial(
     setting, kinds, scenarios.front(), beam, 2);
 
 if (trial.success) {
-    procon37::TrialScore score = procon37::trialScore(trial.score);
+    benzen::TrialScore score = benzen::trialScore(trial.score);
 }
 ```
 

@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct Field {
     std::int32_t width = 0;
@@ -161,4 +161,4 @@ struct Field {
     }
 };
 
-}  // namespace procon37
+}  // namespace benzen

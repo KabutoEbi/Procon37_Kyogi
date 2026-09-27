@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 // mainの位置引数を維持し、GUIとCLIで同じ探索設定を使用する。
 struct SolverOptions {
@@ -75,4 +75,4 @@ struct SolverOptions {
     }
 };
 
-}  // namespace procon37
+}  // namespace benzen

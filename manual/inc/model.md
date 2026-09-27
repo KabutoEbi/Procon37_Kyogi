@@ -8,12 +8,12 @@
 #include "model.hpp"
 
 int main() {
-    procon37::CreateConfig config;
-    auto problem = procon37::ProblemCreator::generate(config);
+    benzen::CreateConfig config;
+    auto problem = benzen::ProblemCreator::generate(config);
 
     auto selection =
-        procon37::selectAgentKinds(problem.setting);
-    auto result = procon37::runMatch(
+        benzen::selectAgentKinds(problem.setting);
+    auto result = benzen::runMatch(
         problem.setting, selection.kinds);
     return result.success ? 0 : 1;
 }

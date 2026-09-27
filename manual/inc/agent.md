@@ -7,8 +7,8 @@
 ## エージェント
 
 ```cpp
-procon37::Agent agent{
-    0, procon37::AgentKind::Patrol, 12, 30
+benzen::Agent agent{
+    0, benzen::AgentKind::Patrol, 12, 30
 };
 
 if (agent.isPatrol()) {
@@ -21,11 +21,11 @@ if (agent.isPatrol()) {
 ## 行動計画
 
 ```cpp
-procon37::AgentPlan one = {2, -1, -1, -3, 5};
-one = procon37::compressWaitActions(one);
+benzen::AgentPlan one = {2, -1, -1, -3, 5};
+one = benzen::compressWaitActions(one);
 // {2, -5, 5}
 
-procon37::DailyPlan all = {
+benzen::DailyPlan all = {
     one,
     {-10},
 };

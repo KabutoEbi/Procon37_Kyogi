@@ -7,12 +7,12 @@
 ## 1地点への経路
 
 ```cpp
-auto path = procon37::brain0(
+auto path = benzen::brain0(
     setting,
     state,
     start,
     goal,
-    procon37::AgentKind::Patrol);
+    benzen::AgentKind::Patrol);
 
 if (path.reachable) {
     // path.cost.steps、path.cost.fuel、path.directionsを利用
@@ -22,11 +22,11 @@ if (path.reachable) {
 ## 1始点から複数地点
 
 ```cpp
-auto table = procon37::brain0(setting, state, start);
+auto table = benzen::brain0(setting, state, start);
 
-for (procon37::CellPos goal : goals) {
+for (benzen::CellPos goal : goals) {
     if (!table.canReach(goal)) continue;
-    auto path = procon37::Brain0::restorePath(setting, table, goal);
+    auto path = benzen::Brain0::restorePath(setting, table, goal);
 }
 ```
 
@@ -37,9 +37,9 @@ for (procon37::CellPos goal : goals) {
 ## 燃料制約付き最短路
 
 ```cpp
-auto path = procon37::brain0FuelConstrained(
+auto path = benzen::brain0FuelConstrained(
     setting, state, start, goal,
-    procon37::AgentKind::Patrol, remainingFuel);
+    benzen::AgentKind::Patrol, remainingFuel);
 ```
 
 `(セル, 使用燃料)`を状態として探索し、指定燃料以内で所要ステップが最小の経路を返す。補給は含まない。従来の`brain0(...)`は燃料制約なしの最短ステップ経路として残している。

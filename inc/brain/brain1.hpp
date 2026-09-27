@@ -28,7 +28,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct BeamSearchConfig {
     std::size_t beamWidth = 128;
@@ -2379,4 +2379,4 @@ inline BeamSearchResult brain1(
     return Brain1::search(setting, matchState, previousScore, config);
 }
 
-}  // namespace procon37
+}  // namespace benzen

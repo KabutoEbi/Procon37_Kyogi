@@ -7,11 +7,11 @@
 ## 計画を一括実行
 
 ```cpp
-auto result = procon37::simulateDay(
+auto result = benzen::simulateDay(
     setting, matchState, plan, previousScore);
 
 if (!result.valid) {
-    std::cerr << procon37::simulationErrorMessage(result.failure.error)
+    std::cerr << benzen::simulationErrorMessage(result.failure.error)
               << " agent=" << result.failure.agentIndex
               << " action=" << result.failure.actionIndex << '\n';
 } else {
@@ -24,13 +24,13 @@ if (!result.valid) {
 ## 1ステップずつ実行
 
 ```cpp
-procon37::GameState game;
+benzen::GameState game;
 game.initialize(setting, matchState, previousScore);
 
 for (std::size_t i = 0; i < game.agentCount; ++i) {
-    procon37::tryScheduleAction(game, setting, matchState, i, -1);
+    benzen::tryScheduleAction(game, setting, matchState, i, -1);
 }
-auto failure = procon37::advanceSimulationStep(game, setting);
+auto failure = benzen::advanceSimulationStep(game, setting);
 ```
 
 各ステップの前に、待機中でない全エージェントへ行動を予約する必要がある。通常は実装ミスを避けるため`simulateDay()`を使う。

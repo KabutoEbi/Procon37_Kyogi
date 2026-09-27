@@ -7,8 +7,8 @@
 ## 初期化
 
 ```cpp
-procon37::GameState state;
-procon37::ScoreState previous;
+benzen::GameState state;
+benzen::ScoreState previous;
 
 if (!state.initialize(setting, matchState, previous)) {
     // 日番号、台数、位置、スポットなどが不正
@@ -20,9 +20,9 @@ if (!state.initialize(setting, matchState, previous)) {
 ## 得点とビット集合
 
 ```cpp
-auto spot = procon37::spotBit(3);
-auto brand = procon37::brandBit(2);
-auto count = procon37::countBits(brand);
+auto spot = benzen::spotBit(3);
+auto brand = benzen::brandBit(2);
+auto count = benzen::countBits(brand);
 ```
 
 `ScoreState`の`matchBrands`、`totalUdon`、`sumOfDailyBrandCounts`は日をまたいで引き継ぐ。`finishDay()`は最終ステップ到達後に一度だけ呼び、当日の系列数を累積値へ確定する。

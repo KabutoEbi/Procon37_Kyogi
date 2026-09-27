@@ -7,11 +7,11 @@
 ## 盤面の構築
 
 ```cpp
-procon37::Field field;
+benzen::Field field;
 field.width = 8;
 field.height = 8;
 field.cells.assign(field.cellCount(),
-                   {procon37::CellType::Plain, -1});
+                   {benzen::CellType::Plain, -1});
 field.spots.push_back({100, field.toPos({3, 4}), 2, -1});
 
 if (!field.rebuildSpotIndex()) {
@@ -24,7 +24,7 @@ if (!field.rebuildSpotIndex()) {
 ## 座標と隣接セル
 
 ```cpp
-using namespace procon37;
+using namespace benzen;
 
 CellPos pos = field.toPos({3, 4});
 Coord xy = field.toCoord(pos);

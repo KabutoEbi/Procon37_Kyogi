@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct AgentSelectorConfig {
     // 既定では燃料切れで全車が行動不能になるのを避けるため、
@@ -411,4 +411,4 @@ inline AgentSelectionResult selectAgentKinds(
     return AgentSelector::select(setting, config);
 }
 
-}  // namespace procon37
+}  // namespace benzen

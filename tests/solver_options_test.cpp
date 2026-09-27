@@ -3,10 +3,10 @@
 #include <string>
 #include <vector>
 
-procon37::SolverOptions parse(std::vector<std::string> values) {
+benzen::SolverOptions parse(std::vector<std::string> values) {
     std::vector<char*> args;
     for (auto& value : values) args.push_back(value.data());
-    auto result = procon37::SolverOptions::parse(static_cast<int>(args.size()), args.data());
+    auto result = benzen::SolverOptions::parse(static_cast<int>(args.size()), args.data());
     result.positional.clear(); // このテストでは設定値だけを検査する。
     return result;
 }
@@ -23,7 +23,7 @@ int main() {
     assert(options.hasTimeLimit && options.hasSelectionTimeLimit);
     assert(options.selection.trialCandidateLimit == 0);
     assert(options.selection.minSupplyCount == 1);
-    procon37::MatchSetting setting;
+    benzen::MatchSetting setting;
     setting.startsAt = 1800000000;
     assert(options.selectorFor(setting).deadlineUnixSeconds == setting.startsAt);
     assert(options.selectorFor(setting).timeLimitMs == 100);

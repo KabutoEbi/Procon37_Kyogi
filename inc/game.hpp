@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 // GET /setting の内容。JSON の map は field に対応する。
 struct MatchSetting {
@@ -92,4 +92,4 @@ inline std::int32_t moveFuelCost(
                : setting.field.at(from).patrolFuelCost();
 }
 
-}  // namespace procon37
+}  // namespace benzen

@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct MatchRunnerConfig {
     BeamSearchConfig beam{};
@@ -250,4 +250,4 @@ inline MatchRunResult runMatch(
     return MatchRunner::run(setting, kinds, config);
 }
 
-}  // namespace procon37
+}  // namespace benzen

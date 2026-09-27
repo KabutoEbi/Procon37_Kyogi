@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace procon37 {
+namespace benzen {
 
 struct EvaluationWeights {
     // 既定値は公式の辞書順（試合系列 > 日別系列 > 玉数）を強く優先する。
@@ -159,4 +159,4 @@ inline EvaluationBreakdown evaluateGameState(
     return res;
 }
 
-}  // namespace procon37
+}  // namespace benzen

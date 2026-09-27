@@ -19,7 +19,7 @@
 ## 行動値
 
 ```cpp
-using namespace procon37;
+using namespace benzen;
 
 const int move = toAction(Direction::Right); // 2
 const bool a = isMoveAction(move);           // true

@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 // 未実行経路のsuffixを共有する。等しい残り方向列は同じIDになる。
 class ActionRoutes {
@@ -42,4 +42,4 @@ private:
     std::unordered_map<std::uint64_t, Id> ids_;
 };
 
-}  // namespace procon37
+}  // namespace benzen

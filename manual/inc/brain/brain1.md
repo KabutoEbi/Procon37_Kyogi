@@ -7,17 +7,17 @@
 ## 基本的な呼び出し
 
 ```cpp
-procon37::BeamSearchConfig config;
+benzen::BeamSearchConfig config;
 config.beamWidth = 128;
 config.jointBeamWidth = 512;
 config.timeLimitMs = 2500;
 
-procon37::ScoreState previousScore;
-auto result = procon37::brain1(
+benzen::ScoreState previousScore;
+auto result = benzen::brain1(
     setting, matchState, previousScore, config);
 
 if (result.success) {
-    const procon37::DailyPlan& plan = result.plan;
+    const benzen::DailyPlan& plan = result.plan;
 }
 ```
 

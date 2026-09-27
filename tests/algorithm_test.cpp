@@ -7,7 +7,7 @@
 #include <random>
 #include <sstream>
 
-using namespace procon37;
+using namespace benzen;
 
 namespace {
 

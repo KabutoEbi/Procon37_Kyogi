@@ -11,7 +11,7 @@
 
 namespace {
 
-using namespace procon37;
+using namespace benzen;
 
 int runSelection(int argc, char* argv[], const SolverOptions& options) {
     if (argc < 3 || argc > 4) {
@@ -60,7 +60,7 @@ bool loadScore(const char* path, const MatchSetting& setting,
 
 int main(int argc, char* argv[]) {
     try {
-        auto options = procon37::SolverOptions::parse(argc, argv);
+        auto options = benzen::SolverOptions::parse(argc, argv);
         argc = static_cast<int>(options.positional.size());
         argv = options.positional.data();
         const bool selectMode = argc >= 2 && std::string_view(argv[1]) == "select";
@@ -81,40 +81,40 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        procon37::MatchSetting setting;
+        benzen::MatchSetting setting;
         if (argc > firstArg) {
-            setting = procon37::readMatchSettingJson(argv[firstArg]);
+            setting = benzen::readMatchSettingJson(argv[firstArg]);
         } else {
-            setting = procon37::create(
-                procon37::CreateConfig{}, "problem.json").setting;
+            setting = benzen::create(
+                benzen::CreateConfig{}, "problem.json").setting;
         }
 
-        procon37::MatchState st;
-        std::vector<procon37::AgentKind> kinds;
+        benzen::MatchState st;
+        std::vector<benzen::AgentKind> kinds;
         if (argc > firstArg + 1) {
-            st = procon37::readMatchStateJson(argv[firstArg + 1], setting);
+            st = benzen::readMatchStateJson(argv[firstArg + 1], setting);
             kinds.reserve(st.agents.size());
             for (const auto& agent : st.agents) kinds.push_back(agent.kind);
         } else {
-            const auto sel = procon37::selectAgentKinds(
+            const auto sel = benzen::selectAgentKinds(
                 setting, options.selectorFor(setting));
             if (!sel.success) {
                 std::cerr << "failed to select agent kinds\n";
                 return 1;
             }
             kinds = sel.kinds;
-            st = procon37::makeInitialState(setting, kinds);
+            st = benzen::makeInitialState(setting, kinds);
             if (sel.timedOut) {
                 std::cerr << "agent selection stopped at deadline\n";
             }
         }
 
-        if (!procon37::writeAgentKindsJson(kinds, "agents.json")) {
+        if (!benzen::writeAgentKindsJson(kinds, "agents.json")) {
             std::cerr << "failed to write agents.json\n";
             return 1;
         }
 
-        procon37::ScoreState previousScore;
+        benzen::ScoreState previousScore;
         const char* scorePath = argc > firstArg + 2 ? argv[firstArg + 2] : nullptr;
         if (!loadScore(scorePath, setting, st, previousScore)) return 1;
 
@@ -133,42 +133,42 @@ int main(int argc, char* argv[]) {
                   << " time-limit-ms=" << beam.timeLimitMs
                   << " safety-margin-ms=" << beam.safetyMarginMs << '\n';
 
-        const auto ans = procon37::solveDay(
+        const auto ans = benzen::solveDay(
             setting, st, previousScore, beam);
         if (!ans.success) {
             std::cerr << "failed to construct even a wait plan\n";
             return 1;
         }
 
-        const auto validation = procon37::validateDailyPlan(
+        const auto validation = benzen::validateDailyPlan(
             setting, st, ans.plan, previousScore);
         if (!validation.valid) {
             std::cerr << "refusing to write invalid plan: "
-                      << procon37::simulationErrorMessage(
+                      << benzen::simulationErrorMessage(
                              validation.failure.error)
                       << '\n';
             return 1;
         }
         constexpr const char* answerPath = "answer.json";
-        if (!procon37::writePlanJson(ans.plan, answerPath)) {
+        if (!benzen::writePlanJson(ans.plan, answerPath)) {
             std::cerr << "failed to write " << answerPath << '\n';
             return 1;
         }
-        const procon37::ScoreCheckpoint nextCheckpoint{
+        const benzen::ScoreCheckpoint nextCheckpoint{
             st.day + 1,
             ans.finalState.score,
         };
-        if (!procon37::writeScoreCheckpointJson(
+        if (!benzen::writeScoreCheckpointJson(
                 nextCheckpoint, "score-next.json")) {
             std::cerr << "failed to write score-next.json\n";
             return 1;
         }
 
-        procon37::ConsoleConfig console;
+        benzen::ConsoleConfig console;
         console.showFinalMap = false;
         console.showPlan = false;
         console.showTrace = false;
-        procon37::printConsoleReport(
+        benzen::printConsoleReport(
             std::cout, setting, st, ans, previousScore, console);
         std::cout << "\nanswer-json=" << answerPath
                   << "\nagents-json=agents.json"

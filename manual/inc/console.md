@@ -7,7 +7,7 @@
 ## 探索結果をまとめて表示
 
 ```cpp
-procon37::ConsoleConfig config;
+benzen::ConsoleConfig config;
 config.showMap = true;
 config.showFinalMap = false;
 config.showPlan = true;
@@ -16,7 +16,7 @@ config.showTrace = true;
 config.traceEveryStep = false;
 config.maxTraceLines = 120;
 
-procon37::printConsoleReport(
+benzen::printConsoleReport(
     std::cout,
     setting,
     matchState,

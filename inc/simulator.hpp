@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 enum class SimulationError : std::uint8_t {
     None,
@@ -362,4 +362,4 @@ inline SimulationResult simulateDay(
     return res;
 }
 
-}  // namespace procon37
+}  // namespace benzen

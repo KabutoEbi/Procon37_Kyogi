@@ -5,7 +5,7 @@
 小規模な割当問題用の最小費用流である。`brain1`では巡回車と目標、巡回車と補給車の一対一割当に使う。
 
 ```cpp
-procon37::MinCostFlow flow(4); // 頂点0～3
+benzen::MinCostFlow flow(4); // 頂点0～3
 int edge = flow.addEdge(0, 1, 1, 5);
 flow.addEdge(1, 3, 1, -10);
 

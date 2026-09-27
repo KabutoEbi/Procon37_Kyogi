@@ -5,11 +5,11 @@
 ビームサーチで等価状態を統合し、燃料が劣る状態を除去するための補助関数を提供する。
 
 ```cpp
-auto key = procon37::canonicalSearchState(state);
+auto key = benzen::canonicalSearchState(state);
 auto fuelIndependentKey =
-    procon37::canonicalSearchState(state, true);
+    benzen::canonicalSearchState(state, true);
 
-if (procon37::searchStateDominates(a, b)) {
+if (benzen::searchStateDominates(a, b)) {
     // bは削除可能
 }
 ```

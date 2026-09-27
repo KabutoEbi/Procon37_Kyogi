@@ -5,12 +5,12 @@
 完成した`DailyPlan`がルール上有効かを検証する薄い入口である。
 
 ```cpp
-auto validation = procon37::validateDailyPlan(
+auto validation = benzen::validateDailyPlan(
     setting, matchState, plan, previousScore);
 
 if (!validation.valid) {
     const auto& failure = validation.failure;
-    std::cerr << procon37::simulationErrorMessage(failure.error) << '\n';
+    std::cerr << benzen::simulationErrorMessage(failure.error) << '\n';
 }
 ```
 

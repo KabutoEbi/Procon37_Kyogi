@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 struct RouteCost {
     std::int32_t steps = kImpassableCost;
@@ -60,4 +60,4 @@ struct FuelPathLabel {
     Direction previousDirection = Direction::UpperLeft;
 };
 
-}  // namespace procon37
+}  // namespace benzen

@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 
-using namespace procon37;
+using namespace benzen;
 
 int main() {
     constexpr std::array<const char*, 3> paths = {

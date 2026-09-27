@@ -7,7 +7,7 @@
 ## ランダム問題の生成
 
 ```cpp
-procon37::CreateConfig config;
+benzen::CreateConfig config;
 config.width = 16;
 config.height = 16;
 config.agentCount = 4;
@@ -16,7 +16,7 @@ config.brandCount = 12;
 config.dayCount = 4;
 config.seed = 123;
 
-auto problem = procon37::create(config, "problem.json");
+auto problem = benzen::create(config, "problem.json");
 ```
 
 同じ`seed`と設定なら同じ問題になる。盤面は8～32、エージェントは3～8、日数は4～10などの制約があり、不正設定は`std::invalid_argument`になる。
@@ -26,13 +26,13 @@ auto problem = procon37::create(config, "problem.json");
 ## 公式形式JSON
 
 ```cpp
-procon37::createMatchSettingJson(
+benzen::createMatchSettingJson(
     problem.setting, "match-setting.json");
 
-procon37::CreateMatchStateConfig stateConfig;
+benzen::CreateMatchStateConfig stateConfig;
 stateConfig.day = 0;
 stateConfig.supplyCount = 1;
-auto state = procon37::createMatchStateJson(
+auto state = benzen::createMatchStateJson(
     problem.setting, stateConfig, "match-state.json");
 ```
 

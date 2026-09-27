@@ -2,7 +2,7 @@
 
 #include "game_state_hash.hpp"
 
-namespace procon37 {
+namespace benzen {
 
 // 完全比較APIを変えず、探索だけで将来の挙動が等価な状態を統合する。
 inline GameState canonicalSearchState(GameState state, bool ignoreFuel = false) {
@@ -36,4 +36,4 @@ inline bool searchStateDominates(const GameState& lhs, const GameState& rhs) {
            fuelDominates(lhs, rhs);
 }
 
-}  // namespace procon37
+}  // namespace benzen

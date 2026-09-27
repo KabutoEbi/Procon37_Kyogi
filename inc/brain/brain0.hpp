@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace procon37 {
+namespace benzen {
 
 // 最短ステップ経路を求める基礎戦略。
 // 道路状態は1日の間変化しないため、同じ日の探索結果を再利用できる。
@@ -286,4 +286,4 @@ inline PathResult brain0FuelConstrained(
         setting, state, start, goal, kind, fuelBudget);
 }
 
-}  // namespace procon37
+}  // namespace benzen

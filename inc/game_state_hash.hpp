@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace procon37 {
+namespace benzen {
 
 namespace detail {
 
@@ -119,4 +119,4 @@ inline bool operator!=(const GameState& lhs, const GameState& rhs) noexcept {
     return !(lhs == rhs);
 }
 
-}  // namespace procon37
+}  // namespace benzen

@@ -5,15 +5,15 @@
 ビームサーチ状態を評価する重み、補助情報、評価内訳を定義する。
 
 ```cpp
-procon37::EvaluationWeights weights;
+benzen::EvaluationWeights weights;
 weights.remainingFuel = 2.0;
 weights.fuelRisk = -2000.0;
 
-procon37::EvaluationContext context;
+benzen::EvaluationContext context;
 context.scoreAtDayStart = previousScore;
 context.nearestValuableSpotSteps[0] = 5;
 
-auto result = procon37::evaluateGameState(state, context, weights);
+auto result = benzen::evaluateGameState(state, context, weights);
 double score = result.total;
 ```
 
