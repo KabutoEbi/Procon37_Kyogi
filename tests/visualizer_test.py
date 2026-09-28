@@ -32,12 +32,40 @@ from backend import (  # noqa: E402
     read_json,
     connection_from_env,
     load_snapshot,
+    parse_solver_result,
     trace_answer_routes,
     simple_server_teams,
 )
 
 
 class BackendTest(unittest.TestCase):
+    def test_solver_result_report(self) -> None:
+        report = """parameters beam-width=19
+=== procon37 solver report ===
+day=2
+
+search
+  success=true
+  stop=time-limit
+  elapsed-ms=4987
+  expanded=123456
+
+result
+  udon=17
+  daily-brands=4
+  match-brands=7
+  total-udon=42
+"""
+        summary = parse_solver_result(report)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.day, 2)
+        self.assertEqual(summary.stop, "time-limit")
+        self.assertEqual(summary.elapsed_ms, 4987)
+        self.assertEqual(summary.expanded, 123456)
+        self.assertEqual((summary.daily_udon, summary.daily_brands), (17, 4))
+        self.assertEqual((summary.total_udon, summary.match_brands), (42, 7))
+        self.assertIsNone(parse_solver_result("solver output without report"))
+
     def test_simple_server_client_work_clear(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             server = SimpleServer(Path(directory))

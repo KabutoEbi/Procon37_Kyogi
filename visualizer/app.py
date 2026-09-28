@@ -37,11 +37,13 @@ from backend import (
     SearchParameters,
     SimpleServer,
     SimpleServerInfo,
+    SolverResultSummary,
     trace_answer_routes,
     DEFAULT_SIMPLE_CONFIG,
     Paused,
     connection_from_env,
     load_snapshot,
+    parse_solver_result,
     read_json,
     simple_server_teams,
 )
@@ -111,6 +113,16 @@ class SolverGUI(tk.Tk):
         self.day_var = tk.IntVar(value=0)
         self.status_var = tk.StringVar(value="準備完了")
         self.map_info_var = tk.StringVar(value="試合設定を取得または読み込んでください")
+        self.search_result_vars = {
+            "status": tk.StringVar(value="未実行"),
+            "target": tk.StringVar(value="-"),
+            "elapsed": tk.StringVar(value="-"),
+            "expanded": tk.StringVar(value="-"),
+            "daily_count": tk.StringVar(value="-"),
+            "total_count": tk.StringVar(value="-"),
+            "daily_brands": tk.StringVar(value="-"),
+            "total_brands": tk.StringVar(value="-"),
+        }
         self.simple_config_var = tk.StringVar(value=str(DEFAULT_SIMPLE_CONFIG))
         self.simple_visible_var = tk.BooleanVar(value=False)
         self.simple_team_var = tk.StringVar()
@@ -423,6 +435,29 @@ class SolverGUI(tk.Tk):
                 self.send_answer_button = button
             row += 1
 
+        result = ttk.LabelFrame(parent, text="探索結果", padding=7)
+        self.search_result_frame = result
+        result.grid(row=row, column=0, sticky=tk.EW, pady=(14, 0))
+        result.columnconfigure(1, weight=1)
+        for result_row, (key, label) in enumerate([
+            ("status", "状態"),
+            ("target", "対象"),
+            ("elapsed", "探索時間"),
+            ("expanded", "展開ノード"),
+            ("daily_count", "当日総獲得数"),
+            ("total_count", "全日程合計獲得数"),
+            ("daily_brands", "当日獲得系列"),
+            ("total_brands", "全日程獲得系列"),
+        ]):
+            ttk.Label(result, text=label).grid(
+                row=result_row, column=0, sticky=tk.W, pady=2
+            )
+            ttk.Label(
+                result,
+                textvariable=self.search_result_vars[key],
+                anchor=tk.E,
+            ).grid(row=result_row, column=1, sticky=tk.EW, padx=(8, 0), pady=2)
+
     def _build_log_panel(self, parent: ttk.Panedwindow) -> None:
         frame = ttk.LabelFrame(parent, text="実行ログ", padding=5)
         self.log_frame = frame
@@ -592,6 +627,7 @@ class SolverGUI(tk.Tk):
         label: str,
         operation: Callable[[], Any],
         success: Callable[[Any], None] | None = None,
+        failure: Callable[[Exception], None] | None = None,
     ) -> None:
         if self._busy:
             return
@@ -605,7 +641,7 @@ class SolverGUI(tk.Tk):
                 result = operation()
                 self._messages.put(("ok", (label, success), result))
             except Exception as error:  # GUI境界で全例外を表示する。
-                self._messages.put(("error", label, error))
+                self._messages.put(("error", (label, failure), error))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -628,8 +664,13 @@ class SolverGUI(tk.Tk):
                     self._log(f"✓ {label} 完了")
                     self._set_busy(False, f"{label} 完了")
                 else:
-                    label = context
+                    label, callback = context
                     self._log(f"{label}: {payload}")
+                    if callback is not None:
+                        try:
+                            callback(payload)
+                        except Exception as error:
+                            self._log(f"表示更新エラー: {error}")
                     self._set_busy(False, "停止しました" if isinstance(payload, Paused) else f"{label} 失敗")
                     if not isinstance(payload, Paused) and not self._closing:
                         messagebox.showerror(label, self._redact(str(payload)), parent=self)
@@ -774,6 +815,7 @@ class SolverGUI(tk.Tk):
         self._day_count = 0
         self._current_snapshot = None
         self._clear_answer_route()
+        self._clear_search_result()
         self.map_canvas.delete("all")
         self.agent_table.delete(*self.agent_table.get_children())
         self.spot_table.delete(*self.spot_table.get_children())
@@ -857,6 +899,7 @@ class SolverGUI(tk.Tk):
 
     def _setting_loaded(self, path: Path) -> None:
         self._clear_answer_route()
+        self._clear_search_result()
         self.setting_var.set(str(path))
         self.state_var.set("")
         self.score_var.set("")
@@ -879,6 +922,7 @@ class SolverGUI(tk.Tk):
         if day is None:
             return
         auto_send = self.mode_var.get() == "auto"
+        self._begin_search_result(f"day={day}")
         setting = Path(self.setting_var.get())
         state = self._work_path(f"state-day{day}.json")
         checkpoint: Path | None = None
@@ -894,10 +938,11 @@ class SolverGUI(tk.Tk):
             self._messages.put(("event", "solve_start", day))
             return workflow.solve_day(setting, state, checkpoint)
 
-        def completed(_result: CommandResult) -> None:
+        def completed(result: CommandResult) -> None:
             self.state_var.set(str(state))
             self._state_loaded(state)
             self._show_answer_route(self._work_path("answer.json"))
+            self._show_search_result(result)
             self._show_json(self._work_path("answer.json"))
             if auto_send:
                 self.after_idle(
@@ -908,6 +953,7 @@ class SolverGUI(tk.Tk):
             f"day={day} 状態取得・探索",
             fetch_and_solve,
             completed,
+            self._search_result_failed,
         )
 
     def _solve_local(self) -> None:
@@ -916,8 +962,9 @@ class SolverGUI(tk.Tk):
             return
         setting = Path(self.setting_var.get())
         self._clear_answer_route()
+        self._begin_search_result("ローカル")
 
-        def completed(_result: CommandResult) -> None:
+        def completed(result: CommandResult) -> None:
             self._setting_loaded(setting)
             initial_snapshot = self._current_snapshot
             result_state = self._work_path("result-state.json")
@@ -926,12 +973,14 @@ class SolverGUI(tk.Tk):
             self._show_answer_route(
                 self._work_path("answer.json"), source_snapshot=initial_snapshot
             )
+            self._show_search_result(result, local=True)
             self._show_json(self._work_path("answer.json"))
 
         self._run_task(
             "ローカル設定の探索",
             lambda: workflow.solve_local(setting),
             completed,
+            self._search_result_failed,
         )
 
     def _send_answer(self) -> None:
@@ -1018,6 +1067,51 @@ class SolverGUI(tk.Tk):
         self._answer_routes = None
         self._answer_route_day = None
         self.map_canvas.delete("answer-route")
+
+    def _clear_search_result(self) -> None:
+        for key, value in {
+            "status": "未実行",
+            "target": "-",
+            "elapsed": "-",
+            "expanded": "-",
+            "daily_count": "-",
+            "total_count": "-",
+            "daily_brands": "-",
+            "total_brands": "-",
+        }.items():
+            self.search_result_vars[key].set(value)
+
+    def _begin_search_result(self, target: str) -> None:
+        self._clear_search_result()
+        self.search_result_vars["status"].set("探索中…")
+        self.search_result_vars["target"].set(target)
+
+    def _search_result_failed(self, error: Exception) -> None:
+        self.search_result_vars["status"].set(
+            "停止" if isinstance(error, Paused) else "失敗"
+        )
+
+    def _show_search_result(
+        self, result: CommandResult, *, local: bool = False
+    ) -> None:
+        summary: SolverResultSummary | None = parse_solver_result(result.stdout)
+        if summary is None:
+            self.search_result_vars["status"].set("結果を読めません")
+            return
+        stop = {
+            "completed": "完了",
+            "time-limit": "時間上限",
+            "no-valid-plan": "有効解なし",
+        }.get(summary.stop, summary.stop)
+        self.search_result_vars["status"].set(stop)
+        prefix = "ローカル " if local else ""
+        self.search_result_vars["target"].set(f"{prefix}day={summary.day}")
+        self.search_result_vars["elapsed"].set(f"{summary.elapsed_ms:,} ms")
+        self.search_result_vars["expanded"].set(f"{summary.expanded:,}")
+        self.search_result_vars["daily_count"].set(f"{summary.daily_udon:,}玉")
+        self.search_result_vars["total_count"].set(f"{summary.total_udon:,}玉")
+        self.search_result_vars["daily_brands"].set(f"{summary.daily_brands}系列")
+        self.search_result_vars["total_brands"].set(f"{summary.match_brands}系列")
 
     def _show_answer_route(
         self, path: Path, *, source_snapshot: MapSnapshot | None = None

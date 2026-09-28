@@ -94,6 +94,53 @@ class CommandResult:
 
 
 @dataclass(frozen=True)
+class SolverResultSummary:
+    day: int
+    stop: str
+    elapsed_ms: int
+    expanded: int
+    daily_udon: int
+    daily_brands: int
+    total_udon: int
+    match_brands: int
+
+
+def parse_solver_result(output: str) -> SolverResultSummary | None:
+    """C++ソルバーのコンソール報告からGUI表示用の探索結果を取り出す。"""
+    values: dict[str, str] = {}
+    in_report = False
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if line == "=== procon37 solver report ===":
+            in_report = True
+            continue
+        if not in_report or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+
+    required = (
+        "day", "stop", "elapsed-ms", "expanded", "udon",
+        "daily-brands", "total-udon", "match-brands",
+    )
+    if any(key not in values for key in required):
+        return None
+    try:
+        return SolverResultSummary(
+            day=int(values["day"]),
+            stop=values["stop"],
+            elapsed_ms=int(values["elapsed-ms"]),
+            expanded=int(values["expanded"]),
+            daily_udon=int(values["udon"]),
+            daily_brands=int(values["daily-brands"]),
+            total_udon=int(values["total-udon"]),
+            match_brands=int(values["match-brands"]),
+        )
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
 class AgentView:
     index: int
     kind: int

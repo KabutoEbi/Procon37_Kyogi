@@ -50,6 +50,11 @@ class GUITest(unittest.TestCase):
             self.assertEqual(gui.log_frame.master, gui.content_pane)
             self.assertEqual(gui.controls_frame.master, gui.control_panel)
             self.assertLess(gui.control_panel.winfo_width(), 320)
+            self.assertEqual(gui.search_result_frame.master, gui.controls_frame)
+            self.assertGreater(
+                int(gui.search_result_frame.grid_info()["row"]),
+                int(gui.send_answer_button.grid_info()["row"]),
+            )
             self.assertEqual(gui.agent_table.master.master, gui.map_state_panel)
             self.assertEqual(gui.spot_table.master.master, gui.map_state_panel)
             gui.work_var.set(directory)
@@ -93,7 +98,21 @@ class GUITest(unittest.TestCase):
                             ],
                             "remainingStocks": [0] * len(setting["spots"]),
                         }))
-                return CommandResult((), "test-token log", "")
+                report = f"""test-token log
+=== procon37 solver report ===
+day={day}
+search
+  success=true
+  stop=time-limit
+  elapsed-ms=1234
+  expanded=56789
+result
+  udon=12
+  daily-brands=3
+  match-brands=4
+  total-udon=25
+"""
+                return CommandResult((), report, "")
 
             def send(_url, token, kind, _path, **_kwargs):
                 nonlocal day
@@ -172,6 +191,14 @@ class GUITest(unittest.TestCase):
                 self.assertEqual(first_agent[4], "17/40")
                 self.assertEqual(str(first_spot[3]), "0")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
+                self.assertEqual(gui.search_result_vars["status"].get(), "時間上限")
+                self.assertEqual(gui.search_result_vars["target"].get(), "ローカル day=0")
+                self.assertEqual(gui.search_result_vars["elapsed"].get(), "1,234 ms")
+                self.assertEqual(gui.search_result_vars["expanded"].get(), "56,789")
+                self.assertEqual(gui.search_result_vars["daily_count"].get(), "12玉")
+                self.assertEqual(gui.search_result_vars["total_count"].get(), "25玉")
+                self.assertEqual(gui.search_result_vars["daily_brands"].get(), "3系列")
+                self.assertEqual(gui.search_result_vars["total_brands"].get(), "4系列")
 
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver):
