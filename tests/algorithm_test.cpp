@@ -260,6 +260,71 @@ void testCoordinatedPlanningAndCache() {
     assert(validateDailyPlan(s, ms, conflict.plan).valid);
 }
 
+void testDistanceCache() {
+    auto s = line(7, {10, 10}, 6, {0, 6},
+        {{1, 2, 1, -1}, {2, 5, 1, -1}});
+    s.field.cells[1].type = CellType::Road;
+    auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    auto cfg = smallBeam();
+    cfg.distanceCacheEntries = 0;
+    const auto uncached = brain1(s, ms, {}, cfg);
+    cfg.distanceCacheEntries = 4;
+    const auto cold = brain1(s, ms, {}, cfg);
+    const auto warm = brain1(s, ms, {}, cfg);
+    assert(!cold.reusedDistanceTables && warm.reusedDistanceTables);
+    assert(cold.plan == uncached.plan && warm.plan == uncached.plan);
+    assert(warm.finalState == uncached.finalState);
+
+    // 燃料や得点は距離表のキーに含めず、評価・取得を毎回やり直す。
+    ms.agents[0].fuel = 1;
+    ScoreState prev;
+    prev.matchBrands = brandBit(0);
+    const auto changedState = brain1(s, ms, prev, cfg);
+    assert(changedState.reusedDistanceTables);
+    cfg.distanceCacheEntries = 0;
+    const auto freshState = brain1(s, ms, prev, cfg);
+    assert(changedState.plan == freshState.plan);
+    assert(changedState.finalState == freshState.finalState);
+    cfg.distanceCacheEntries = 4;
+    (void)brain1(s, ms, {}, cfg);
+
+    auto checkMiss = [&]() {
+        const auto changed = brain1(s, ms, {}, cfg);
+        assert(!changed.reusedDistanceTables);
+        assert(changed.success && validateDailyPlan(s, ms, changed.plan).valid);
+        cfg.distanceCacheEntries = 0;
+        const auto fresh = brain1(s, ms, {}, cfg);
+        assert(changed.plan == fresh.plan && changed.finalState == fresh.finalState);
+        cfg.distanceCacheEntries = 4;
+        (void)brain1(s, ms, {}, cfg);
+    };
+    ms.trafficByPos[1] = TrafficStatus::Busy;
+    checkMiss();
+    // 移動時間はどちらも2だが、燃料消費が違う。
+    s.field.cells[1].type = CellType::Plain;
+    checkMiss();
+    s.field.spots[0].pos = 3;
+    assert(s.field.rebuildSpotIndex());
+    checkMiss();
+    std::swap(s.field.spots[0], s.field.spots[1]);
+    assert(s.field.rebuildSpotIndex());
+    checkMiss();
+    s.field.width = 1;
+    s.field.height = 7;
+    checkMiss();
+
+    // 容量1では別条件へ切り替えた後、古い距離表を再利用しない。
+    cfg.distanceCacheEntries = 1;
+    s.field.cells[1].type = CellType::Road;
+    (void)brain1(s, ms, {}, cfg);
+    ms.trafficByPos[1] = TrafficStatus::Jammed;
+    const auto jammed = brain1(s, ms, {}, cfg);
+    assert(!jammed.reusedDistanceTables);
+    assert(brain1(s, ms, {}, cfg).reusedDistanceTables);
+    ms.trafficByPos[1] = TrafficStatus::Busy;
+    assert(!brain1(s, ms, {}, cfg).reusedDistanceTables);
+}
+
 void testDetourRendezvousAndTwoSpots() {
     // 時間・燃料が等しい目的地経路のうち、添字の小さい経路は
     // 補給車から遠い。下側の経路で合流すれば4ステップで取得できる。
@@ -317,7 +382,62 @@ void testTrialsAndTuning() {
                                 TrialTraffic(2, std::vector<TrafficStatus>(3, TrafficStatus::Jammed))};
     const auto selected = selectAgentKinds(s, selection);
     assert(selected.success && selected.trialSimulations == 2);
+    assert(selected.completedTrialScenarios == 2);
     assert((selected.worstTrialScore == TrialScore{2, 3, 3}));
+
+    // 期限切れの試走は未完走として扱い、比較スコアへ混ぜない。
+    const auto expired = runTrial(s, {AgentKind::Patrol}, {}, cfg, 0,
+        std::chrono::steady_clock::now() - std::chrono::seconds(1));
+    assert(!expired.success && expired.days == 0);
+
+    // 全候補を同じシナリオ数で比較し、選択結果の集計値を再計算できる。
+    auto multi = line(7, {4, 5}, 6, {0, 3, 6},
+        {{1, 0, 1, -1}, {2, 2, 1, -1}, {3, 6, 1, -1}});
+    multi.field.cells[1].type = CellType::Road;
+    AgentSelectorConfig fair;
+    fair.maxSupplyCount = 1;
+    fair.trialCandidateLimit = 3;
+    fair.trialBeamWidth = 8;
+    fair.trialJointBeamWidth = 32;
+    fair.trialScenarios = {
+        TrialTraffic(2, std::vector<TrafficStatus>(7, TrafficStatus::Smooth)),
+        TrialTraffic(2, std::vector<TrafficStatus>(7, TrafficStatus::Jammed))};
+    const auto choice = selectAgentKinds(multi, fair);
+    assert(choice.usedBeamTrial && choice.trialAssignments == 3);
+    assert(choice.completedTrialScenarios == 2 && choice.trialSimulations == 6);
+    TrialScore total{}, worst;
+    worst.fill(std::numeric_limits<std::int64_t>::max());
+    BeamSearchConfig verify;
+    verify.beamWidth = fair.trialBeamWidth;
+    verify.jointBeamWidth = fair.trialJointBeamWidth;
+    verify.threadCount = 1;
+    for (const auto& traffic : fair.trialScenarios) {
+        const auto replay = runTrial(multi, choice.kinds, traffic, verify);
+        assert(replay.success);
+        const auto score = trialScore(replay.score);
+        worst = std::min(worst, score);
+        for (std::size_t i = 0; i < total.size(); ++i) total[i] += score[i];
+    }
+    assert(choice.totalTrialScore == total && choice.worstTrialScore == worst);
+    for (std::size_t supply = 0; supply < multi.agentCount(); ++supply) {
+        std::vector<AgentKind> kinds(multi.agentCount(), AgentKind::Patrol);
+        kinds[supply] = AgentKind::Supply;
+        TrialScore alternative{};
+        for (const auto& traffic : fair.trialScenarios) {
+            const auto replay = runTrial(multi, kinds, traffic, verify);
+            assert(replay.success);
+            const auto score = trialScore(replay.score);
+            for (std::size_t i = 0; i < alternative.size(); ++i)
+                alternative[i] += score[i];
+        }
+        assert(choice.totalTrialScore >= alternative);
+    }
+    fair.timeLimitMs = 60000;
+    fair.safetyMarginMs = 0;
+    const auto budgeted = selectAgentKinds(multi, fair);
+    assert(budgeted.kinds == choice.kinds);
+    assert(budgeted.totalTrialScore == choice.totalTrialScore);
+    assert(budgeted.completedTrialScenarios == 2);
 
     auto roads = line(16, {4, 4}, 8, {0}, {{1, 15, 1, -1}});
     for (auto& cell : roads.field.cells) cell.type = CellType::Road;
@@ -387,6 +507,7 @@ int main() {
     testRendezvousObstaclesAndMultipleSupplies();
     testMultipleRefuelsInOneDay();
     testCoordinatedPlanningAndCache();
+    testDistanceCache();
     testDetourRendezvousAndTwoSpots();
     testTrialsAndTuning();
     testConsoleReport();

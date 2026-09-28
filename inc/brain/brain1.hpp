@@ -67,6 +67,9 @@ struct BeamSearchConfig {
     bool detourRendezvous = true;
     bool twoSpotLookahead = true;
     std::size_t assignmentCacheLimit = 4096;
+    // 同一地形・交通条件の距離前計算を呼び出しスレッド内で再利用する。
+    // 0なら無効。状態や締切・割当キャッシュは保存しない。
+    std::size_t distanceCacheEntries = 8;
     std::size_t detourCandidateLimit = 6;
     std::size_t lookaheadCandidateLimit = 6;
     bool profilePlanning = false;
@@ -82,6 +85,7 @@ enum class SearchStopReason : std::uint8_t {
 };
 
 struct BeamSearchResult {
+    bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
     GameState finalState{};
@@ -461,8 +465,35 @@ private:
         const std::function<bool()>& stop,
         std::size_t threadCount,
         ParallelExecutor& executor,
-        bool& stopped) {
+        bool& stopped,
+        std::size_t cacheEntries,
+        bool& reused) {
         const Field& field = setting.field;
+        struct CachedDistances {
+            std::vector<std::int32_t> key;
+            SpotDistanceTables tables;
+        };
+        static thread_local std::vector<CachedDistances> cache;
+        const auto capacity = std::min<std::size_t>(8, cacheEntries);
+        while (cache.size() > capacity) cache.erase(cache.begin());
+        std::vector<std::int32_t> key;
+        if (capacity > 0) {
+            key = {field.width, field.height,
+                   static_cast<std::int32_t>(field.spots.size())};
+            for (CellPos pos = 0; pos < static_cast<CellPos>(field.cellCount()); ++pos) {
+                key.push_back(static_cast<std::int32_t>(field.at(pos).type));
+                key.push_back(moveStepCost(setting, matchState, pos));
+            }
+            for (const auto& spot : field.spots) key.push_back(spot.pos);
+            for (std::size_t i = 0; i < cache.size(); ++i) {
+                if (cache[i].key != key) continue;
+                std::rotate(cache.begin() + static_cast<std::ptrdiff_t>(i),
+                            cache.begin() + static_cast<std::ptrdiff_t>(i + 1),
+                            cache.end());
+                reused = true;
+                return cache.back().tables;
+            }
+        }
         SpotDistanceTables result;
         result.travel.resize(field.cellCount());
         result.firstHop.resize(field.cellCount());
@@ -608,6 +639,11 @@ private:
             std::min(threadCount, field.spots.size()));
         executor.run(workers, worker);
         stopped = aborted.load(std::memory_order_relaxed);
+        // 中断した前計算や、探索ごとのコールバック・割当状態は保存しない。
+        if (!stopped && capacity > 0) {
+            if (cache.size() == capacity) cache.erase(cache.begin());
+            cache.push_back({std::move(key), result});
+        }
         return result;
     }
 
@@ -1881,7 +1917,9 @@ public:
             [&]() { return expired(); },
             threadCount,
             executor,
-            prepStopped);
+            prepStopped,
+            cfg.distanceCacheEntries,
+            res.reusedDistanceTables);
         spotDist.planning = cfg;
         spotDist.assignments = cache;
         spotDist.timings = timings;

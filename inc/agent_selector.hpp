@@ -49,6 +49,7 @@ struct AgentSelectionResult {
     std::size_t evaluatedAssignments = 0;
     std::size_t trialAssignments = 0;
     std::size_t trialSimulations = 0;
+    std::size_t completedTrialScenarios = 0;
     bool timedOut = false;
     TrialScore worstTrialScore{};
     TrialScore totalTrialScore{};
@@ -175,7 +176,8 @@ public:
                                   ? started + std::chrono::milliseconds(budgetMs)
                                   : Clock::time_point::max();
         auto expired = [&]() noexcept {
-            return limited && Clock::now() >= deadline;
+            return limited && std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - Clock::now()).count() <= 0;
         };
 
         const std::size_t n = s.agentCount();
@@ -383,6 +385,16 @@ public:
         }
 
         const Candidate* best = &cs.front();
+        // 短い締切では補給車多数の配置までしか届かず、最小補給台数の
+        // 別配置を試せない。台数の比較を1回残したうえで、位置の次善案を試す。
+        for (std::size_t t = 2; t < trials.size(); ++t) {
+            if (cs[trials[t]].supplyCount == cfg.minSupplyCount) {
+                std::rotate(trials.begin() + 2,
+                            trials.begin() + static_cast<std::ptrdiff_t>(t),
+                            trials.begin() + static_cast<std::ptrdiff_t>(t + 1));
+                break;
+            }
+        }
         EvaluationBreakdown bestEval{};
         TrialScore bestWorst{}, bestTotal{};
         bool tried = false;
@@ -414,22 +426,8 @@ public:
                     valid = false;
                     break;
                 }
-                BeamSearchConfig trialBeam = beam;
-                if (limited) {
-                    const std::int64_t remaining =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            deadline - Clock::now()).count();
-                    const std::size_t trialDayCount = cfg.trialDays == 0
-                        ? s.dayCount()
-                        : std::min(cfg.trialDays, s.dayCount());
-                    trialBeam.timeLimitMs = std::max<std::int64_t>(
-                        1, remaining /
-                               static_cast<std::int64_t>(
-                                   std::max<std::size_t>(1, trialDayCount)));
-                    trialBeam.safetyMarginMs = 0;
-                }
                 const auto trial = runTrial(
-                    s, c.kinds, traffic, trialBeam, cfg.trialDays);
+                    s, c.kinds, traffic, beam, cfg.trialDays, deadline);
                 ++res.trialSimulations;
                 if (!trial.success) { valid = false; break; }
                 const auto score = trialScore(trial.score);
@@ -445,6 +443,7 @@ public:
                 bestTotal = total;
                 bestEval = worstEval;
                 tried = true;
+                res.completedTrialScenarios = scenarios.size();
             }
         }
 

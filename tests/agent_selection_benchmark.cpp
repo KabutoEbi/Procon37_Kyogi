@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
 
         std::cout << "size,seed,steps,fuel,selection_ms,trial_assignments,"
                      "trial_simulations,used_trial,kinds,brands,daily_brands,udon,"
-                     "holdout_brands,holdout_daily_brands,holdout_udon\n";
+                     "holdout_brands,holdout_daily_brands,holdout_udon,completed_scenarios,timed_out\n";
         for (const int size : {16, 24, 32}) {
             if (sizeOnly != 0 && size != sizeOnly) continue;
             for (int seed = seedStart; seed < seedStart + seeds; ++seed) {
@@ -90,7 +90,8 @@ int main(int argc, char** argv) {
                     std::cout << (kind == AgentKind::Supply ? 'S' : 'P');
                 std::cout << ',' << score[0] << ',' << score[1] << ',' << score[2]
                           << ',' << holdoutScore[0] << ',' << holdoutScore[1]
-                          << ',' << holdoutScore[2] << '\n';
+                          << ',' << holdoutScore[2] << ',' << chosen.completedTrialScenarios
+                          << ',' << chosen.timedOut << '\n';
             }
         }
     } catch (const std::exception& error) {
