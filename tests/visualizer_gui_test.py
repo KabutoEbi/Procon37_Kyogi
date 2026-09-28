@@ -82,7 +82,7 @@ class GUITest(unittest.TestCase):
                 if args[0] == "select":
                     Path(args[2]).write_text("[0,0,0,0]")
                 else:
-                    (workflow.work_dir / "answer.json").write_text("[[-32],[-32],[-32],[-32]]")
+                    (workflow.work_dir / "answer.json").write_text("[[2,-31],[2,-31],[-32],[-32]]")
                     (workflow.work_dir / "score-next.json").write_text(json.dumps({"nextDay": day + 1}))
                 return CommandResult((), "test-token log", "")
 
@@ -95,10 +95,12 @@ class GUITest(unittest.TestCase):
                     return day
                 return None
 
-            def drain():
+            def drain(expected_posts=None):
                 deadline = time.monotonic() + 5
-                while gui._busy and time.monotonic() < deadline:
+                while time.monotonic() < deadline:
                     gui.update()
+                    if not gui._busy and (expected_posts is None or len(posted) >= expected_posts):
+                        break
                     time.sleep(0.01)
                 gui.update()
                 self.assertFalse(gui._busy)
@@ -133,29 +135,55 @@ class GUITest(unittest.TestCase):
                     drain()
                     self.assertEqual(probe.call_args.args[1], "entered-token")
 
-                setting_path = Path(directory) / "setting.json"
-                setting_path.write_text(json.dumps(setting))
-                gui.setting_var.set(str(setting_path))
-                gui.day_var.set(0)
+                with mock.patch("backend.fetch", side_effect=fetch), \
+                     mock.patch("backend.Workflow._run", autospec=True, side_effect=solver), \
+                     mock.patch("backend.send", side_effect=send):
+                    gui._prepare_match()
+                    drain(expected_posts=1)
+                self.assertEqual(posted, ["agent"])
+                self.assertTrue((Path(directory) / "setting.json").is_file())
+                self.assertTrue((Path(directory) / "agents.json").is_file())
+                self.assertEqual(gui.setting_var.get(), str((Path(directory) / "setting.json").resolve()))
+                self.assertEqual(gui._selected_kinds, [0, 0, 0, 0])
+                self.assertEqual(gui.day_var.get(), 0)
+                self.assertEqual(int(gui.day_spinbox.cget("to")), 3)
+
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver):
                     gui._fetch_and_solve_day()
                     drain()
+                self.assertEqual(posted, ["agent"])
                 self.assertTrue((Path(directory) / "state-day0.json").is_file())
                 self.assertTrue((Path(directory) / "answer.json").is_file())
                 self.assertEqual(gui._current_snapshot.day, 0)
-
+                self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
+                first_route = gui.map_canvas.find_withtag("answer-route-agent-0")
+                second_route = gui.map_canvas.find_withtag("answer-route-agent-1")
+                self.assertTrue(first_route and second_route)
+                self.assertNotEqual(
+                    gui.map_canvas.itemcget(first_route[0], "fill"),
+                    gui.map_canvas.itemcget(second_route[0], "fill"),
+                )
+                with mock.patch("app.messagebox.askyesno", return_value=True), \
+                     mock.patch("backend.send", side_effect=send):
+                    gui._send_answer()
+                    drain(expected_posts=2)
+                self.assertEqual(gui.day_var.get(), 1)
+                self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 gui.mode_var.set("auto")
-                gui._mode_changed(True)
+                gui._mode_changed()
+                self.assertEqual(str(gui.send_answer_button["state"]), "disabled")
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver), \
                      mock.patch("backend.send", side_effect=send):
-                    gui._start_auto()
-                    drain()
-                self.assertEqual(posted, ["agent"] + ["action"] * 4)
-                self.assertEqual(gui.day_var.get(), 4)
-                self.assertIn("score-day4.json", gui.score_var.get())
-                self.assertEqual(gui._current_snapshot.day, 3)
+                    gui._fetch_and_solve_day()
+                    drain(expected_posts=3)
+                self.assertEqual(posted, ["agent", "action", "action"])
+                self.assertEqual(gui.day_var.get(), 2)
+                self.assertIn("score-day2.json", gui.score_var.get())
+                self.assertEqual(gui._current_snapshot.day, 1)
+                self.assertFalse((Path(directory) / "state-day2.json").exists())
+                self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 self.assertEqual(len(gui.agent_table.get_children()), 4)
                 self.assertEqual(
                     len(gui.spot_table.get_children()), len(setting["spots"])
@@ -168,8 +196,8 @@ class GUITest(unittest.TestCase):
                 self.assertFalse(callback_errors)
                 error_dialog.assert_not_called()
                 gui.mode_var.set("manual")
-                gui._mode_changed(True)
-                self.assertTrue(all(str(b["state"]) == "normal" for b in gui._manual_buttons))
+                gui._mode_changed()
+                self.assertEqual(str(gui.send_answer_button["state"]), "normal")
             finally:
                 gui.destroy()
 

@@ -318,6 +318,20 @@ void testTrialsAndTuning() {
     const auto selected = selectAgentKinds(s, selection);
     assert(selected.success && selected.trialSimulations == 2);
     assert((selected.worstTrialScore == TrialScore{2, 3, 3}));
+
+    auto roads = line(16, {4, 4}, 8, {0}, {{1, 15, 1, -1}});
+    for (auto& cell : roads.field.cells) cell.type = CellType::Road;
+    roads.field.cells[0].type = CellType::Plain;
+    const auto scenarios = makeTrialScenarios(roads);
+    assert(scenarios.size() == 3);
+    assert(scenarios == makeTrialScenarios(roads));
+    for (const auto& scenario : scenarios) {
+        assert(std::all_of(scenario[0].begin(), scenario[0].end(),
+            [](TrafficStatus traffic) { return traffic == TrafficStatus::Smooth; }));
+        assert(scenario[1][0] == TrafficStatus::Smooth);
+    }
+    assert(scenarios[0][1] != scenarios[1][1]);
+    assert(scenarios[1][1] != scenarios[2][1]);
 }
 
 void testConsoleReport() {

@@ -21,6 +21,8 @@ from backend import (  # noqa: E402
     ConnectionConfig,
     Workflow,
     WorkflowError,
+    AgentView,
+    MapSnapshot,
     AutomaticMatch,
     SearchParameters,
     Paused,
@@ -29,6 +31,7 @@ from backend import (  # noqa: E402
     read_json,
     connection_from_env,
     load_snapshot,
+    trace_answer_routes,
     simple_server_teams,
 )
 
@@ -79,6 +82,16 @@ class BackendTest(unittest.TestCase):
             self.assertEqual(snapshot.spots[1], (3, 2))
             self.assertEqual(snapshot.traffics[1], 2)
             self.assertEqual(snapshot.agents[0].fuel, 7)
+            self.assertEqual(trace_answer_routes(snapshot, [[2, -3, 5]]), ((0, 1, 0),))
+            with self.assertRaises(WorkflowError):
+                trace_answer_routes(snapshot, [[5]])
+
+        hex_snapshot = MapSnapshot(
+            width=3, height=2, cells=((0, 0, 0), (0, 0, 0)),
+            spots={}, traffics={}, agents=(AgentView(0, 0, 0, 5),),
+            day=0, day_steps=(3,), fuel_limit=5,
+        )
+        self.assertEqual(trace_answer_routes(hex_snapshot, [[4, -1, 1]]), ((0, 3, 0),))
 
     def test_answer_checkpoint_is_confirmed_only_after_acceptance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

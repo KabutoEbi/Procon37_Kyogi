@@ -513,6 +513,28 @@ void testAgentSelector() {
                AgentKind::Supply) == 1);
 }
 
+void testSelectorValuesParallelPatrols() {
+    MatchSetting s;
+    s.daySteps = {7};
+    s.daySeconds = {60};
+    s.fuelLimit = 2;
+    s.playerCount = 2;
+    s.field.width = 6;
+    s.field.height = 1;
+    s.field.cells.assign(6, Cell{CellType::Plain, -1});
+    s.field.spots = {{1, 4, 1, -1}, {2, 5, 1, -1}};
+    s.agentStarts = {0, 1, 2};
+    assert(s.field.rebuildSpotIndex());
+
+    AgentSelectorConfig cfg;
+    cfg.trialCandidateLimit = 0;
+    const auto selected = selectAgentKinds(s, cfg);
+    assert(selected.success);
+    // 巡回車1台でも全スポットが到達可能だが、もう1台を
+    // 補給車へ変えると並行取得の余地が失われる。
+    assert(selected.supplyCount == 1);
+}
+
 void testPersistentJsonAndFallback() {
     std::ostringstream kinds;
     printAgentKinds(kinds, {AgentKind::Patrol, AgentKind::Supply});
@@ -776,6 +798,7 @@ int main() {
     testPathRendezvous();
     testWaitAtLastReachableSpotAndRefuel();
     testAgentSelector();
+    testSelectorValuesParallelPatrols();
     testPersistentJsonAndFallback();
     testMatchRunner();
     testProblemCreator();

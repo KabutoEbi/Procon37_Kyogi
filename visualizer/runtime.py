@@ -59,7 +59,6 @@ def find_runtime():
 def ensure_runtime():
     selected = find_runtime()
     if Path(selected).resolve() != Path(sys.executable).resolve():
-        print(f"GUI用Pythonへ切り替えます: {selected}", file=sys.stderr, flush=True)
         os.execv(selected, [selected, str(Path(sys.argv[0]).resolve()), *sys.argv[1:]])
 
 

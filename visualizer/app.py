@@ -34,10 +34,10 @@ from backend import (
     MapSnapshot,
     Workflow,
     WorkflowError,
-    AutomaticMatch,
     SearchParameters,
     SimpleServer,
     SimpleServerInfo,
+    trace_answer_routes,
     DEFAULT_SIMPLE_CONFIG,
     Paused,
     connection_from_env,
@@ -66,32 +66,34 @@ class SolverGUI(tk.Tk):
         3: "#7fc4de",
     }
     TRAFFIC_COLORS = {1: "#f2b84b", 2: "#df6657"}
+    ROUTE_COLORS = (
+        "#d62728", "#1f77b4", "#2ca02c", "#9467bd",
+        "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
+    )
 
     def __init__(self) -> None:
         if not supported_tk():
             raise RuntimeError("このPythonのTkはGUI表示に非対応です。python3 visualizer/app.pyで起動してください")
         super().__init__()
-        self.title("Procon37 Control Center")
+        self.title("ビジュアライザ")
         self.geometry("1380x880")
         self.minsize(1040, 700)
 
         self._messages: queue.Queue[tuple[str, Any, Any]] = queue.Queue()
         self._busy = False
         self._action_buttons: list[ttk.Button] = []
-        self._manual_buttons: list[ttk.Button] = []
         self._current_snapshot: MapSnapshot | None = None
+        self._answer_routes: tuple[tuple[int, ...], ...] | None = None
+        self._answer_route_day: int | None = None
+        self._day_count = 0
         self._map_redraw_job: str | None = None
         self._stop = threading.Event()
-        self._automatic: AutomaticMatch | None = None
         self._closing = False
         self._active_token = ""
         self._selected_kinds: list[int] = []
         self._simple_server = SimpleServer(PROJECT_ROOT / "runtime/simple-server")
         self._simple_teams: tuple[tuple[str, str], ...] = ()
         self.mode_var = tk.StringVar(value="manual")
-        self.scope_var = tk.StringVar(value="試合開始前から")
-        self.interval_var = tk.StringVar(value="0.5")
-        self.wait_var = tk.StringVar(value="3600")
         self.parameter_vars = {
             name: tk.StringVar(value=str(value))
             for name, value in vars(SearchParameters()).items()
@@ -133,22 +135,7 @@ class SolverGUI(tk.Tk):
         style.configure("Primary.TButton", font=("TkDefaultFont", 10, "bold"))
 
     def _build_ui(self) -> None:
-        header = ttk.Frame(self, padding=(12, 10, 12, 6))
-        header.pack(fill=tk.X)
-        ttk.Label(header, text="Procon37 Control Center", style="Title.TLabel").pack(side=tk.LEFT)
-        ttk.Label(
-            header,
-            text="取得 → 種別選択 → 状態取得 → 探索 → 送信",
-            foreground="#59636e",
-        ).pack(side=tk.LEFT, padx=18)
-        self.settings_button = ttk.Button(
-            header,
-            text="実行設定・使用ファイル",
-            command=self._show_settings_window,
-        )
-        self.settings_button.pack(side=tk.RIGHT)
-
-        simple_row = ttk.Frame(self, padding=(12, 0, 12, 8))
+        simple_row = ttk.Frame(self, padding=(12, 8))
         self.simple_row = simple_row
         simple_row.pack(fill=tk.X)
         simple_row.columnconfigure(1, weight=1)
@@ -159,6 +146,12 @@ class SolverGUI(tk.Tk):
             command=self._toggle_simple_server,
         )
         self.simple_toggle_check.grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        self.settings_button = ttk.Button(
+            simple_row,
+            text="実行設定・使用ファイル",
+            command=self._show_settings_window,
+        )
+        self.settings_button.grid(row=0, column=2, sticky=tk.E, padx=(8, 0))
 
         simple = ttk.Frame(simple_row)
         self.simple_frame = simple
@@ -202,16 +195,10 @@ class SolverGUI(tk.Tk):
 
         mode = ttk.Frame(self, padding=(12, 0, 12, 8))
         mode.pack(fill=tk.X)
-        for value, label in (("manual", "手動"), ("auto", "自動")):
+        ttk.Label(mode, text="日次回答の送信").pack(side=tk.LEFT, padx=(0, 8))
+        for value, label in (("manual", "手動"), ("auto", "探索後に自動")):
             ttk.Radiobutton(mode, text=label, variable=self.mode_var, value=value,
-                            command=lambda: self._mode_changed(True)).pack(side=tk.LEFT, padx=4)
-        self.scope_box = ttk.Combobox(
-            mode, textvariable=self.scope_var, width=20, state="readonly",
-            values=("試合開始前から", "対象dayから（種別送信済）", "停止位置から再開"),
-        )
-        self.scope_box.pack(side=tk.LEFT, padx=10)
-        self.auto_button = ttk.Button(mode, text="自動開始（送信あり）", command=self._start_auto)
-        self.auto_button.pack(side=tk.LEFT)
+                            command=self._mode_changed).pack(side=tk.LEFT, padx=4)
         self.stop_button = ttk.Button(mode, text="停止", command=self._request_stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=6)
         ttk.Label(mode, text="dayは0始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
@@ -319,7 +306,6 @@ class SolverGUI(tk.Tk):
         local = ttk.Button(files, text="ローカル設定を探索", command=self._solve_local)
         local.grid(row=1, column=3, columnspan=2, sticky=tk.EW, padx=(0, 5), pady=2)
         self._action_buttons.append(local)
-        self._manual_buttons.append(local)
         ttk.Button(files, text="表示を再読込", command=self._refresh_views).grid(
             row=1, column=5, sticky=tk.EW, pady=2
         )
@@ -347,7 +333,7 @@ class SolverGUI(tk.Tk):
         frame.columnconfigure(0, weight=1, uniform="parameter")
         frame.columnconfigure(1, weight=1, uniform="parameter")
         daily = ttk.LabelFrame(frame, text="日次探索", padding=8)
-        selection = ttk.LabelFrame(frame, text="種別選択・自動進行", padding=8)
+        selection = ttk.LabelFrame(frame, text="種別選択・送信", padding=8)
         daily.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
         selection.grid(row=0, column=1, sticky=tk.NSEW, padx=(4, 0))
 
@@ -364,14 +350,6 @@ class SolverGUI(tk.Tk):
 
         add_fields(daily, fields[:8])
         add_fields(selection, fields[8:])
-        for row, (variable, label) in enumerate(
-            ((self.interval_var, "自動取得間隔 (秒、0.2以上)"),
-             (self.wait_var, "各日の公開待ち上限 (秒)")), start=len(fields[8:])
-        ):
-            ttk.Label(selection, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
-            ttk.Entry(selection, textvariable=variable, width=10).grid(
-                row=row, column=1, padx=8, pady=4
-            )
 
     def _path_row(
         self,
@@ -398,9 +376,7 @@ class SolverGUI(tk.Tk):
 
         actions = [
             ("0  mainをビルド", self._build_solver, False),
-            ("1  試合設定を取得", self._fetch_setting, True),
-            ("2  エージェント種別を選択", self._select_agents, True),
-            ("3  エージェント種別を送信", self._send_agents, False),
+            ("1  設定取得・種別選択・送信", self._prepare_match, True),
         ]
         row = 1
         for text, command, primary in actions:
@@ -412,8 +388,6 @@ class SolverGUI(tk.Tk):
             )
             button.grid(row=row, column=0, sticky=tk.EW, pady=3)
             self._action_buttons.append(button)
-            if not text.startswith("0 "):
-                self._manual_buttons.append(button)
             row += 1
 
         ttk.Separator(parent).grid(row=row, column=0, sticky=tk.EW, pady=8)
@@ -421,14 +395,15 @@ class SolverGUI(tk.Tk):
         day_row = ttk.Frame(parent)
         day_row.grid(row=row, column=0, sticky=tk.EW)
         ttk.Label(day_row, text="対象日 day").pack(side=tk.LEFT)
-        ttk.Spinbox(day_row, from_=0, to=9, textvariable=self.day_var, width=5).pack(
-            side=tk.RIGHT
+        self.day_spinbox = ttk.Spinbox(
+            day_row, from_=0, to=9, textvariable=self.day_var, width=5
         )
+        self.day_spinbox.pack(side=tk.RIGHT)
         row += 1
 
         for text, command, primary in [
-            ("4  当日状態を取得・探索", self._fetch_and_solve_day, True),
-            ("5  日次回答を送信", self._send_answer, False),
+            ("2  当日状態を取得・探索", self._fetch_and_solve_day, True),
+            ("3  日次回答を送信", self._send_answer, False),
         ]:
             button = ttk.Button(
                 parent,
@@ -438,7 +413,8 @@ class SolverGUI(tk.Tk):
             )
             button.grid(row=row, column=0, sticky=tk.EW, pady=3)
             self._action_buttons.append(button)
-            self._manual_buttons.append(button)
+            if command == self._send_answer:
+                self.send_answer_button = button
             row += 1
 
     def _build_log_panel(self, parent: ttk.Panedwindow) -> None:
@@ -647,9 +623,6 @@ class SolverGUI(tk.Tk):
                     self._set_busy(False, f"{label} 完了")
                 else:
                     label = context
-                    if label == "自動実行" and isinstance(payload, Paused) and self._automatic is not None:
-                        self._automatic.retryable = True
-                        self.scope_var.set("停止位置から再開")
                     self._log(f"{label}: {payload}")
                     self._set_busy(False, "停止しました" if isinstance(payload, Paused) else f"{label} 失敗")
                     if not isinstance(payload, Paused) and not self._closing:
@@ -682,14 +655,10 @@ class SolverGUI(tk.Tk):
                 widget.configure(state=tk.DISABLED if disabled else tk.NORMAL)
             self._set_controls(widget, disabled)
 
-    def _mode_changed(self, user_changed: bool = False) -> None:
-        if user_changed and self._busy and self.mode_var.get() == "manual":
-            self._request_stop()
-        automatic = self.mode_var.get() == "auto"
-        for button in self._manual_buttons:
-            button.configure(state=tk.DISABLED if automatic or self._busy else tk.NORMAL)
-        self.auto_button.configure(state=tk.NORMAL if automatic and not self._busy else tk.DISABLED)
-        self.scope_box.configure(state="readonly" if automatic and not self._busy else tk.DISABLED)
+    def _mode_changed(self) -> None:
+        self.send_answer_button.configure(
+            state=tk.DISABLED if self._busy or self.mode_var.get() == "auto" else tk.NORMAL
+        )
 
     def _request_stop(self) -> None:
         self._stop.set()
@@ -808,122 +777,60 @@ class SolverGUI(tk.Tk):
         if workflow is not None:
             self._run_task("通信確認", workflow.check_connection, self._log)
 
-    def _start_auto(self) -> None:
+    def _prepare_match(self) -> None:
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
-        try:
-            workflow.connection.validate()
-            if self.scope_var.get() == "停止位置から再開":
-                runner = self._automatic
-                if runner is None:
-                    runner = AutomaticMatch.restore(
-                        workflow, lambda key, data: self._messages.put(("event", key, data)),
-                        float(self.interval_var.get()), float(self.wait_var.get()))
-                if runner.phase == "done":
-                    raise WorkflowError("再開できる自動実行がありません")
-                if (workflow.identity() != runner.workflow.identity()
-                        or workflow.work_dir != runner.workflow.work_dir):
-                    raise WorkflowError("再開時は同じ接続先・TOKEN・作業フォルダを使用してください")
-                runner.workflow = workflow
-            else:
-                day = self._day() if self.scope_var.get().startswith("対象day") else None
-                checkpoint = None
-                if day is not None and day > 0:
-                    checkpoint = Path(self.score_var.get() or self._work_path(f"score-day{day}.json"))
-                    if read_json(checkpoint).get("nextDay") != day:
-                        raise WorkflowError("開始dayに対応するチェックポイントが必要です")
-                runner = AutomaticMatch(
-                    workflow, lambda key, data: self._messages.put(("event", key, data)),
-                    day, checkpoint, float(self.interval_var.get()), float(self.wait_var.get()),
-                )
-            self._automatic = runner
-            self._run_task("自動実行", runner.run)
-        except (WorkflowError, ValueError, OSError, tk.TclError) as error:
-            messagebox.showerror("自動実行", str(error), parent=self)
+        setting = self._work_path("setting.json")
+        agents = self._work_path("agents.json")
+
+        def prepare() -> CommandResult:
+            workflow.fetch_setting(setting)
+            self._messages.put(("event", "setting", setting))
+            result = workflow.select_agents(setting, agents)
+            self._messages.put(("event", "agents", agents))
+            workflow.send_agents(agents, setting)
+            return result
+
+        self._run_task("設定取得・種別選択・送信", prepare)
 
     def _auto_event(self, key: str, data: Any) -> None:
-        if key == "phase":
-            self.status_var.set(data)
-            self._log(data)
-        elif key == "log":
-            self._log(data)
-        elif key == "setting":
+        if key == "setting":
             self._setting_loaded(data)
-        elif key == "state":
-            self.state_var.set(str(data))
-            self._state_loaded(data)
         elif key == "agents":
             self._agents_loaded(data)
-        elif key == "answer":
-            self._show_json(data)
-        elif key == "accepted":
-            revision, checkpoint, next_day = data
-            self.score_var.set(str(checkpoint))
-            self.day_var.set(next_day)
-            self._log(f"day={next_day - 1} 受理: revision={revision} / 次day={next_day}")
+        elif key == "solve_start":
+            self._clear_answer_route()
 
     def _day(self) -> int:
         day = self.day_var.get()
-        if not 0 <= day <= 9:
-            raise WorkflowError("dayは0〜9で指定してください")
+        maximum = self._day_count - 1 if self._day_count else 9
+        if not 0 <= day <= maximum:
+            raise WorkflowError(f"dayは0〜{maximum}で指定してください")
         return day
 
     def _day_or_dialog(self) -> int | None:
         try:
             return self._day()
         except (WorkflowError, tk.TclError) as error:
-            messagebox.showerror("対象日", f"dayは0〜9の整数で指定してください\n{error}", parent=self)
+            messagebox.showerror("対象日", str(error), parent=self)
             return None
 
     def _setting_loaded(self, path: Path) -> None:
+        self._clear_answer_route()
         self.setting_var.set(str(path))
         self.state_var.set("")
         self.score_var.set("")
         self._selected_kinds = []
+        self._day_count = 0
+        self.day_spinbox.configure(to=9)
+        self.day_var.set(0)
         self._refresh_views()
 
     def _agents_loaded(self, path: Path) -> None:
         self._selected_kinds = read_json(path)
         self._refresh_views()
         self._show_json(path)
-
-    def _fetch_setting(self) -> None:
-        workflow = self._workflow_or_dialog()
-        if workflow is None:
-            return
-        output = self._work_path("setting.json")
-        self._run_task(
-            "試合設定の取得",
-            lambda: workflow.fetch_setting(output),
-            self._setting_loaded,
-        )
-
-    def _select_agents(self) -> None:
-        workflow = self._workflow_or_dialog()
-        if workflow is None:
-            return
-        setting = Path(self.setting_var.get())
-        output = self._work_path("agents.json")
-        self._run_task(
-            "エージェント種別選択",
-            lambda: workflow.select_agents(setting, output),
-            lambda _: self._agents_loaded(output),
-        )
-
-    def _send_agents(self) -> None:
-        workflow = self._workflow_or_dialog()
-        if workflow is None:
-            return
-        payload = self._work_path("agents.json")
-        if not messagebox.askyesno(
-            "種別送信の確認",
-            f"回答システムへエージェント種別を送信します。\n\n{payload}\n\n実行しますか？",
-            parent=self,
-        ):
-            return
-        setting = Path(self.setting_var.get())
-        self._run_task("エージェント種別送信", lambda: workflow.send_agents(payload, setting))
 
     def _fetch_and_solve_day(self) -> None:
         workflow = self._workflow_or_dialog()
@@ -932,6 +839,7 @@ class SolverGUI(tk.Tk):
         day = self._day_or_dialog()
         if day is None:
             return
+        auto_send = self.mode_var.get() == "auto"
         setting = Path(self.setting_var.get())
         state = self._work_path(f"state-day{day}.json")
         checkpoint: Path | None = None
@@ -944,12 +852,18 @@ class SolverGUI(tk.Tk):
 
         def fetch_and_solve() -> CommandResult:
             workflow.fetch_state(day, state)
+            self._messages.put(("event", "solve_start", day))
             return workflow.solve_day(setting, state, checkpoint)
 
         def completed(_result: CommandResult) -> None:
             self.state_var.set(str(state))
             self._state_loaded(state)
+            self._show_answer_route(self._work_path("answer.json"))
             self._show_json(self._work_path("answer.json"))
+            if auto_send:
+                self.after_idle(
+                    lambda: self._submit_answer(workflow, day, state, setting, confirm=False)
+                )
 
         self._run_task(
             f"day={day} 状態取得・探索",
@@ -962,10 +876,17 @@ class SolverGUI(tk.Tk):
         if workflow is None:
             return
         setting = Path(self.setting_var.get())
+        self._clear_answer_route()
+
+        def completed(_result: CommandResult) -> None:
+            self._setting_loaded(setting)
+            self._show_answer_route(self._work_path("answer.json"))
+            self._show_json(self._work_path("answer.json"))
+
         self._run_task(
             "ローカル設定の探索",
             lambda: workflow.solve_local(setting),
-            lambda _: self._show_json(self._work_path("answer.json")),
+            completed,
         )
 
     def _send_answer(self) -> None:
@@ -975,9 +896,17 @@ class SolverGUI(tk.Tk):
         day = self._day_or_dialog()
         if day is None:
             return
-        answer = self._work_path("answer.json")
-        score = self._work_path("score-next.json")
-        if not messagebox.askyesno(
+        self._submit_answer(
+            workflow, day, Path(self.state_var.get()), Path(self.setting_var.get()),
+            confirm=True,
+        )
+
+    def _submit_answer(
+        self, workflow: Workflow, day: int, state: Path, setting: Path, *, confirm: bool
+    ) -> None:
+        answer = workflow.work_dir / "answer.json"
+        score = workflow.work_dir / "score-next.json"
+        if confirm and not messagebox.askyesno(
             "回答送信の確認",
             f"day={day} の回答を送信します。\n\n{answer}\n\n受理後に得点チェックポイントを確定します。実行しますか？",
             parent=self,
@@ -992,8 +921,6 @@ class SolverGUI(tk.Tk):
                 f"revision={revision}\n保存: {archived}\n次日チェックポイント: {checkpoint}"
             )
 
-        state = Path(self.state_var.get())
-        setting = Path(self.setting_var.get())
         self._run_task(
             f"day={day} 回答送信",
             lambda: workflow.send_answer(day, answer, score, state, setting),
@@ -1028,6 +955,8 @@ class SolverGUI(tk.Tk):
                 replace(agent, kind=self._selected_kinds[agent.index]) for agent in snapshot.agents
             ))
         self._current_snapshot = snapshot
+        self._day_count = len(snapshot.day_steps)
+        self.day_spinbox.configure(to=max(0, self._day_count - 1))
         self._draw_map(snapshot)
         self._fill_agents(snapshot)
         self._fill_spots(snapshot)
@@ -1039,6 +968,18 @@ class SolverGUI(tk.Tk):
             f"{snapshot.width}×{snapshot.height}  day={day_text}  "
             f"steps={steps}  agents={len(snapshot.agents)}  fuelLimit={snapshot.fuel_limit}"
         )
+
+    def _clear_answer_route(self) -> None:
+        self._answer_routes = None
+        self._answer_route_day = None
+        self.map_canvas.delete("answer-route")
+
+    def _show_answer_route(self, path: Path) -> None:
+        if self._current_snapshot is None:
+            return
+        self._answer_routes = trace_answer_routes(self._current_snapshot, read_json(path))
+        self._answer_route_day = self._current_snapshot.day
+        self._draw_map(self._current_snapshot)
 
     def _draw_map(self, snapshot: MapSnapshot) -> None:
         canvas = self.map_canvas
@@ -1093,7 +1034,7 @@ class SolverGUI(tk.Tk):
                         text=f"[{brand}]",
                         fill="#174b2d",
                         font=("TkDefaultFont", max(7, radius // 2), "bold"),
-                        tags=(tag,),
+                        tags=(tag, "spot-label"),
                     )
                     detail = f"pos={pos} ({x},{y}) spot brand={brand} stocks={stocks}"
                 else:
@@ -1104,16 +1045,37 @@ class SolverGUI(tk.Tk):
                     ax = cx - radius * 0.45 + offset * radius * 0.42
                     ay = cy + radius * 0.48
                     label = "P" if agent.kind == 0 else ("S" if agent.kind == 1 else "?")
-                    fill = "#235fa4" if agent.kind == 0 else "#7b3fa1"
+                    fill = self.ROUTE_COLORS[agent.index % len(self.ROUTE_COLORS)]
                     size = max(5, radius * 0.28)
-                    canvas.create_oval(ax - size, ay - size, ax + size, ay + size, fill=fill, outline="")
+                    canvas.create_oval(ax - size, ay - size, ax + size, ay + size,
+                                      fill=fill, outline="", tags=("agent-label",))
                     canvas.create_text(
                         ax,
                         ay,
                         text=f"{agent.index}{label}",
                         fill="white",
                         font=("TkDefaultFont", max(6, radius // 3), "bold"),
+                        tags=("agent-label",),
                     )
+
+        if self._answer_routes is not None and snapshot.day == self._answer_route_day:
+            for agent_index, route in enumerate(self._answer_routes):
+                for start, end in zip(route, route[1:]):
+                    points = []
+                    for pos in (start, end):
+                        x, y = pos % snapshot.width, pos // snapshot.width
+                        points.extend((
+                            offset_x + margin + hex_width * (x + (0.5 if y % 2 == 0 else 0.0)),
+                            offset_y + margin + 1.5 * radius * y,
+                        ))
+                    canvas.create_line(
+                        *points,
+                        fill=self.ROUTE_COLORS[agent_index % len(self.ROUTE_COLORS)],
+                        width=max(2, radius * 0.24),
+                        tags=("answer-route", f"answer-route-agent-{agent_index}"),
+                    )
+            canvas.tag_raise("spot-label")
+            canvas.tag_raise("agent-label")
 
         canvas.configure(scrollregion=(
             0,
@@ -1139,6 +1101,10 @@ class SolverGUI(tk.Tk):
         for agent in snapshot.agents:
             x = agent.pos % snapshot.width
             y = agent.pos // snapshot.width
+            color_tag = f"agent-color-{agent.index}"
+            self.agent_table.tag_configure(
+                color_tag, foreground=self.ROUTE_COLORS[agent.index % len(self.ROUTE_COLORS)]
+            )
             self.agent_table.insert(
                 "",
                 tk.END,
@@ -1149,6 +1115,7 @@ class SolverGUI(tk.Tk):
                     f"({x},{y})",
                     f"{agent.fuel}/{snapshot.fuel_limit}",
                 ),
+                tags=(color_tag,),
             )
 
     def _fill_spots(self, snapshot: MapSnapshot) -> None:

@@ -5,6 +5,7 @@
 #include "trial.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -28,7 +29,7 @@ struct AgentSelectorConfig {
     std::size_t trialBeamWidth = 32;
     std::size_t trialJointBeamWidth = 128;
     EvaluationWeights trialWeights{};
-    std::size_t trialDays = 2; // 0なら全日。実際の各日のステップ数を使う。
+    std::size_t trialDays = 0; // 0なら全日。実際の各日のステップ数を使う。
     std::size_t trialScenarioCount = 3;
     std::vector<TrialTraffic> trialScenarios;
 
@@ -60,6 +61,7 @@ private:
         std::int32_t supplyCount = 0;
         double heuristicScore = 0.0;
         std::uint32_t supplyMask = 0;
+        std::int64_t supplySpread = 0;
     };
 
     static void validate(
@@ -251,6 +253,34 @@ public:
             const auto brandN = static_cast<std::int32_t>(
                 std::count(brands.begin(), brands.end(), true));
 
+            // 到達可能なスポットの和集合だけでは、巡回車1台で全地点に
+            // 届く配置と、複数台で並行して回れる配置を区別できない。
+            // 各巡回車が初日に担当できそうな近い3地点を見積もる。
+            double patrolCapacity = 0.0;
+            for (std::size_t p = 0; p < n; ++p) {
+                if (c.kinds[p] != AgentKind::Patrol) continue;
+                std::array<double, 3> nearest{};
+                for (const Spot& spot : s.field.spots) {
+                    const std::int32_t d = distanceTo(dist[p], spot.pos);
+                    if (d > steps || d >= kImpassableCost) continue;
+                    const double value =
+                        static_cast<double>(steps + 1 - d) /
+                        static_cast<double>(steps + 1);
+                    if (value > nearest[0]) {
+                        nearest[2] = nearest[1];
+                        nearest[1] = nearest[0];
+                        nearest[0] = value;
+                    } else if (value > nearest[1]) {
+                        nearest[2] = nearest[1];
+                        nearest[1] = value;
+                    } else if (value > nearest[2]) {
+                        nearest[2] = value;
+                    }
+                }
+                patrolCapacity += nearest[0] +
+                    0.5 * nearest[1] + 0.25 * nearest[2];
+            }
+
             // 同じ補給車台数なら、巡回車と主要スポットに近い開始位置を
             // 補給車へ割り当てる。燃料が少ない問題ほど影響を強める。
             std::int64_t supplyDist = 0;
@@ -272,6 +302,14 @@ public:
                     }
                 }
             }
+            for (std::size_t p = 0; p < n; ++p) {
+                if (c.kinds[p] != AgentKind::Supply) continue;
+                for (std::size_t q = p + 1; q < n; ++q) {
+                    if (c.kinds[q] != AgentKind::Supply) continue;
+                    const auto d = distanceTo(dist[p], s.agentStarts[q]);
+                    if (d < kImpassableCost) c.supplySpread += d;
+                }
+            }
 
             const double maxFuel =
                 3.0 * static_cast<double>(std::max(1, steps));
@@ -281,7 +319,8 @@ public:
             c.heuristicScore =
                 1.0e9 * brandN + 1.0e6 * spots + 1.0e4 * stock -
                 100.0 * static_cast<double>(distSum) -
-                10.0 * fuelPressure * static_cast<double>(supplyDist);
+                10.0 * fuelPressure * static_cast<double>(supplyDist) +
+                1.0e5 * patrolCapacity;
             cs.push_back(std::move(c));
         }
 
@@ -300,29 +339,35 @@ public:
 
         std::vector<std::size_t> trials;
         if (cfg.trialCandidateLimit > 0) {
-            // 補給車台数ごとの最良配置を優先し、台数の違いを必ず比較する。
+            // 各台数の距離評価上位に加え、補給車を広く置く候補も試す。
             for (std::int32_t count = cfg.minSupplyCount;
-                 count <= maxSupply &&
-                 trials.size() < cfg.trialCandidateLimit;
+                 count <= maxSupply && trials.size() < cfg.trialCandidateLimit;
                  ++count) {
-                const auto found = std::find_if(
-                    cs.begin(),
-                    cs.end(),
+                const auto found = std::find_if(cs.begin(), cs.end(),
                     [count](const Candidate& c) {
                         return c.supplyCount == count;
                     });
-                if (found != cs.end()) {
-                    trials.push_back(static_cast<std::size_t>(
-                        found - cs.begin()));
+                if (found != cs.end())
+                    trials.push_back(static_cast<std::size_t>(found - cs.begin()));
+            }
+            for (std::int32_t count = std::max<std::int32_t>(2, cfg.minSupplyCount);
+                 count <= maxSupply && trials.size() < cfg.trialCandidateLimit;
+                 ++count) {
+                std::size_t spread = cs.size();
+                for (std::size_t i = 0; i < cs.size(); ++i) {
+                    if (cs[i].supplyCount != count ||
+                        std::find(trials.begin(), trials.end(), i) != trials.end())
+                        continue;
+                    if (spread == cs.size() ||
+                        cs[i].supplySpread > cs[spread].supplySpread)
+                        spread = i;
                 }
+                if (spread != cs.size()) trials.push_back(spread);
             }
             for (std::size_t i = 0;
-                 i < cs.size() && trials.size() < cfg.trialCandidateLimit;
-                 ++i) {
-                if (std::find(trials.begin(), trials.end(), i) ==
-                    trials.end()) {
+                 i < cs.size() && trials.size() < cfg.trialCandidateLimit; ++i) {
+                if (std::find(trials.begin(), trials.end(), i) == trials.end())
                     trials.push_back(i);
-                }
             }
         }
 
@@ -382,8 +427,8 @@ public:
             }
             ++res.trialAssignments;
             if (!valid) continue;
-            if (!tried || std::tie(worst, total, c.heuristicScore) >
-                          std::tie(bestWorst, bestTotal, best->heuristicScore)) {
+            if (!tried || std::tie(total, worst, c.heuristicScore) >
+                          std::tie(bestTotal, bestWorst, best->heuristicScore)) {
                 best = &c;
                 bestWorst = worst;
                 bestTotal = total;

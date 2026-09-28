@@ -113,6 +113,41 @@ class MapSnapshot:
     fuel_limit: int
 
 
+def trace_answer_routes(snapshot: MapSnapshot, answer: object) -> tuple[tuple[int, ...], ...]:
+    """回答の移動方向を当日開始位置からたどる。待機は線に含めない。"""
+    if not isinstance(answer, list) or len(answer) != len(snapshot.agents):
+        raise WorkflowError("回答のエージェント数が当日状態と一致しません")
+    routes = []
+    for agent, actions in zip(snapshot.agents, answer):
+        if not isinstance(actions, list):
+            raise WorkflowError("回答の行動配列が不正です")
+        pos = agent.pos
+        route = [pos]
+        for action in actions:
+            if type(action) is not int or action > 5:
+                raise WorkflowError("回答に不正な行動値があります")
+            if action < 0:
+                continue
+            x, y = pos % snapshot.width, pos // snapshot.width
+            even = y % 2 == 0
+            offsets = (
+                (0 if even else -1, -1),
+                (1 if even else 0, -1),
+                (1, 0),
+                (1 if even else 0, 1),
+                (0 if even else -1, 1),
+                (-1, 0),
+            )
+            dx, dy = offsets[action]
+            x, y = x + dx, y + dy
+            if not 0 <= x < snapshot.width or not 0 <= y < snapshot.height:
+                raise WorkflowError("回答経路がマップ外に出ます")
+            pos = y * snapshot.width + x
+            route.append(pos)
+        routes.append(tuple(route))
+    return tuple(routes)
+
+
 @dataclass(frozen=True)
 class SimpleServerInfo:
     url: str
@@ -860,6 +895,7 @@ class AutomaticMatch:
                 self.phase = "solve"
                 self.emit("state", self.state)
             elif phase == "solve":
+                self.emit("solve_start", self.day)
                 self.emit("log", w.solve_day(self.setting, self.state, self.checkpoint).output)
                 self.phase = "send_answer"
                 self.emit("answer", w.work_dir / "answer.json")
