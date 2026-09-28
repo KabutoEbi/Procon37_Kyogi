@@ -9,8 +9,9 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 - `ConnectionConfig`: URL、TOKEN、タイムアウト。`validate()`で必須値を検査する。
 - `SearchParameters`: GUIの探索設定。`arguments()`で`main`のCLI引数へ変換する。
 - `MapSnapshot`: 設定・当日状態から作る表示専用の不変データ。
+- `trace_answer_routes()`: 当日開始位置と回答の方向値から各車の通過セルを復元する。待機は線に含めない。
 - `Workflow`: 手動操作1回分の取得、探索、送信を提供する。
-- `AutomaticMatch`: 公開待ちを含む全日自動フローを管理する。
+- `AutomaticMatch`: 公開待ちを含む全日自動フローを管理するバックエンド。現在のGUIからは起動しない。
 - `SimpleServer`: OS/CPUに合う同梱バイナリの起動、ログ、停止を管理する。
 
 ## `Workflow`の主要メソッド
@@ -44,7 +45,7 @@ finally:
 
 起動前に使用中ポートを拒否し、起動後はlocalhostへ接続できるまで最大5秒待つ。標準出力と標準エラーは`simple-server.log`へまとめる。通常は直接呼ばず、[`app.py`](app.md)のボタンを使う。
 
-## 自動フローの停止
+## バックエンドの全日自動フロー
 
 `AutomaticMatch`は`setting → select → send_agents → state → solve → send_answer`を`automatic-progress.json`へ原子的に保存する。`restore()`は接続先・TOKENのハッシュと使用ファイルのハッシュを検査して復旧する。`threading.Event`による停止では探索プロセスも終了する。
 

@@ -13,7 +13,7 @@
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
 | [`recovery_test.py`](recovery_test.md) | 永続復旧・同一回答再送・送信時間確保の回帰テスト |
-| [`visualizer_gui_test.py`](visualizer_gui_test.md) | Tk上での手動通信確認・自動進行テスト |
+| [`visualizer_gui_test.py`](visualizer_gui_test.md) | Tk上での初期設定・日次探索・手動／自動送信テスト |
 | [`visualizer_runtime_test.py`](visualizer_runtime_test.md) | 対応するPython/Tkの選択テスト |
 | [`visualizer_simple_server_test.py`](visualizer_simple_server_test.md) | 同梱簡易サーバーと実ソルバーの結合テスト |
 | [`solver_options_test.cpp`](solver_options_test.md) | 探索引数の反映と不正値拒否 |

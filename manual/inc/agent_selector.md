@@ -9,7 +9,7 @@ benzen::AgentSelectorConfig config;
 config.minSupplyCount = 1;
 config.maxSupplyCount = 2;
 config.trialCandidateLimit = 8;
-config.trialDays = 2;
+config.trialDays = 0; // 全日試走
 
 auto selected = benzen::selectAgentKinds(setting, config);
 if (selected.success) {
@@ -18,7 +18,7 @@ if (selected.success) {
 }
 ```
 
-最初に全配置を距離ヒューリスティックで評価し、上位候補を`brain1`で複数日・複数交通シナリオ試走する。既定では補給車を最低1台選び、最低でも1台は巡回車として残す。
+最初に全配置を到達範囲、各巡回車が回れる近いスポット、補給距離で評価する。補給車の台数ごとの上位配置に加え、補給車を離して置く配置も候補に入れ、`brain1`で複数日・複数交通シナリオ試走する。候補はシナリオの合計スコア、次に最悪スコアで比較する。既定では全日を試走し、補給車を最低1台、巡回車を最低1台残す。
 
 ## 主な設定
 
