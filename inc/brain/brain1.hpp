@@ -152,6 +152,74 @@ private:
         std::vector<std::vector<std::size_t>> nextSpots;
     };
 
+    struct DistanceCacheKey {
+        std::int32_t width = 0;
+        std::int32_t height = 0;
+        std::vector<CellType> terrain;
+        std::vector<std::int32_t> stepCosts;
+        std::vector<CellPos> spotPositions;
+
+        bool operator==(const DistanceCacheKey& other) const noexcept {
+            return width == other.width && height == other.height &&
+                   terrain == other.terrain && stepCosts == other.stepCosts &&
+                   spotPositions == other.spotPositions;
+        }
+    };
+
+    struct CachedDistances {
+        DistanceCacheKey key;
+        SpotDistanceTables tables;
+    };
+
+    static std::vector<CachedDistances>& distanceCache() {
+        static thread_local std::vector<CachedDistances> cache;
+        return cache;
+    }
+
+    static DistanceCacheKey makeDistanceCacheKey(
+        const MatchSetting& setting, const MatchState& matchState) {
+        const Field& field = setting.field;
+        DistanceCacheKey key;
+        key.width = field.width;
+        key.height = field.height;
+        key.terrain.reserve(field.cellCount());
+        key.stepCosts.reserve(field.cellCount());
+        for (CellPos pos = 0;
+             pos < static_cast<CellPos>(field.cellCount()); ++pos) {
+            key.terrain.push_back(field.at(pos).type);
+            key.stepCosts.push_back(moveStepCost(setting, matchState, pos));
+        }
+        key.spotPositions.reserve(field.spots.size());
+        for (const auto& spot : field.spots)
+            key.spotPositions.push_back(spot.pos);
+        return key;
+    }
+
+    static bool restoreCachedDistances(
+        const DistanceCacheKey& key, std::size_t capacity,
+        SpotDistanceTables& result) {
+        auto& cache = distanceCache();
+        while (cache.size() > capacity) cache.erase(cache.begin());
+        for (std::size_t i = 0; i < cache.size(); ++i) {
+            if (!(cache[i].key == key)) continue;
+            std::rotate(cache.begin() + static_cast<std::ptrdiff_t>(i),
+                        cache.begin() + static_cast<std::ptrdiff_t>(i + 1),
+                        cache.end());
+            result = cache.back().tables;
+            return true;
+        }
+        return false;
+    }
+
+    static void storeCachedDistances(
+        DistanceCacheKey key, const SpotDistanceTables& tables,
+        std::size_t capacity) {
+        if (capacity == 0) return;
+        auto& cache = distanceCache();
+        if (cache.size() == capacity) cache.erase(cache.begin());
+        cache.push_back({std::move(key), tables});
+    }
+
     struct PatrolTarget {
         std::size_t spotIndex = 0;
         std::int32_t priority = 3;
@@ -469,32 +537,16 @@ private:
         std::size_t cacheEntries,
         bool& reused) {
         const Field& field = setting.field;
-        struct CachedDistances {
-            std::vector<std::int32_t> key;
-            SpotDistanceTables tables;
-        };
-        static thread_local std::vector<CachedDistances> cache;
         const auto capacity = std::min<std::size_t>(8, cacheEntries);
-        while (cache.size() > capacity) cache.erase(cache.begin());
-        std::vector<std::int32_t> key;
+        DistanceCacheKey key;
+        SpotDistanceTables result;
         if (capacity > 0) {
-            key = {field.width, field.height,
-                   static_cast<std::int32_t>(field.spots.size())};
-            for (CellPos pos = 0; pos < static_cast<CellPos>(field.cellCount()); ++pos) {
-                key.push_back(static_cast<std::int32_t>(field.at(pos).type));
-                key.push_back(moveStepCost(setting, matchState, pos));
-            }
-            for (const auto& spot : field.spots) key.push_back(spot.pos);
-            for (std::size_t i = 0; i < cache.size(); ++i) {
-                if (cache[i].key != key) continue;
-                std::rotate(cache.begin() + static_cast<std::ptrdiff_t>(i),
-                            cache.begin() + static_cast<std::ptrdiff_t>(i + 1),
-                            cache.end());
+            key = makeDistanceCacheKey(setting, matchState);
+            if (restoreCachedDistances(key, capacity, result)) {
                 reused = true;
-                return cache.back().tables;
+                return result;
             }
         }
-        SpotDistanceTables result;
         result.travel.resize(field.cellCount());
         result.firstHop.resize(field.cellCount());
         std::atomic<std::size_t> nextSource{0};
@@ -640,10 +692,8 @@ private:
         executor.run(workers, worker);
         stopped = aborted.load(std::memory_order_relaxed);
         // 中断した前計算や、探索ごとのコールバック・割当状態は保存しない。
-        if (!stopped && capacity > 0) {
-            if (cache.size() == capacity) cache.erase(cache.begin());
-            cache.push_back({std::move(key), result});
-        }
+        if (!stopped && capacity > 0)
+            storeCachedDistances(std::move(key), result, capacity);
         return result;
     }
 

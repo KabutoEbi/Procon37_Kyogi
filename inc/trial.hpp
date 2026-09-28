@@ -11,6 +11,9 @@ namespace benzen {
 
 using TrialTraffic = std::vector<std::vector<TrafficStatus>>;
 using TrialScore = std::array<std::int64_t, 3>;
+using TrialDeadline = std::chrono::steady_clock::time_point;
+
+inline constexpr TrialDeadline kNoTrialDeadline = TrialDeadline::max();
 
 inline TrialScore trialScore(const ScoreState& score) {
     return {countBits(score.matchBrands), score.sumOfDailyBrandCounts, score.totalUdon};
@@ -23,13 +26,31 @@ struct TrialResult {
     std::size_t days = 0;
 };
 
+namespace trial_detail {
+
+inline bool applyDeadline(
+    BeamSearchConfig& beam, TrialDeadline deadline,
+    std::size_t remainingDays) {
+    if (deadline == kNoTrialDeadline) return true;
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now()).count();
+    if (left <= 0 || remainingDays == 0) return false;
+    const auto dailyMs = std::max<std::int64_t>(
+        1, left / static_cast<std::int64_t>(remainingDays));
+    beam.timeLimitMs = beam.timeLimitMs > 0
+        ? std::min(beam.timeLimitMs, dailyMs) : dailyMs;
+    beam.safetyMarginMs = 0;
+    return true;
+}
+
+}  // namespace trial_detail
+
 // オフライン試走。各日の探索には当日分の道路状態だけを渡す。
 inline TrialResult runTrial(
     const MatchSetting& setting, const std::vector<AgentKind>& kinds,
     const TrialTraffic& traffic, BeamSearchConfig beam,
     std::size_t dayLimit = 0,
-    std::chrono::steady_clock::time_point deadline =
-        std::chrono::steady_clock::time_point::max()) {
+    TrialDeadline deadline = kNoTrialDeadline) {
     TrialResult result;
     const std::size_t days = dayLimit == 0 ? setting.dayCount()
                                          : std::min(dayLimit, setting.dayCount());
@@ -55,16 +76,8 @@ inline TrialResult runTrial(
             ? std::vector<TrafficStatus>(setting.field.cellCount(), TrafficStatus::Smooth)
             : traffic[day];
         auto dailyBeam = beam;
-        if (deadline != std::chrono::steady_clock::time_point::max()) {
-            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - std::chrono::steady_clock::now()).count();
-            if (left <= 0) return result;
-            const auto dailyMs = std::max<std::int64_t>(
-                1, left / static_cast<std::int64_t>(days - day));
-            dailyBeam.timeLimitMs = beam.timeLimitMs > 0
-                ? std::min(beam.timeLimitMs, dailyMs) : dailyMs;
-            dailyBeam.safetyMarginMs = 0;
-        }
+        if (!trial_detail::applyDeadline(dailyBeam, deadline, days - day))
+            return result;
         const auto answer = brain1(setting, state, result.score, dailyBeam);
         if (!answer.success) return result;
         const auto sim = simulateDay(setting, state, answer.plan, result.score);
