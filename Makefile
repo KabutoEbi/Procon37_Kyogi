@@ -18,7 +18,7 @@ CORE_TESTS := model_test algorithm_test solver_options_test
 CPP_TESTS := $(CORE_TESTS) sample_maps_test
 TEST_BINS := $(addprefix $(TEST_DIR)/,$(CPP_TESTS))
 SAN_BINS := $(addprefix $(SAN_DIR)/,$(CORE_TESTS))
-TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark tune_weights)
+TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark agent_selection_benchmark tune_weights)
 PY_ENV = PYTHONPYCACHEPREFIX="$(abspath $(BUILD_DIR)/pycache)" PROCON_TEST_SOLVER="$(abspath main)"
 
 .PHONY: all release tools test test-core test-cpp test-python test-samples \

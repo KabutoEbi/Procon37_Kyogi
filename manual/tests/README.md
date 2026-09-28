@@ -10,6 +10,7 @@
 | [`model_test.cpp`](model_test.md) | モデルから複数日実行までの総合回帰テスト |
 | [`sample_maps_test.cpp`](sample_maps_test.md) | `sample_maps/`を使うスモークテスト |
 | [`solver_benchmark.cpp`](solver_benchmark.md) | 複数シード・全日程・交通変化・機能別の得点と速度比較 |
+| [`agent_selection_benchmark.cpp`](agent_selection_benchmark.md) | ランダム生成マップでの種別選択と全日試走の比較 |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
 | [`recovery_test.py`](recovery_test.md) | 永続復旧・同一回答再送・送信時間確保の回帰テスト |

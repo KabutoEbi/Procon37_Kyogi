@@ -339,7 +339,7 @@ public:
 
         std::vector<std::size_t> trials;
         if (cfg.trialCandidateLimit > 0) {
-            // 各台数の距離評価上位に加え、補給車を広く置く候補も試す。
+            // まず補給車台数ごとの最良候補を比較する。
             for (std::int32_t count = cfg.minSupplyCount;
                  count <= maxSupply && trials.size() < cfg.trialCandidateLimit;
                  ++count) {
@@ -350,6 +350,17 @@ public:
                 if (found != cs.end())
                     trials.push_back(static_cast<std::size_t>(found - cs.begin()));
             }
+            // 同じ最小補給台数でも位置が違えば結果は大きく変わる。
+            // 多台数の広域配置を試す前に、その次善案を1つ確保する。
+            for (std::size_t i = 0; i < cs.size() &&
+                 trials.size() < cfg.trialCandidateLimit; ++i) {
+                if (cs[i].supplyCount != cfg.minSupplyCount ||
+                    std::find(trials.begin(), trials.end(), i) != trials.end())
+                    continue;
+                trials.push_back(i);
+                break;
+            }
+            // 残りの枠では補給車を広く置く候補も試す。
             for (std::int32_t count = std::max<std::int32_t>(2, cfg.minSupplyCount);
                  count <= maxSupply && trials.size() < cfg.trialCandidateLimit;
                  ++count) {
