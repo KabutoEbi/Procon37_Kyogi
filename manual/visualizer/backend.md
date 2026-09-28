@@ -23,9 +23,11 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | `fetch_setting()` / `fetch_state()` | 公式JSONを安全に保存し、dayを検査 |
 | `select_agents()` / `solve_day()` | C++の`select` / `solve`モードを実行 |
 | `send_agents()` / `send_answer()` | 種別・日次回答をPOST |
-| `solve_local()` | 通信せずサンプル設定を探索 |
+| `solve_local()` | 通信せずサンプル設定を探索し、`result-state.json`の生成を確認 |
 
 種別選択後は設定・種別・接続先のハッシュを`selected-agents.json`へ保存する。日次探索後は設定・状態・回答・得点候補・締切・接続先を`prepared-answer.json`へ保存する。送信前に一致を検証し、回答受理後だけ`score-dayN.json`を確定する。
+
+`load_snapshot()`は通常の当日状態に加え、探索結果の`remainingStocks`を読める。これによりローカル探索後のエージェント位置・燃料・スポット残在庫を同じ状態表示へ反映する。
 
 ## 簡易サーバー
 
@@ -50,5 +52,7 @@ finally:
 `AutomaticMatch`は`setting → select → send_agents → state → solve → send_answer`を`automatic-progress.json`へ原子的に保存する。`restore()`は接続先・TOKENのハッシュと使用ファイルのハッシュを検査して復旧する。`threading.Event`による停止では探索プロセスも終了する。
 
 POST前に`submission-agents.json`／`submission-dayN.json`と不変の候補`submitted-*.json`を保存する。受理記録を先に保存し、その後にチェックポイントを確定するため、途中終了しても受理済み候補から復元できる。結果不明の別回答への置換を拒否し、明示再開時だけ当日状態を再取得して同一回答を再送する。締切後や日程進行後は未確定のまま停止する。APIには最後の有効回答を照会する機能がないため、その場合の自動確定は行わない。
+
+`SimpleServer.clear_client_work()`は簡易サーバー停止中に限り、`runtime/simple-server/client/`直下のクライアント成果物を削除して空のフォルダを残す。サーバーログと設定JSON原本は対象外である。GUIでは確認ダイアログを通して呼び出す。
 
 サーバー締切がある場合、`max(safety_margin_ms, send_reserve_ms, timeout*1000 + clock_margin_ms + 1200)`を探索から確保する。相対探索予算を保つためCLIへ渡す相対上限を補正する。プロセス監視とPOST直前・レート制限待機後の締切検査も行う。時刻差は指定余裕で吸収する方式で、自動同期や受理保証ではない。同じ作業フォルダの同時使用は禁止。

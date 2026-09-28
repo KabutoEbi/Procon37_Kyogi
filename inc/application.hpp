@@ -270,6 +270,53 @@ inline bool writeScoreCheckpointJson(
     return static_cast<bool>(output);
 }
 
+// 探索終了時の表示に必要な自チーム状態とスポット残在庫を保存する。
+inline bool printResultStateJson(
+    std::ostream& output,
+    const GameState& state) {
+    if (state.day < 0 || state.agentCount == 0 ||
+        state.agentCount > kMaxAgents || state.spotCount > kMaxSpots) {
+        return false;
+    }
+    for (std::size_t i = 0; i < state.agentCount; ++i) {
+        const Agent& agent = state.agents[i];
+        if (agent.pos < 0 || agent.fuel < 0 ||
+            (agent.kind != AgentKind::Patrol &&
+             agent.kind != AgentKind::Supply)) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < state.spotCount; ++i) {
+        if (state.remainingStocks[i] < 0) return false;
+    }
+
+    output << "{\n"
+           << "  \"day\": " << state.day << ",\n"
+           << "  \"agents\": [\n";
+    for (std::size_t i = 0; i < state.agentCount; ++i) {
+        const Agent& agent = state.agents[i];
+        output << "    {\"kind\": " << static_cast<int>(agent.kind)
+               << ", \"pos\": " << agent.pos
+               << ", \"fuel\": " << agent.fuel << "}"
+               << (i + 1 == state.agentCount ? "\n" : ",\n");
+    }
+    output << "  ],\n"
+           << "  \"remainingStocks\": [";
+    for (std::size_t i = 0; i < state.spotCount; ++i) {
+        if (i != 0) output << ", ";
+        output << state.remainingStocks[i];
+    }
+    output << "]\n}\n";
+    return static_cast<bool>(output);
+}
+
+inline bool writeResultStateJson(
+    const GameState& state,
+    const std::string& path = "result-state.json") {
+    std::ofstream output(path);
+    return output && printResultStateJson(output, state);
+}
+
 // POST / の本文と同じJSON配列をファイルへ保存する。
 inline bool writePlanJson(
     const DailyPlan& plan,

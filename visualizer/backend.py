@@ -7,6 +7,7 @@ import hashlib
 import math
 import os
 import platform
+import shutil
 import socket
 import subprocess
 import sys
@@ -211,6 +212,28 @@ class SimpleServer:
         with self._lock:
             return self.process is not None and self.process.poll() is None
 
+    @property
+    def client_work_dir(self) -> Path:
+        return self.work_dir / "client"
+
+    def clear_client_work(self) -> int:
+        """停止中にクライアント作業フォルダの中身だけを削除する。"""
+        with self._lock:
+            if self.process is not None and self.process.poll() is None:
+                raise WorkflowError("簡易サーバーを停止してから作業フォルダをクリアしてください")
+            path = self.client_work_dir
+            path.mkdir(parents=True, exist_ok=True)
+            entries = list(path.iterdir())
+            try:
+                for entry in entries:
+                    if entry.is_symlink() or entry.is_file():
+                        entry.unlink()
+                    else:
+                        shutil.rmtree(entry)
+            except OSError as error:
+                raise WorkflowError(f"作業フォルダをクリアできません: {error}") from error
+            return len(entries)
+
     def start(
         self,
         config: Path,
@@ -389,6 +412,17 @@ def load_snapshot(setting_path: Path, state_path: Path | None = None) -> MapSnap
         for traffic in state.get("traffics", []):
             if isinstance(traffic, dict):
                 traffics[int(traffic["pos"])] = int(traffic["status"])
+        if "remainingStocks" in state:
+            remaining_stocks = state["remainingStocks"]
+            setting_spots = setting.get("spots", [])
+            if not isinstance(remaining_stocks, list) or len(remaining_stocks) != len(setting_spots):
+                raise WorkflowError("探索後状態のremainingStocksがスポット数と一致しません")
+            for spot, stock in zip(setting_spots, remaining_stocks):
+                if not isinstance(spot, dict) or type(stock) is not int or stock < 0:
+                    raise WorkflowError("探索後状態のremainingStocksが不正です")
+                pos = int(spot["pos"])
+                brand, _ = spots[pos]
+                spots[pos] = (brand, stock)
         parsed_agents = []
         for index, agent in enumerate(state.get("agents", [])):
             if not isinstance(agent, dict):
@@ -653,9 +687,14 @@ class Workflow:
     def solve_local(self, setting: Path) -> CommandResult:
         """当日状態がないサンプル設定を初期状態から探索する。"""
         self._invalidate_answer()
+        result_state = self.work_dir / "result-state.json"
+        result_state.unlink(missing_ok=True)
         if not self.solver.is_file():
             raise WorkflowError(f"ソルバーがありません: {self.solver}")
-        return self._run([str(setting.resolve())])
+        result = self._run([str(setting.resolve())])
+        if not result_state.is_file():
+            raise WorkflowError("ソルバーが探索後状態 result-state.json を生成しませんでした")
+        return result
 
     def send_agents(self, payload: Path, setting: Path | None = None) -> None:
         self.connection.validate()

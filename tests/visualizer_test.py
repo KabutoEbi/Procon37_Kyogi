@@ -25,6 +25,7 @@ from backend import (  # noqa: E402
     MapSnapshot,
     AutomaticMatch,
     SearchParameters,
+    SimpleServer,
     Paused,
     ApiError,
     file_hash,
@@ -37,6 +38,28 @@ from backend import (  # noqa: E402
 
 
 class BackendTest(unittest.TestCase):
+    def test_simple_server_client_work_clear(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = SimpleServer(Path(directory))
+            client = server.client_work_dir
+            (client / "nested").mkdir(parents=True)
+            (client / "setting.json").write_text("{}", encoding="utf-8")
+            (client / "nested/answer.json").write_text("[]", encoding="utf-8")
+            (server.work_dir / "simple-server.log").write_text("keep", encoding="utf-8")
+
+            self.assertEqual(server.clear_client_work(), 2)
+            self.assertTrue(client.is_dir())
+            self.assertEqual(list(client.iterdir()), [])
+            self.assertEqual((server.work_dir / "simple-server.log").read_text(), "keep")
+
+            process = mock.Mock()
+            process.poll.return_value = None
+            server.process = process
+            (client / "submission-agents.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(WorkflowError, "停止してから"):
+                server.clear_client_work()
+            self.assertTrue((client / "submission-agents.json").exists())
+
     def test_simple_server_team_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "server.json"
@@ -76,15 +99,20 @@ class BackendTest(unittest.TestCase):
                 "day": 0,
                 "traffics": [{"pos": 1, "status": 2}],
                 "agents": [{"kind": 0, "pos": 0, "fuel": 7}],
+                "remainingStocks": [1],
             }), encoding="utf-8")
             snapshot = load_snapshot(setting, state)
             self.assertEqual((snapshot.width, snapshot.height), (2, 1))
-            self.assertEqual(snapshot.spots[1], (3, 2))
+            self.assertEqual(snapshot.spots[1], (3, 1))
             self.assertEqual(snapshot.traffics[1], 2)
             self.assertEqual(snapshot.agents[0].fuel, 7)
             self.assertEqual(trace_answer_routes(snapshot, [[2, -3, 5]]), ((0, 1, 0),))
             with self.assertRaises(WorkflowError):
                 trace_answer_routes(snapshot, [[5]])
+
+            state.write_text(json.dumps({"remainingStocks": []}), encoding="utf-8")
+            with self.assertRaisesRegex(WorkflowError, "スポット数"):
+                load_snapshot(setting, state)
 
         hex_snapshot = MapSnapshot(
             width=3, height=2, cells=((0, 0, 0), (0, 0, 0)),
@@ -260,6 +288,36 @@ class BackendTest(unittest.TestCase):
                 self.assertIsNotNone(processes[0].poll())
             finally:
                 timer.cancel()
+
+    @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
+    def test_real_solver_local_result_state(self) -> None:
+        setting = ROOT / "sample_maps/sample_16.json"
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            workflow = Workflow(
+                ConnectionConfig("http://mock", "typed-token"),
+                Path(os.environ["PROCON_TEST_SOLVER"]),
+                work,
+                SearchParameters(
+                    beam_width=16, joint_beam_width=64, threads=1,
+                    time_limit_ms=100, safety_margin_ms=0, trial_candidates=0,
+                ),
+            )
+            workflow.solve_local(setting)
+            result_path = work / "result-state.json"
+            result = read_json(result_path)
+            source = read_json(setting)
+            self.assertEqual(len(result["agents"]), len(source["agents"]))
+            self.assertEqual(len(result["remainingStocks"]), len(source["spots"]))
+            snapshot = load_snapshot(setting, result_path)
+            self.assertEqual(
+                [agent.fuel for agent in snapshot.agents],
+                [agent["fuel"] for agent in result["agents"]],
+            )
+            self.assertEqual(
+                [stock for _, stock in snapshot.spots.values()],
+                result["remainingStocks"],
+            )
 
     @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
     def test_real_solver_four_days_with_mock_http(self) -> None:

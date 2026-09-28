@@ -190,7 +190,13 @@ class SolverGUI(tk.Tk):
         self.simple_stop_button = ttk.Button(
             simple, text="停止", command=self._stop_simple_server, state=tk.DISABLED
         )
-        self.simple_stop_button.grid(row=0, column=12)
+        self.simple_stop_button.grid(row=0, column=12, padx=(0, 5))
+        self.simple_clear_button = ttk.Button(
+            simple,
+            text="作業フォルダをクリア",
+            command=self._clear_simple_server_work,
+        )
+        self.simple_clear_button.grid(row=0, column=13)
         self._action_buttons.append(self.simple_start_button)
 
         mode = ttk.Frame(self, padding=(12, 0, 12, 8))
@@ -678,6 +684,7 @@ class SolverGUI(tk.Tk):
         running = self._simple_server.running
         self.simple_start_button.configure(state=tk.DISABLED if running else tk.NORMAL)
         self.simple_stop_button.configure(state=tk.NORMAL if running else tk.DISABLED)
+        self.simple_clear_button.configure(state=tk.DISABLED if running else tk.NORMAL)
 
     def _reload_simple_teams(self, show_dialog: bool = True) -> None:
         try:
@@ -715,7 +722,7 @@ class SolverGUI(tk.Tk):
         def started(info: SimpleServerInfo) -> None:
             self.url_var.set(info.url)
             self.token_var.set(info.token)
-            client_work = PROJECT_ROOT / "runtime/simple-server/client"
+            client_work = self._simple_server.client_work_dir
             self.work_var.set(str(client_work))
             self.setting_var.set(str(client_work / "setting.json"))
             self.state_var.set(str(client_work / "state-day0.json"))
@@ -741,6 +748,38 @@ class SolverGUI(tk.Tk):
         self._log("簡易サーバーを停止しました" if stopped else "簡易サーバーは停止済みです")
         self.status_var.set("簡易サーバー停止")
         self._sync_simple_server_buttons()
+
+    def _clear_simple_server_work(self) -> None:
+        if self._busy:
+            return
+        client_work = self._simple_server.client_work_dir
+        if not messagebox.askyesno(
+            "簡易サーバー作業フォルダのクリア",
+            f"次のフォルダ内にある取得データ・回答・送信記録を削除します。\n"
+            f"復旧には使用できなくなります。\n\n{client_work}\n\n実行しますか？",
+            parent=self,
+        ):
+            return
+        try:
+            removed = self._simple_server.clear_client_work()
+        except WorkflowError as error:
+            messagebox.showerror("簡易サーバー作業フォルダのクリア", str(error), parent=self)
+            return
+        self.work_var.set(str(client_work))
+        self.setting_var.set(str(client_work / "setting.json"))
+        self.state_var.set(str(client_work / "state-day0.json"))
+        self.score_var.set("")
+        self.day_var.set(0)
+        self._selected_kinds = []
+        self._day_count = 0
+        self._current_snapshot = None
+        self._clear_answer_route()
+        self.map_canvas.delete("all")
+        self.agent_table.delete(*self.agent_table.get_children())
+        self.spot_table.delete(*self.spot_table.get_children())
+        self.map_info_var.set("試合設定を取得または読み込んでください")
+        self._log(f"簡易サーバー作業フォルダをクリアしました: {client_work} ({removed}項目)")
+        self.status_var.set("簡易サーバー作業フォルダをクリアしました")
 
     def _redact(self, message: str) -> str:
         for secret in (self._active_token, self.token_var.get()):
@@ -880,7 +919,13 @@ class SolverGUI(tk.Tk):
 
         def completed(_result: CommandResult) -> None:
             self._setting_loaded(setting)
-            self._show_answer_route(self._work_path("answer.json"))
+            initial_snapshot = self._current_snapshot
+            result_state = self._work_path("result-state.json")
+            self.state_var.set(str(result_state))
+            self._state_loaded(result_state)
+            self._show_answer_route(
+                self._work_path("answer.json"), source_snapshot=initial_snapshot
+            )
             self._show_json(self._work_path("answer.json"))
 
         self._run_task(
@@ -974,10 +1019,13 @@ class SolverGUI(tk.Tk):
         self._answer_route_day = None
         self.map_canvas.delete("answer-route")
 
-    def _show_answer_route(self, path: Path) -> None:
+    def _show_answer_route(
+        self, path: Path, *, source_snapshot: MapSnapshot | None = None
+    ) -> None:
         if self._current_snapshot is None:
             return
-        self._answer_routes = trace_answer_routes(self._current_snapshot, read_json(path))
+        source = source_snapshot or self._current_snapshot
+        self._answer_routes = trace_answer_routes(source, read_json(path))
         self._answer_route_day = self._current_snapshot.day
         self._draw_map(self._current_snapshot)
 

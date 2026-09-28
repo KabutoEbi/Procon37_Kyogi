@@ -163,6 +163,11 @@ int main(int argc, char* argv[]) {
             std::cerr << "failed to write score-next.json\n";
             return 1;
         }
+        constexpr const char* resultStatePath = "result-state.json";
+        if (!benzen::writeResultStateJson(ans.finalState, resultStatePath)) {
+            std::cerr << "failed to write " << resultStatePath << '\n';
+            return 1;
+        }
 
         benzen::ConsoleConfig console;
         console.showFinalMap = false;
@@ -172,7 +177,8 @@ int main(int argc, char* argv[]) {
             std::cout, setting, st, ans, previousScore, console);
         std::cout << "\nanswer-json=" << answerPath
                   << "\nagents-json=agents.json"
-                  << "\nnext-score-json=score-next.json\n";
+                  << "\nnext-score-json=score-next.json"
+                  << "\nresult-state-json=" << resultStatePath << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';

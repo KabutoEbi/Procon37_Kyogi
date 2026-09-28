@@ -123,6 +123,27 @@ void testWaitCompression() {
     assert(rawResult.state == compressedResult.state);
 }
 
+void testResultStateJson() {
+    const MatchSetting setting = makeSetting();
+    GameState state;
+    assert(state.initialize(setting, makeState()));
+    state.agents[0].pos = 3;
+    state.agents[0].fuel = 0;
+    state.remainingStocks[0] = 2;
+
+    std::ostringstream output;
+    assert(printResultStateJson(output, state));
+    const std::string json = output.str();
+    assert(json.find("\"day\": 0") != std::string::npos);
+    assert(json.find("\"kind\": 0, \"pos\": 3, \"fuel\": 0") !=
+           std::string::npos);
+    assert(json.find("\"remainingStocks\": [2]") != std::string::npos);
+
+    state.remainingStocks[0] = -1;
+    std::ostringstream invalid;
+    assert(!printResultStateJson(invalid, state));
+}
+
 void testHashAndEvaluation() {
     const MatchSetting s = makeSetting();
     const MatchState st = makeState();
@@ -790,6 +811,7 @@ int main() {
     testAcquisitionOrder();
     testFuelValidation();
     testWaitCompression();
+    testResultStateJson();
     testHashAndEvaluation();
     testDijkstra();
     testBeamSearch();

@@ -84,6 +84,15 @@ class GUITest(unittest.TestCase):
                 else:
                     (workflow.work_dir / "answer.json").write_text("[[2,-31],[2,-31],[-32],[-32]]")
                     (workflow.work_dir / "score-next.json").write_text(json.dumps({"nextDay": day + 1}))
+                    if args[0] != "solve":
+                        (workflow.work_dir / "result-state.json").write_text(json.dumps({
+                            "day": 0,
+                            "agents": [
+                                {"kind": 0, "pos": pos, "fuel": 17}
+                                for pos in setting["agents"]
+                            ],
+                            "remainingStocks": [0] * len(setting["spots"]),
+                        }))
                 return CommandResult((), "test-token log", "")
 
             def send(_url, token, kind, _path, **_kwargs):
@@ -109,6 +118,7 @@ class GUITest(unittest.TestCase):
                 gui.simple_toggle_check.invoke()
                 gui.update()
                 self.assertTrue(gui.simple_start_button.winfo_ismapped())
+                self.assertTrue(gui.simple_clear_button.winfo_ismapped())
                 with mock.patch.object(
                     gui._simple_server,
                     "start",
@@ -123,6 +133,11 @@ class GUITest(unittest.TestCase):
                 self.assertEqual(gui.url_var.get(), "http://127.0.0.1:18080")
                 self.assertEqual(gui.token_var.get(), "local-token")
                 self.assertIn("runtime/simple-server/client", gui.work_var.get())
+                with mock.patch("app.messagebox.askyesno", return_value=True), \
+                     mock.patch.object(gui._simple_server, "clear_client_work", return_value=3) as clear:
+                    gui.simple_clear_button.invoke()
+                    clear.assert_called_once()
+                    self.assertIn("クリアしました", gui.status_var.get())
                 gui.simple_toggle_check.invoke()
                 gui.update()
                 self.assertFalse(gui.simple_frame.winfo_ismapped())
@@ -147,6 +162,16 @@ class GUITest(unittest.TestCase):
                 self.assertEqual(gui._selected_kinds, [0, 0, 0, 0])
                 self.assertEqual(gui.day_var.get(), 0)
                 self.assertEqual(int(gui.day_spinbox.cget("to")), 3)
+
+                with mock.patch("backend.Workflow._run", autospec=True, side_effect=solver):
+                    gui._solve_local()
+                    drain()
+                self.assertTrue(gui.state_var.get().endswith("result-state.json"))
+                first_agent = gui.agent_table.item(gui.agent_table.get_children()[0], "values")
+                first_spot = gui.spot_table.item(gui.spot_table.get_children()[0], "values")
+                self.assertEqual(first_agent[4], "17/40")
+                self.assertEqual(str(first_spot[3]), "0")
+                self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
 
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver):
