@@ -8,6 +8,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 
 - `ConnectionConfig`: URL、TOKEN、タイムアウト。`validate()`で必須値を検査する。
 - `SearchParameters`: GUIの探索設定。`arguments()`で`main`のCLI引数へ変換する。
+- `RandomSettingParameters`: ランダム設定の生成条件と値域検査。
 - `MapSnapshot`: 設定・当日状態から作る表示専用の不変データ。
 - `SolverResultSummary`: ソルバーのコンソール報告から取り出した探索結果の要約。
 - `trace_answer_routes()`: 当日開始位置と回答の方向値から各車の通過セルを復元する。待機は線に含めない。
@@ -21,6 +22,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 |---|---|
 | `check_connection()` | `GET /setting`で到達・認証・形式を確認 |
 | `build_solver()` | C++17、`-O2`、`-pthread`で`main.cpp`をビルド |
+| `generate_random_setting()` | C++の`generate`モードで公式設定形式を一時生成し、検査後に保存 |
 | `fetch_setting()` / `fetch_state()` | 公式JSONを安全に保存し、dayを検査 |
 | `select_agents()` / `solve_day()` | C++の`select` / `solve`モードを実行 |
 | `send_agents()` / `send_answer()` | 種別・日次回答をPOST |

@@ -25,7 +25,7 @@ struct AgentSelectorConfig {
     std::int32_t maxSupplyCount = -1;
 
     // 距離評価後にbrain1で試走する候補数。0なら距離評価だけを使う。
-    std::size_t trialCandidateLimit = 8;
+    std::size_t trialCandidateLimit = 12;
     std::size_t trialBeamWidth = 32;
     std::size_t trialJointBeamWidth = 128;
     EvaluationWeights trialWeights{};

@@ -353,6 +353,31 @@ inline int create(
     return 0;
 }
 
+// GUIやローカル探索で直接読み込めるGET /setting形式を生成する。
+inline int createMatchSetting(
+    int argc,
+    char* argv[],
+    const ApplicationConfig& defaults = {}) {
+    const ApplicationConfig options = application_detail::parseOptions(
+        argc, argv, true, defaults);
+    const GeneratedProblem problem =
+        ProblemCreator::generate(options.createConfig);
+    if (!ProblemCreator::writeMatchSettingJson(
+            problem.setting, options.outputPath)) {
+        std::cerr << "failed to write: " << options.outputPath << '\n';
+        return 1;
+    }
+    std::cout << "created " << options.outputPath
+              << " (seed=" << problem.seed
+              << ", map=" << problem.setting.field.width << 'x'
+              << problem.setting.field.height
+              << ", agents=" << problem.setting.agentCount()
+              << ", spots=" << problem.setting.field.spots.size()
+              << ", brands=" << problem.setting.field.brands.size()
+              << ")\n";
+    return 0;
+}
+
 inline int runLocalSolver(
     int argc,
     char* argv[],

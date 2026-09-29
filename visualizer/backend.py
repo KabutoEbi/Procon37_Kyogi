@@ -45,7 +45,7 @@ class SearchParameters:
     max_actions: int = 4
     macro_actions: int = 1
     adaptive_beam: int = 1
-    trial_candidates: int = 8
+    trial_candidates: int = 12
     trial_beam_width: int = 32
     trial_joint_beam_width: int = 128
     selection_time_ms: int = 60000
@@ -63,6 +63,43 @@ class SearchParameters:
                 raise WorkflowError(f"{name}: 0または1を指定してください")
             if name not in ("send_reserve_ms", "clock_margin_ms"):
                 result.extend(["--" + name.replace("_", "-"), str(value)])
+        return result
+
+
+@dataclass(frozen=True)
+class RandomSettingParameters:
+    width: int = 16
+    height: int = 16
+    agents: int = 4
+    spots: int = 16
+    brands: int = 12
+    days: int = 4
+    seconds: int = 60
+    teams: int = 2
+    seed: int = 1
+
+    def arguments(self) -> list[str]:
+        values = vars(self)
+        limits = {
+            "width": (8, 32), "height": (8, 32),
+            "agents": (3, 8), "days": (4, 10),
+            "seconds": (1, 2147483647), "teams": (1, 2147483647),
+            "seed": (0, 18446744073709551615),
+        }
+        for name, (lower, upper) in limits.items():
+            value = values[name]
+            if type(value) is not int or not lower <= value <= upper:
+                raise WorkflowError(f"{name}: {lower}〜{upper}で指定してください")
+        maximum_spots = max(self.width, self.height)
+        if type(self.spots) is not int or not self.agents <= self.spots <= maximum_spots:
+            raise WorkflowError(
+                f"spots: agents以上、マップの長辺{maximum_spots}以下で指定してください"
+            )
+        if type(self.brands) is not int or not 1 <= self.brands <= self.spots:
+            raise WorkflowError("brands: 1以上spots以下で指定してください")
+        result: list[str] = []
+        for name, value in values.items():
+            result.extend(["--" + name, str(value)])
         return result
 
 
@@ -511,6 +548,14 @@ def load_snapshot(setting_path: Path, state_path: Path | None = None) -> MapSnap
     )
 
 
+def map_acquisition_totals(setting_path: Path) -> tuple[int, int]:
+    """設定時点のうどん総数と、重複を除いた系列総数を返す。"""
+    snapshot = load_snapshot(setting_path)
+    total_udon = sum(stocks for _, stocks in snapshot.spots.values())
+    total_brands = len({brand for brand, _ in snapshot.spots.values()})
+    return total_udon, total_brands
+
+
 class Workflow:
     def __init__(
         self,
@@ -645,6 +690,45 @@ class Workflow:
         result = CommandResult(tuple(command), completed.stdout, completed.stderr)
         if completed.returncode != 0:
             raise WorkflowError(f"ビルドに失敗しました\n{result.output}")
+        return result
+
+    def generate_random_setting(
+        self,
+        output: Path,
+        parameters: RandomSettingParameters,
+    ) -> CommandResult:
+        self.check_stop()
+        if not self.solver.is_file():
+            raise WorkflowError(f"ソルバーがありません: {self.solver}")
+        output = output.expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_name(output.name + ".generate")
+        temporary.unlink(missing_ok=True)
+        command = [
+            str(self.solver), "generate", str(temporary),
+            *parameters.arguments(),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.work_dir,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            raise WorkflowError(f"ランダム設定を生成できません: {error}") from error
+        result = CommandResult(tuple(command), completed.stdout, completed.stderr)
+        if completed.returncode != 0:
+            temporary.unlink(missing_ok=True)
+            detail = result.output or f"終了コード {completed.returncode}"
+            raise WorkflowError(f"ランダム設定の生成に失敗しました\n{detail}")
+        try:
+            load_snapshot(temporary)
+            temporary.replace(output)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
         return result
 
     def fetch_setting(self, output: Path) -> Path:

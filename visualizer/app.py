@@ -37,6 +37,7 @@ from backend import (
     Workflow,
     WorkflowError,
     SearchParameters,
+    RandomSettingParameters,
     SimpleServer,
     SimpleServerInfo,
     SolverResultSummary,
@@ -45,6 +46,7 @@ from backend import (
     Paused,
     connection_from_env,
     load_snapshot,
+    map_acquisition_totals,
     parse_solver_result,
     read_json,
     simple_server_teams,
@@ -103,6 +105,10 @@ class SolverGUI(tk.Tk):
         self.parameter_vars = {
             name: tk.StringVar(value=str(value))
             for name, value in vars(SearchParameters()).items()
+        }
+        self.random_setting_vars = {
+            name: tk.StringVar(value=str(value))
+            for name, value in vars(RandomSettingParameters()).items()
         }
 
         self.env_var = tk.StringVar(value=str(PROJECT_ROOT / ".env"))
@@ -257,8 +263,8 @@ class SolverGUI(tk.Tk):
         window = tk.Toplevel(self)
         self.settings_window = window
         window.title("Procon37 実行設定・使用ファイル")
-        window.geometry("1000x300")
-        window.minsize(820, 260)
+        window.geometry("1000x450")
+        window.minsize(820, 410)
         window.protocol("WM_DELETE_WINDOW", self._hide_settings_window)
 
         header = ttk.Frame(window, padding=(12, 10, 12, 6))
@@ -299,6 +305,7 @@ class SolverGUI(tk.Tk):
         check.grid(row=2, column=5, sticky=tk.E)
         self._action_buttons.append(check)
         self._build_file_panel(config)
+        self._build_random_setting_panel(config)
         window.withdraw()
 
     def _show_settings_window(self) -> None:
@@ -331,6 +338,35 @@ class SolverGUI(tk.Tk):
         ttk.Button(files, text="表示を再読込", command=self._refresh_views).grid(
             row=1, column=5, sticky=tk.EW, pady=2
         )
+
+    def _build_random_setting_panel(self, parent: ttk.LabelFrame) -> None:
+        frame = ttk.LabelFrame(parent, text="ランダム設定", padding=6)
+        self.random_setting_frame = frame
+        frame.grid(row=4, column=0, columnspan=6, sticky=tk.EW, pady=(8, 0))
+        fields = [
+            ("width", "幅"), ("height", "高さ"), ("agents", "エージェント"),
+            ("spots", "スポット"), ("brands", "系列"), ("days", "日数"),
+            ("seconds", "1日秒数"), ("teams", "チーム"), ("seed", "seed"),
+        ]
+        for index, (key, label) in enumerate(fields):
+            row, group = divmod(index, 3)
+            column = group * 2
+            ttk.Label(frame, text=label).grid(
+                row=row, column=column, sticky=tk.E, padx=(6, 4), pady=2
+            )
+            ttk.Entry(
+                frame, textvariable=self.random_setting_vars[key], width=10
+            ).grid(row=row, column=column + 1, sticky=tk.EW, pady=2)
+            frame.columnconfigure(column + 1, weight=1)
+        generate = ttk.Button(
+            frame,
+            text="ランダム生成して探索",
+            command=self._generate_and_solve_local,
+            style="Primary.TButton",
+        )
+        generate.grid(row=3, column=0, columnspan=6, sticky=tk.EW, padx=6, pady=(6, 2))
+        self.random_generate_button = generate
+        self._action_buttons.append(generate)
 
     def _build_parameters_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook, padding=8)
@@ -613,6 +649,17 @@ class SolverGUI(tk.Tk):
             parameters,
             self._stop,
         )
+
+    def _random_setting_parameters(self) -> RandomSettingParameters:
+        try:
+            parameters = RandomSettingParameters(**{
+                key: int(variable.get())
+                for key, variable in self.random_setting_vars.items()
+            })
+            parameters.arguments()
+            return parameters
+        except ValueError as error:
+            raise WorkflowError("ランダム設定は整数で指定してください") from error
 
     def _workflow_or_dialog(self) -> Workflow | None:
         if self._busy:
@@ -1071,6 +1118,28 @@ class SolverGUI(tk.Tk):
             self._search_result_failed,
         )
 
+    def _generate_and_solve_local(self) -> None:
+        workflow = self._workflow_or_dialog()
+        if workflow is None:
+            return
+        try:
+            parameters = self._random_setting_parameters()
+        except WorkflowError as error:
+            messagebox.showerror("ランダム設定", str(error), parent=self)
+            return
+        setting = self._work_path("random-setting.json")
+
+        def completed(_result: CommandResult) -> None:
+            self._setting_loaded(setting)
+            self._show_json(setting)
+            self.after_idle(self._solve_local)
+
+        self._run_task(
+            "ランダム設定生成",
+            lambda: workflow.generate_random_setting(setting, parameters),
+            completed,
+        )
+
     def _send_answer(self) -> None:
         workflow = self._workflow_or_dialog()
         if workflow is None:
@@ -1197,10 +1266,27 @@ class SolverGUI(tk.Tk):
         self.search_result_vars["target"].set(f"{prefix}day={summary.day}")
         self.search_result_vars["elapsed"].set(f"{summary.elapsed_ms:,} ms")
         self.search_result_vars["expanded"].set(f"{summary.expanded:,}")
-        self.search_result_vars["daily_count"].set(f"{summary.daily_udon:,}玉")
-        self.search_result_vars["total_count"].set(f"{summary.total_udon:,}玉")
-        self.search_result_vars["daily_brands"].set(f"{summary.daily_brands}系列")
-        self.search_result_vars["total_brands"].set(f"{summary.match_brands}系列")
+        try:
+            total_udon, total_brands = map_acquisition_totals(
+                Path(self.setting_var.get()).expanduser()
+            )
+            udon_denominator = f"{total_udon:,}"
+            brand_denominator = f"{total_brands:,}"
+        except (WorkflowError, OSError, ValueError, KeyError, TypeError):
+            udon_denominator = "-"
+            brand_denominator = "-"
+        self.search_result_vars["daily_count"].set(
+            f"{summary.daily_udon:,}/{udon_denominator}玉"
+        )
+        self.search_result_vars["total_count"].set(
+            f"{summary.total_udon:,}/{udon_denominator}玉"
+        )
+        self.search_result_vars["daily_brands"].set(
+            f"{summary.daily_brands:,}/{brand_denominator}系列"
+        )
+        self.search_result_vars["total_brands"].set(
+            f"{summary.match_brands:,}/{brand_denominator}系列"
+        )
 
     def _show_answer_route(
         self, path: Path, *, source_snapshot: MapSnapshot | None = None

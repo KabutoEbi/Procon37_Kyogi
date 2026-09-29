@@ -35,6 +35,7 @@ int main(int argc, char* argv[]) {
 - `writeAgentKindsJson()`: `POST /agent`の本文と同じ種別配列をJSONファイルへ保存
 - `writeScoreCheckpointJson()`: 次の日に引き継ぐ累積得点を保存
 - `create(argc, argv, defaults)`: createサブコマンド本体
+- `createMatchSetting(argc, argv, defaults)`: `GET /setting`形式のランダム設定を生成
 - `runLocalSolver()`: ランダム問題を生成して初日を解く
 
 現在の`runLocalSolver()`は通信せず、ローカル生成問題だけを対象にする。
@@ -48,13 +49,14 @@ c++ -std=c++17 -O2 -pthread main.cpp -o solver
 ./solver setting.json state.json score-checkpoint.json
 ./solver select setting.json agents.json
 ./solver solve setting.json state.json score-checkpoint.json
+./solver generate random-setting.json --width 16 --height 16 --seed 10
 ```
 
 引数を省略するとランダム問題を生成し、JSONファイルを1つ指定すると公式の`GET /setting`形式として読み込む。2つ目には公式`GET /`の当日状態、3つ目には前日までの得点チェックポイントを指定できる。day 1以降ではチェックポイントが必須で、日番号の不一致を拒否する。
 
 現在の`main.cpp`は`agents.json`、`answer.json`、`score-next.json`を生成するが送信はしない。`score-next.json`は生成計画をローカル実行した予測値なので、通信クライアントは回答が受理された後にだけ次日用チェックポイントとして採用する。探索失敗時は検証済みの全車待機回答へ切り替える。待機は`-1, -14`ではなく`-15`のように連続分を圧縮して出力される。
 
-`select`は種別選択と`agents.json`生成だけで終了する。`solve`は当日状態を必須入力とし、日次探索だけを実行する。Python通信クライアントはこの2モードを呼び分ける。
+`select`は種別選択と`agents.json`生成だけで終了する。`solve`は当日状態を必須入力とし、日次探索だけを実行する。`generate`は幅・高さ・台数・スポット数・系列数・日数・1日の秒数・チーム数・seedを受け取り、公式の試合設定形式を保存する。Python通信クライアントとビジュアライザはこれらのモードを呼び分ける。
 
 通信を含む実行方法は[`server_client/README.md`](../server_client/README.md)を参照する。送信なしの確認には`auto_prepare.py`、全日の自動送信には`auto_submit.py`を使用する。
 

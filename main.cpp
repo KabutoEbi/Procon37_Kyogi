@@ -60,6 +60,12 @@ bool loadScore(const char* path, const MatchSetting& setting,
 
 int main(int argc, char* argv[]) {
     try {
+        if (argc >= 2 && std::string_view(argv[1]) == "generate") {
+            benzen::ApplicationConfig defaults;
+            defaults.outputPath = "random-setting.json";
+            return benzen::createMatchSetting(
+                argc - 2, argv + 2, defaults);
+        }
         auto options = benzen::SolverOptions::parse(argc, argv);
         argc = static_cast<int>(options.positional.size());
         argv = options.positional.data();
@@ -77,7 +83,9 @@ int main(int argc, char* argv[]) {
                       << " select match-setting.json [agents.json]\n"
                       << "       " << argv[0]
                       << " solve match-setting.json match-state.json"
-                         " [score-checkpoint.json]\n";
+                         " [score-checkpoint.json]\n"
+                      << "       " << argv[0]
+                      << " generate [random-setting.json] [options]\n";
             return 1;
         }
 

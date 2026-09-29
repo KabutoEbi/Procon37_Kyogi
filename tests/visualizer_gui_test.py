@@ -47,6 +47,8 @@ class GUITest(unittest.TestCase):
             self.assertNotEqual(gui.controls_frame.master.winfo_class(), "Canvas")
             self.assertNotEqual(gui.parameters_frame.master.winfo_class(), "Canvas")
             self.assertEqual(gui.files_frame.master, gui.config_frame)
+            self.assertEqual(gui.random_setting_frame.master, gui.config_frame)
+            self.assertTrue(gui.random_generate_button.winfo_ismapped())
             self.assertEqual(gui.log_frame.master, gui.content_pane)
             self.assertEqual(gui.controls_frame.master, gui.control_panel)
             self.assertLess(gui.control_panel.winfo_width(), 320)
@@ -229,10 +231,20 @@ result
                 self.assertEqual(gui.search_result_vars["target"].get(), "ローカル day=0")
                 self.assertEqual(gui.search_result_vars["elapsed"].get(), "1,234 ms")
                 self.assertEqual(gui.search_result_vars["expanded"].get(), "56,789")
-                self.assertEqual(gui.search_result_vars["daily_count"].get(), "12玉")
-                self.assertEqual(gui.search_result_vars["total_count"].get(), "25玉")
-                self.assertEqual(gui.search_result_vars["daily_brands"].get(), "3系列")
-                self.assertEqual(gui.search_result_vars["total_brands"].get(), "4系列")
+                total_udon = sum(spot["stocks"] for spot in setting["spots"])
+                total_brands = len({spot["brand"] for spot in setting["spots"]})
+                self.assertEqual(
+                    gui.search_result_vars["daily_count"].get(), f"12/{total_udon}玉"
+                )
+                self.assertEqual(
+                    gui.search_result_vars["total_count"].get(), f"25/{total_udon}玉"
+                )
+                self.assertEqual(
+                    gui.search_result_vars["daily_brands"].get(), f"3/{total_brands}系列"
+                )
+                self.assertEqual(
+                    gui.search_result_vars["total_brands"].get(), f"4/{total_brands}系列"
+                )
                 self.assertEqual(
                     gui.log_text.get("1.0", "end").count("試合開始予定"),
                     1,

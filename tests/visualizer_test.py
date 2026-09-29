@@ -25,6 +25,7 @@ from backend import (  # noqa: E402
     MapSnapshot,
     AutomaticMatch,
     SearchParameters,
+    RandomSettingParameters,
     SimpleServer,
     Paused,
     ApiError,
@@ -32,6 +33,7 @@ from backend import (  # noqa: E402
     read_json,
     connection_from_env,
     load_snapshot,
+    map_acquisition_totals,
     parse_solver_result,
     trace_answer_routes,
     simple_server_teams,
@@ -39,6 +41,29 @@ from backend import (  # noqa: E402
 
 
 class BackendTest(unittest.TestCase):
+    def test_random_setting_parameters(self) -> None:
+        parameters = RandomSettingParameters(
+            width=8, height=12, agents=3, spots=8, brands=5,
+            days=4, seconds=30, teams=2, seed=99,
+        )
+        self.assertEqual(parameters.arguments()[-2:], ["--seed", "99"])
+        with self.assertRaisesRegex(WorkflowError, "spots"):
+            RandomSettingParameters(agents=5, spots=4).arguments()
+        with self.assertRaisesRegex(WorkflowError, "brands"):
+            RandomSettingParameters(spots=8, brands=9).arguments()
+
+    def test_map_acquisition_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            setting = Path(directory) / "setting.json"
+            setting.write_text(json.dumps({
+                "map": {"width": 2, "height": 1, "cells": [[0, 0]]},
+                "spots": [
+                    {"pos": 0, "brand": 7, "stocks": 3},
+                    {"pos": 1, "brand": 7, "stocks": 2},
+                ],
+            }), encoding="utf-8")
+            self.assertEqual(map_acquisition_totals(setting), (5, 1))
+
     def test_solver_result_report(self) -> None:
         report = """parameters beam-width=19
 === procon37 solver report ===
@@ -316,6 +341,30 @@ result
                 self.assertIsNotNone(processes[0].poll())
             finally:
                 timer.cancel()
+
+    @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
+    def test_real_random_setting_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            output = work / "random-setting.json"
+            workflow = Workflow(
+                ConnectionConfig("", ""),
+                Path(os.environ["PROCON_TEST_SOLVER"]),
+                work,
+            )
+            workflow.generate_random_setting(
+                output,
+                RandomSettingParameters(
+                    width=8, height=9, agents=3, spots=8, brands=5,
+                    days=4, seconds=30, teams=3, seed=123,
+                ),
+            )
+            setting = read_json(output)
+            self.assertEqual((setting["map"]["width"], setting["map"]["height"]), (8, 9))
+            self.assertEqual(len(setting["agents"]), 3)
+            self.assertEqual(len(setting["spots"]), 8)
+            self.assertEqual(len(setting["daySteps"]), 4)
+            self.assertEqual(setting["players"], 3)
 
     @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
     def test_real_solver_local_result_state(self) -> None:
