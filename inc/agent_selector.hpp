@@ -209,6 +209,31 @@ public:
                 s, base, start, [&]() { return expired(); }));
         }
 
+        // 開始位置ごとの巡回能力は種別配置に依存しない。
+        std::array<double, kMaxAgents> patrolCapacities{};
+        for (std::size_t p = 0; p < n; ++p) {
+            std::array<double, 3> nearest{};
+            for (const Spot& spot : s.field.spots) {
+                const std::int32_t d = distanceTo(dist[p], spot.pos);
+                if (d > steps || d >= kImpassableCost) continue;
+                const double value =
+                    static_cast<double>(steps + 1 - d) /
+                    static_cast<double>(steps + 1);
+                if (value > nearest[0]) {
+                    nearest[2] = nearest[1];
+                    nearest[1] = nearest[0];
+                    nearest[0] = value;
+                } else if (value > nearest[1]) {
+                    nearest[2] = nearest[1];
+                    nearest[1] = value;
+                } else if (value > nearest[2]) {
+                    nearest[2] = value;
+                }
+            }
+            patrolCapacities[p] = nearest[0] +
+                0.5 * nearest[1] + 0.25 * nearest[2];
+        }
+
         std::vector<Candidate> cs;
         for (std::uint32_t mask = 0; mask < masks; ++mask) {
             if (expired()) {
@@ -263,26 +288,7 @@ public:
             double patrolCapacity = 0.0;
             for (std::size_t p = 0; p < n; ++p) {
                 if (c.kinds[p] != AgentKind::Patrol) continue;
-                std::array<double, 3> nearest{};
-                for (const Spot& spot : s.field.spots) {
-                    const std::int32_t d = distanceTo(dist[p], spot.pos);
-                    if (d > steps || d >= kImpassableCost) continue;
-                    const double value =
-                        static_cast<double>(steps + 1 - d) /
-                        static_cast<double>(steps + 1);
-                    if (value > nearest[0]) {
-                        nearest[2] = nearest[1];
-                        nearest[1] = nearest[0];
-                        nearest[0] = value;
-                    } else if (value > nearest[1]) {
-                        nearest[2] = nearest[1];
-                        nearest[1] = value;
-                    } else if (value > nearest[2]) {
-                        nearest[2] = value;
-                    }
-                }
-                patrolCapacity += nearest[0] +
-                    0.5 * nearest[1] + 0.25 * nearest[2];
+                patrolCapacity += patrolCapacities[p];
             }
 
             // 同じ補給車台数なら、巡回車と主要スポットに近い開始位置を

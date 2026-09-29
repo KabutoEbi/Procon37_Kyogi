@@ -410,7 +410,7 @@ private:
     };
 
     struct ActionCandidate {
-        GameState state{};
+        PendingAction pending{};
         std::int32_t action = -1;
         double orderingScore = 0.0;
         std::uint64_t orderKey = 0;
@@ -2059,6 +2059,8 @@ public:
         std::vector<BeamNode> ready;
         std::vector<BeamNode> staged;
         std::vector<BeamNode> advanced;
+        std::vector<std::tuple<int, ActionRoutes::Id, CellPos>> options;
+        std::vector<ActionCandidate> candidates;
         std::size_t lastIncumbentStep = 0;
         std::size_t expansionRound = 0;
         ready.reserve(cfg.jointBeamWidth);
@@ -2154,7 +2156,7 @@ public:
                         static_cast<std::size_t>(node.state.day + 1) >=
                             s.dayCount() &&
                         shouldWaitAtSpot(node.state, a, s, targets);
-                    std::vector<std::tuple<int, ActionRoutes::Id, CellPos>> options;
+                    options.clear();
                     for (const int action : actions)
                         options.emplace_back(action, ActionRoutes::none, kInvalidCell);
                     if (cfg.useMacroActions) {
@@ -2172,7 +2174,10 @@ public:
                             }
                         }
                     }
-                    std::vector<ActionCandidate> candidates(options.size());
+                    candidates.resize(options.size());
+                    // 行動予約で変わるのは対象車のPendingActionだけ。
+                    // 評価用状態を親ごとに一度コピーし、小さい予約情報を選別する。
+                    GameState actionState = node.state;
                     std::size_t candidateCount = 0;
                     for (const auto& option : options) {
                         const int action = std::get<0>(option);
@@ -2189,9 +2194,9 @@ public:
                         }
                         ActionCandidate& candidate =
                             candidates[candidateCount];
-                        candidate.state = node.state;
+                        actionState.pendingActions[a] = node.state.pendingActions[a];
                         const auto err = tryScheduleAction(
-                            candidate.state,
+                            actionState,
                             s,
                             ms,
                             a,
@@ -2200,6 +2205,7 @@ public:
                         if (err.error != SimulationError::None) {
                             continue;
                         }
+                        candidate.pending = actionState.pendingActions[a];
                         candidate.action = action;
                         candidate.route = continuation;
                         candidate.aim = std::get<2>(option);
@@ -2212,7 +2218,7 @@ public:
                         candidate.orderingScore =
                             node.orderingScore +
                             scheduledActionBonus(
-                                candidate.state,
+                                actionState,
                                 a,
                                 s,
                                 spotDist,
@@ -2270,7 +2276,7 @@ public:
                     for (std::size_t i = 0; i < keep; ++i) {
                         const ActionCandidate& candidate = candidates[i];
                         BeamNode child = node;
-                        child.state = candidate.state;
+                        child.state.pendingActions[a] = candidate.pending;
                         child.routes[a] = candidate.route;
                         child.aims[a] = candidate.aim;
                         child.planTails[a] = actionArena.append(

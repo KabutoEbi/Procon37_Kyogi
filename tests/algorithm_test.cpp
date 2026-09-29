@@ -413,6 +413,36 @@ void testTrialsAndTuning() {
     assert(differentFirstDay.success &&
            trialScore(differentFirstDay.score) ==
                trialScore(directFirstDay.score));
+    // 初日だけでなく、分岐する直前までの全日を再利用する。
+    auto longMatch = line(5, {3, 4, 5, 6}, 6, {0},
+                                {{1, 0, 1, -1}, {2, 4, 1, -1}});
+    longMatch.field.cells[1].type = CellType::Road;
+    TrialFirstDay prefix;
+    TrialTraffic traffic(4, std::vector<TrafficStatus>(5, TrafficStatus::Smooth));
+    bool firstScenario = true;
+    for (const int branch : {4, 3, 2, 1, 0, 4}) {
+        if (branch < 4) traffic[branch][1] = TrafficStatus::Jammed;
+        TrialFirstDay fresh;
+        const auto direct = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg,
+                                     0, kNoTrialDeadline, &fresh);
+        const auto cached = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg,
+                                     0, kNoTrialDeadline, &prefix);
+        assert(cached.success && cached.days == direct.days);
+        assert(trialScore(cached.score) == trialScore(direct.score));
+        assert(prefix.reusedDays == (firstScenario ? 0U : static_cast<std::size_t>(branch)));
+        firstScenario = false;
+        assert(prefix.laterDays.size() == 3);
+        for (std::size_t d = 0; d < prefix.laterDays.size(); ++d) {
+            assert(prefix.laterDays[d].agents[0].pos == fresh.laterDays[d].agents[0].pos);
+            assert(prefix.laterDays[d].agents[0].fuel == fresh.laterDays[d].agents[0].fuel);
+        }
+    }
+    // 日数の変更で以前の末尾を参照しない。
+    const auto shorter = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg,
+                                  2, kNoTrialDeadline, &prefix);
+    const auto shorterDirect = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg, 2);
+    assert(shorter.success && prefix.reusedDays == 0 && prefix.laterDays.size() == 1);
+    assert(trialScore(shorter.score) == trialScore(shorterDirect.score));
     WeightTuningCase train{1, s, {AgentKind::Patrol}, {}};
     WeightTuningCase valid{2, s, {AgentKind::Patrol}, {}};
     WeightTuningConfig tuning;

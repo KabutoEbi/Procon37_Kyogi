@@ -28,7 +28,7 @@ struct TrialResult {
     std::size_t days = 0;
 };
 
-// 同じ種別配置を複数の道路シナリオで試す際の初日結果。
+// 同じ種別配置を複数の道路シナリオで試す際の共通日程の結果。
 // 呼び出し元は配置・設定・探索条件ごとに新しい値を使う。
 struct TrialFirstDay {
     bool valid = false;
@@ -38,6 +38,14 @@ struct TrialFirstDay {
     std::vector<TrafficStatus> traffic;
     std::vector<Agent> agents;
     TrialResult result;
+    struct Day {
+        std::vector<TrafficStatus> traffic;
+        std::vector<Agent> agents;
+        TrialResult result;
+    };
+    // 初日より後の連続した結果。交通が分岐した日以降は再計算する。
+    std::vector<Day> laterDays;
+    std::size_t reusedDays = 0;
 };
 
 namespace trial_detail {
@@ -67,6 +75,7 @@ inline TrialResult runTrial(
     TrialDeadline deadline = kNoTrialDeadline,
     TrialFirstDay* firstDay = nullptr) {
     TrialResult result;
+    if (firstDay != nullptr) firstDay->reusedDays = 0;
     const std::size_t days = dayLimit == 0 ? setting.dayCount()
                                          : std::min(dayLimit, setting.dayCount());
     if (days == 0 || kinds.size() != setting.agentCount()) return result;
@@ -98,6 +107,20 @@ inline TrialResult runTrial(
         result = firstDay->result;
         state.agents = firstDay->agents;
         firstUnfinishedDay = 1;
+        for (const auto& cached : firstDay->laterDays) {
+            if (firstUnfinishedDay >= days) break;
+            const auto& dayTraffic = traffic.empty() ? initialTraffic
+                                                    : traffic[firstUnfinishedDay];
+            if (cached.traffic != dayTraffic) break;
+            result = cached.result;
+            state.agents = cached.agents;
+            ++firstUnfinishedDay;
+        }
+    }
+    if (firstDay != nullptr) {
+        firstDay->reusedDays = firstUnfinishedDay;
+        firstDay->laterDays.resize(firstUnfinishedDay > 0 ? firstUnfinishedDay - 1 : 0);
+        if (firstUnfinishedDay == 0) firstDay->valid = false;
     }
     for (std::size_t day = firstUnfinishedDay; day < days; ++day) {
         state.day = static_cast<std::int32_t>(day);
@@ -125,6 +148,8 @@ inline TrialResult runTrial(
             firstDay->traffic = initialTraffic;
             firstDay->agents = state.agents;
             firstDay->result = result;
+        } else if (firstDay != nullptr) {
+            firstDay->laterDays.push_back({state.trafficByPos, state.agents, result});
         }
     }
     result.evaluation.newBrandCount = static_cast<std::int32_t>(countBits(result.score.matchBrands));
