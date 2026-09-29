@@ -533,13 +533,23 @@ class Workflow:
             raise Paused("停止しました。自動実行は同じ段階から再開できます")
 
     def _run(self, arguments: list[str], *, cwd: Path | None = None,
-             ends_at: float = 0) -> CommandResult:
+             ends_at: float = 0, day_seconds: float = 0,
+             reserve_for_submission: bool = False) -> CommandResult:
         self.check_stop()
         self.parameters.arguments()  # GUI以外から指定した値も検査する。
         reserve = max(self.parameters.send_reserve_ms,
                       math.ceil(self.connection.timeout * 1000) +
                       self.parameters.clock_margin_ms + 1200)
-        margin = max(self.parameters.safety_margin_ms, reserve) if ends_at else self.parameters.safety_margin_ms
+        margin = (
+            max(self.parameters.safety_margin_ms, reserve)
+            if ends_at or reserve_for_submission
+            else self.parameters.safety_margin_ms
+        )
+        if day_seconds:
+            if not math.isfinite(day_seconds) or day_seconds <= 0:
+                raise WorkflowError("1日の試合時間が不正です")
+            # 終了処理にも必ず時間を残し、探索だけで1日分を使い切らない。
+            margin = max(margin, 1000)
         extra = margin - self.parameters.safety_margin_ms
         parameters = replace(
             self.parameters, safety_margin_ms=margin,
@@ -548,6 +558,17 @@ class Workflow:
             selection_time_ms=min(2147483647, self.parameters.selection_time_ms + extra)
                 if self.parameters.selection_time_ms else 0,
         )
+        if day_seconds:
+            day_limit_ms = min(2147483647, math.floor(day_seconds * 1000))
+            if day_limit_ms <= margin:
+                raise WorkflowError("1日の試合時間内に探索終了の余裕を確保できません")
+            parameters = replace(
+                parameters,
+                time_limit_ms=min(
+                    parameters.time_limit_ms or day_limit_ms,
+                    day_limit_ms,
+                ),
+            )
         cutoff = None
         if ends_at:
             remaining = ends_at - time.time() - reserve / 1000
@@ -688,6 +709,13 @@ class Workflow:
             raise WorkflowError(f"ソルバーがありません: {self.solver}")
         daily = read_json(state)
         day = daily["day"]
+        setting_value = read_json(setting)
+        durations = setting_value.get("daySeconds")
+        if not isinstance(durations, list) or not 0 <= day < len(durations):
+            raise WorkflowError("設定から当日の試合時間を取得できません")
+        day_duration = durations[day]
+        if type(day_duration) not in (int, float):
+            raise WorkflowError("設定のdaySecondsが不正です")
         if day > 0 and checkpoint is None:
             raise WorkflowError("day 1以降は得点チェックポイントが必要です")
         if checkpoint is not None and read_json(checkpoint).get("nextDay") != day:
@@ -695,7 +723,12 @@ class Workflow:
         arguments = ["solve", str(setting.resolve()), str(state.resolve())]
         if checkpoint is not None:
             arguments.append(str(checkpoint.resolve()))
-        result = self._run(arguments, ends_at=daily.get("endsAt", 0))
+        result = self._run(
+            arguments,
+            ends_at=daily.get("endsAt", 0),
+            day_seconds=float(day_duration),
+            reserve_for_submission=True,
+        )
         answer = self.work_dir / "answer.json"
         score = self.work_dir / "score-next.json"
         receipt = {
@@ -754,7 +787,14 @@ class Workflow:
         result_state.unlink(missing_ok=True)
         if not self.solver.is_file():
             raise WorkflowError(f"ソルバーがありません: {self.solver}")
-        result = self._run([str(setting.resolve())])
+        setting_value = read_json(setting)
+        durations = setting_value.get("daySeconds")
+        if not isinstance(durations, list) or not durations or type(durations[0]) not in (int, float):
+            raise WorkflowError("設定から1日の試合時間を取得できません")
+        result = self._run(
+            [str(setting.resolve())],
+            day_seconds=float(durations[0]),
+        )
         if not result_state.is_file():
             raise WorkflowError("ソルバーが探索後状態 result-state.json を生成しませんでした")
         return result

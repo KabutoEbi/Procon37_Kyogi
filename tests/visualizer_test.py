@@ -412,7 +412,11 @@ result
             self.assertEqual(sum(method == "POST" for method, _ in requests), 5)
             self.assertEqual(sum(kind == "state" for kind, _ in events), 4)
             logs = "\n".join(value for kind, value in events if kind == "log")
-            self.assertIn("beam-width=16 joint-beam-width=64 threads=1 time-limit-ms=200", logs)
+            self.assertIn(
+                "beam-width=16 joint-beam-width=64 threads=1 "
+                "time-limit-ms=12400 safety-margin-ms=12200",
+                logs,
+            )
             current_day = 2
             requests.clear()
             resumed = Workflow(w.connection, w.solver, work / "resumed", w.parameters)

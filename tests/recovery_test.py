@@ -124,6 +124,25 @@ class RecoveryTest(unittest.TestCase):
                     w._run([], ends_at=time.time() + 1)
                 spawn.assert_not_called()
 
+    def test_solver_time_is_capped_below_day_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            w = Workflow(
+                ConnectionConfig("http://example", "secret", 1),
+                Path(sys.executable),
+                Path(directory),
+                SearchParameters(time_limit_ms=60000, safety_margin_ms=0),
+            )
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ("", "")
+            with mock.patch("backend.subprocess.Popen", return_value=process):
+                result = w._run([], day_seconds=30)
+            command = result.command
+            margin = int(command[command.index("--safety-margin-ms") + 1])
+            limit = int(command[command.index("--time-limit-ms") + 1])
+            self.assertEqual(margin, 1000)
+            self.assertEqual(limit, 30000)
+            self.assertLess(limit - margin, 30000)
+
     def test_rate_limit_wait_rechecks_deadline_before_post(self):
         with mock.patch("get_problem.time.monotonic", return_value=0), \
              mock.patch("get_problem.time.sleep"), \

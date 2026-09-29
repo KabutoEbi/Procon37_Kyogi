@@ -19,8 +19,8 @@ namespace benzen {
 
 struct AgentSelectorConfig {
     // 既定では燃料切れで全車が行動不能になるのを避けるため、
-    // 補給車を最低1台残す。-1なら「全車が補給車」だけを除いた
-    // 最大台数まで調べる。
+    // 補給車を最低1台残す。-1なら巡回車を補給車以上残す範囲で
+    // 自動決定する。必要なら明示値で半数を超える補給車も許可する。
     std::int32_t minSupplyCount = 1;
     std::int32_t maxSupplyCount = -1;
 
@@ -65,6 +65,14 @@ private:
         std::int64_t supplySpread = 0;
     };
 
+    static std::int32_t maximumSupplyCount(
+        std::size_t agentCount,
+        const AgentSelectorConfig& cfg) noexcept {
+        return cfg.maxSupplyCount < 0
+                   ? static_cast<std::int32_t>(agentCount / 2)
+                   : cfg.maxSupplyCount;
+    }
+
     static void validate(
         const MatchSetting& s,
         const AgentSelectorConfig& cfg) {
@@ -86,10 +94,7 @@ private:
             }
         }
 
-        const std::int32_t maximum =
-            cfg.maxSupplyCount < 0
-                ? static_cast<std::int32_t>(n) - 1
-                : cfg.maxSupplyCount;
+        const std::int32_t maximum = maximumSupplyCount(n, cfg);
         if (cfg.minSupplyCount < 0 || cfg.minSupplyCount > maximum ||
             maximum >= static_cast<std::int32_t>(n)) {
             throw std::invalid_argument(
@@ -181,10 +186,7 @@ public:
         };
 
         const std::size_t n = s.agentCount();
-        const std::int32_t maxSupply =
-            cfg.maxSupplyCount < 0
-                ? static_cast<std::int32_t>(n) - 1
-                : cfg.maxSupplyCount;
+        const std::int32_t maxSupply = maximumSupplyCount(n, cfg);
         const std::int32_t steps = s.daySteps.front();
         const std::uint32_t masks =
             std::uint32_t{1} << static_cast<std::uint32_t>(n);

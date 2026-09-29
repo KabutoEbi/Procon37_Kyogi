@@ -340,7 +340,7 @@ class SolverGUI(tk.Tk):
             ("beam_width", "ビーム幅", "各展開で保持する状態数"),
             ("joint_beam_width", "同時行動ビーム幅", "複数台への行動割当の幅"),
             ("threads", "スレッド数", "0: 自動 / 1: 直列"),
-            ("time_limit_ms", "探索時間上限 (ms)", "0: 相対制限なし。サーバー締切は常に有効"),
+            ("time_limit_ms", "探索時間上限 (ms)", "0: 自動。各日の試合時間とサーバー締切は常に有効"),
             ("safety_margin_ms", "締切余裕 (ms)", "探索・種別選択を締切より早く終了"),
             ("max_actions", "各車の行動候補数", "0: 全候補"),
             ("macro_actions", "マクロ行動", "1: 有効 / 0: 無効"),
@@ -979,31 +979,23 @@ class SolverGUI(tk.Tk):
         self._logged_schedule = signature
         self._set_setting_milestones(starts_at, day_seconds)
 
-        if starts_at > 0:
-            def timestamp_text(value: int) -> str:
-                try:
-                    return datetime.fromtimestamp(value).astimezone().strftime(
-                        "%Y-%m-%d %H:%M:%S %Z"
-                    )
-                except (OverflowError, OSError, ValueError):
-                    return f"UNIX {value}"
-
-            self._log("⏱ 試合日程")
-            self._log(
-                f"  試合開始予定: {timestamp_text(starts_at)}"
-            )
-            ends_at = starts_at
-            for day, seconds in enumerate(day_seconds, start=1):
-                ends_at += seconds
-                self._log(f"  {day}日目終了予定: {timestamp_text(ends_at)}")
+        if starts_at <= 0:
             return
 
-        self._log("⏱ 試合日程（開始時刻未確定）")
-        self._log("  試合開始予定: 未確定")
-        elapsed = 0
+        def timestamp_text(value: int) -> str:
+            try:
+                return datetime.fromtimestamp(value).astimezone().strftime(
+                    "%Y-%m-%d %H:%M:%S %Z"
+                )
+            except (OverflowError, OSError, ValueError):
+                return f"UNIX {value}"
+
+        self._log("⏱ 試合日程")
+        self._log(f"  試合開始予定: {timestamp_text(starts_at)}")
+        ends_at = starts_at
         for day, seconds in enumerate(day_seconds, start=1):
-            elapsed += seconds
-            self._log(f"  {day}日目終了予定: 試合開始+{elapsed}秒")
+            ends_at += seconds
+            self._log(f"  {day}日目終了予定: {timestamp_text(ends_at)}")
 
     def _agents_loaded(self, path: Path) -> None:
         self._selected_kinds = read_json(path)

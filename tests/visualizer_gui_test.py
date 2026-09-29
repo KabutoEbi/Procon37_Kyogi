@@ -69,6 +69,16 @@ class GUITest(unittest.TestCase):
             setting["daySteps"] = setting["daySteps"][:4]
             setting["daySeconds"] = setting["daySeconds"][:4]
             setting["startsAt"] = 1_800_000_000
+            unknown_schedule = dict(setting)
+            unknown_schedule["startsAt"] = 0
+            unknown_schedule_path = Path(directory) / "unknown-schedule.json"
+            unknown_schedule_path.write_text(json.dumps(unknown_schedule))
+            log_before_unknown_schedule = gui.log_text.get("1.0", "end")
+            gui._log_match_schedule(unknown_schedule_path)
+            self.assertEqual(
+                gui.log_text.get("1.0", "end"),
+                log_before_unknown_schedule,
+            )
             posted = []
             day = 0
 

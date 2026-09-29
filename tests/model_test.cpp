@@ -556,6 +556,32 @@ void testSelectorValuesParallelPatrols() {
     assert(selected.supplyCount == 1);
 }
 
+void testSelectorKeepsAtLeastHalfPatrolsByDefault() {
+    MatchSetting s;
+    s.daySteps = {4};
+    s.daySeconds = {60};
+    s.fuelLimit = 2;
+    s.playerCount = 2;
+    s.field.width = 3;
+    s.field.height = 1;
+    s.field.cells.assign(3, Cell{CellType::Plain, -1});
+    s.field.spots = {{1, 2, 1, -1}};
+    s.agentStarts = {0, 1, 2};
+    assert(s.field.rebuildSpotIndex());
+
+    AgentSelectorConfig cfg;
+    cfg.trialCandidateLimit = 0;
+    const auto selected = selectAgentKinds(s, cfg);
+    assert(selected.success);
+    assert(selected.supplyCount == 1);
+    assert(selected.evaluatedAssignments == 3);
+
+    cfg.maxSupplyCount = 2;
+    const auto explicitlyAllowed = selectAgentKinds(s, cfg);
+    assert(explicitlyAllowed.success);
+    assert(explicitlyAllowed.evaluatedAssignments == 6);
+}
+
 void testPersistentJsonAndFallback() {
     std::ostringstream kinds;
     printAgentKinds(kinds, {AgentKind::Patrol, AgentKind::Supply});
@@ -821,6 +847,7 @@ int main() {
     testWaitAtLastReachableSpotAndRefuel();
     testAgentSelector();
     testSelectorValuesParallelPatrols();
+    testSelectorKeepsAtLeastHalfPatrolsByDefault();
     testPersistentJsonAndFallback();
     testMatchRunner();
     testProblemCreator();
