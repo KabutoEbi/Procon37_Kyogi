@@ -1764,25 +1764,6 @@ private:
             }
         }
 
-        // スポットは平地なので、日開始時に移動を予約してもstep 1では
-        // まだ元セルにいる。不要な1ステップ待機を選ばないよう、移動
-        // 完了前に確定する現在地の取得を全候補へ同じく加点する。
-        const Cell& currentCell = setting.field.at(agent.pos);
-        if (currentCell.hasSpot() &&
-            (pending.isWait() || pending.remainingSteps > 1)) {
-            const std::size_t currentSpot =
-                static_cast<std::size_t>(currentCell.spotIndex);
-            if (state.remainingStocks[currentSpot] > 0 &&
-                !state.hasAcquired(agentIndex, currentSpot)) {
-                const Spot& spot = setting.field.spots[currentSpot];
-                const BrandMask bit = brandBit(
-                    static_cast<std::size_t>(spot.brandIndex));
-                bonus += (state.score.matchBrands & bit) == 0
-                             ? weights.newBrand * 1.0e-6
-                             : weights.udon * 1.0e-2;
-            }
-        }
-
         const Cell& destination = setting.field.at(projected);
         if (projected != agent.pos && destination.hasSpot()) {
             const std::size_t spotIndex =

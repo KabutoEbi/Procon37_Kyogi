@@ -84,13 +84,15 @@ public:
     // finishDay() の二重反映を防ぐ。
     bool finalized = false;
 
-    // API状態から当日開始時の状態を作る。失敗時は自身を変更しない。
+    // API状態から当日開始時の状態を作り、開始位置の取得を先に確定する。
+    // 失敗時は自身を変更しない。
     bool initialize(
         const MatchSetting& s,
         const MatchState& ms,
         ScoreState prev = {}) noexcept {
         if (!s.hasConsistentDaySettings() || ms.day < 0 ||
             static_cast<std::size_t>(ms.day) >= s.dayCount() ||
+            s.field.cells.size() != s.field.cellCount() ||
             ms.agents.size() != s.agentCount() ||
             ms.agents.size() > kMaxAgents ||
             s.field.spots.size() > kMaxSpots ||
@@ -125,6 +127,18 @@ public:
                 return false;
             }
             next.remainingStocks[i] = spot.maxStock;
+        }
+
+        // 日開始時は最初の行動を予約する前に、現在地のスポットを
+        // エージェント添字順で取得する。
+        for (AgentIndex i = 0; i < next.agentCount; ++i) {
+            const Cell& cell = s.field.at(next.agents[i].pos);
+            if (cell.hasSpot()) {
+                next.tryAcquire(
+                    i,
+                    static_cast<std::size_t>(cell.spotIndex),
+                    s.field);
+            }
         }
 
         *this = next;

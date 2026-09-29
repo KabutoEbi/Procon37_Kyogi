@@ -178,6 +178,38 @@ void testFuelTimeTradeoff() {
     assert(impossible.success && impossible.finalState.dayUdon == 0);
 }
 
+void testTrafficNeverSchedulesAnUnfinishableMove() {
+    auto s = line(2, {3}, 2, {0}, {{1, 1, 1, -1}});
+    s.field.cells[0].type = CellType::Road;
+    assert(s.field.rebuildSpotIndex());
+    auto ms = stateFor(s, {AgentKind::Patrol});
+    ms.trafficByPos[0] = TrafficStatus::Jammed;
+
+    GameState state;
+    assert(state.initialize(s, ms));
+    assert(tryScheduleAction(
+               state,
+               s,
+               ms,
+               0,
+               static_cast<std::int32_t>(Direction::Right)).error ==
+           SimulationError::ActionOverrunsDay);
+
+    const auto jammed = brain1(s, ms, {}, smallBeam());
+    assert(jammed.success);
+    assert(validateDailyPlan(s, ms, jammed.plan).valid);
+    assert(std::none_of(
+        jammed.plan[0].begin(),
+        jammed.plan[0].end(),
+        [](std::int32_t action) { return isMoveAction(action); }));
+
+    ms.trafficByPos[0] = TrafficStatus::Busy;
+    const auto busy = brain1(s, ms, {}, smallBeam());
+    assert(busy.success);
+    assert(validateDailyPlan(s, ms, busy.plan).valid);
+    assert(busy.finalState.dayUdon == 1);
+}
+
 void testRendezvousObstaclesAndMultipleSupplies() {
     auto s = line(5, {6}, 1, {0, 10}, {});
     s.field.height = 3;
@@ -527,6 +559,7 @@ int main() {
     testFlowAgainstEnumeration();
     testSearchEquivalence();
     testFuelTimeTradeoff();
+    testTrafficNeverSchedulesAnUnfinishableMove();
     testRendezvousObstaclesAndMultipleSupplies();
     testMultipleRefuelsInOneDay();
     testCoordinatedPlanningAndCache();

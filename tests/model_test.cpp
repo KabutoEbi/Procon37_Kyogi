@@ -343,6 +343,13 @@ void testDayStartMoveStillAcquiresOriginSpot() {
     st.agents = {Agent{0, AgentKind::Patrol, 0, 2}};
     st.trafficByPos.assign(2, TrafficStatus::Smooth);
 
+    GameState initial;
+    assert(initial.initialize(s, st));
+    assert(initial.step == 0);
+    assert(initial.dayUdon == 1);
+    assert(initial.hasAcquired(0, 0));
+    assert(initial.remainingStocks[0] == 0);
+
     BeamSearchConfig cfg;
     cfg.beamWidth = 32;
     cfg.jointBeamWidth = 64;
