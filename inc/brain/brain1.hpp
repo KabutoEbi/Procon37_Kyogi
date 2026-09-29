@@ -468,16 +468,37 @@ private:
         sortAndLimit(nodes, nodes.size());
         indices.clear();
         if (limit == 0) { nodes.clear(); return; }
-        std::vector<GameState> shapes;
+        static thread_local std::vector<GameState> shapes;
+        shapes.clear();
         shapes.reserve(nodes.size());
-        std::vector<bool> removed(nodes.size(), false);
-        std::unordered_map<std::size_t, std::vector<std::size_t>> groups;
+        static thread_local std::vector<std::uint8_t> removed;
+        removed.assign(nodes.size(), 0);
+        const std::size_t none = nodes.size();
+        struct Group {
+            std::size_t hash;
+            std::size_t first;
+            std::size_t last;
+            bool occupied;
+        };
+        std::size_t groupSlots = 1;
+        while (groupSlots < nodes.size() * 2) groupSlots *= 2;
+        static thread_local std::vector<Group> groups;
+        groups.assign(groupSlots, Group{0, none, none, false});
+        static thread_local std::vector<std::size_t> nextInGroup;
+        nextInGroup.assign(nodes.size(), none);
         for (std::size_t i = 0; i < nodes.size(); ++i) {
             shapes.push_back(canonicalSearchState(nodes[i].state, config.dominancePruning));
             std::size_t hash = GameStateHash{}(shapes.back());
             for (const auto route : nodes[i].routes) detail::hashValue(hash, route);
-            auto& group = groups[hash];
-            for (const auto j : group) {
+            std::size_t slot = hash & (groupSlots - 1);
+            while (groups[slot].occupied && groups[slot].hash != hash)
+                slot = (slot + 1) & (groupSlots - 1);
+            auto& group = groups[slot];
+            if (!group.occupied) {
+                group.hash = hash;
+                group.occupied = true;
+            }
+            for (std::size_t j = group.first; j != none; j = nextInGroup[j]) {
                 if (removed[j] || nodes[i].routes != nodes[j].routes ||
                     shapes[i] != shapes[j]) continue;
                 if (!config.dominancePruning ||
@@ -487,9 +508,14 @@ private:
                 }
                 if (fuelDominates(nodes[i].state, nodes[j].state)) removed[j] = true;
             }
-            if (!removed[i]) group.push_back(i);
+            if (!removed[i]) {
+                if (group.last == none) group.first = i;
+                else nextInGroup[group.last] = i;
+                group.last = i;
+            }
         }
-        std::vector<bool> chosen(nodes.size(), false);
+        static thread_local std::vector<std::uint8_t> chosen;
+        chosen.assign(nodes.size(), 0);
         const std::size_t elite = std::max<std::size_t>(
             1, limit - static_cast<std::size_t>(limit * config.diversityFraction));
         auto signature = [&](const BeamNode& node) {
@@ -808,21 +834,22 @@ private:
         // 現在の予約に基づく次ステップの取得を仮予約し、その先を割り当てる。
         // 他車のstep 1到着も添字順に反映する。実状態は変更しない。
         if (currentDay && state.remainingSteps() > 0) {
-            GameState next = state;
+            const std::int32_t originalDayUdon = state.dayUdon;
+            std::array<CellPos, kMaxAgents> originalPositions{};
             for (AgentIndex a = 0; a < state.agentCount; ++a) {
+                originalPositions[a] = state.agents[a].pos;
                 const auto& pending = state.pendingActions[a];
                 if (pending.isMove() && pending.remainingSteps == 1)
-                    next.agents[a].pos = pending.destination;
+                    state.agents[a].pos = pending.destination;
             }
-            for (AgentIndex a = 0; a < next.agentCount; ++a) {
-                const auto* spot = setting.field.spotAt(next.agents[a].pos);
-                if (spot) next.tryAcquire(a, static_cast<std::size_t>(
-                    setting.field.at(next.agents[a].pos).spotIndex), setting.field);
+            for (AgentIndex a = 0; a < state.agentCount; ++a) {
+                const auto* spot = setting.field.spotAt(state.agents[a].pos);
+                if (spot) state.tryAcquire(a, static_cast<std::size_t>(
+                    setting.field.at(state.agents[a].pos).spotIndex), setting.field);
             }
-            state.score = next.score;
-            state.dayBrands = next.dayBrands;
-            state.remainingStocks = next.remainingStocks;
-            state.acquiredSpots = next.acquiredSpots;
+            for (AgentIndex a = 0; a < state.agentCount; ++a)
+                state.agents[a].pos = originalPositions[a];
+            state.dayUdon = originalDayUdon;
         }
         TargetAssignments result{};
         const int n = static_cast<int>(state.agentCount);
@@ -1313,32 +1340,12 @@ private:
             std::int32_t nearestSpot = kImpassableCost;
             std::int32_t nearestNew = kImpassableCost;
             std::int32_t nearestDaily = kImpassableCost;
-            bool hasCandidate = false;
-            bool hasTimeReachableCandidate = false;
             std::int32_t projectedFuel = agent.fuel;
             if (state.pendingActions[agentIndex].isMove()) {
                 projectedFuel -=
                     state.pendingActions[agentIndex].fuelCost;
             }
             projectedFuel = std::max(0, projectedFuel);
-            for (std::size_t spotIndex = 0;
-                 spotIndex < state.spotCount;
-                 ++spotIndex) {
-                if (state.remainingStocks[spotIndex] <= 0 ||
-                    state.hasAcquired(agentIndex, spotIndex)) {
-                    continue;
-                }
-                hasCandidate = true;
-                const std::size_t pos = static_cast<std::size_t>(projected);
-                const std::int32_t distance =
-                    spotDistances.steps[spotIndex][pos];
-                if (distance >= kImpassableCost ||
-                    distance > availableSteps) {
-                    continue;
-                }
-                hasTimeReachableCandidate = true;
-            }
-
             const PatrolTarget target = assignedTargets[agentIndex];
             const bool waitsAtSpot = shouldWaitAtSpot(
                 state, agentIndex, setting, assignedTargets);
@@ -1393,12 +1400,33 @@ private:
                     0, state.remainingSteps() -
                         (directTarget ? reservedSteps + directPath->steps
                                       : rendezvous.goalArrival));
-            } else if (hasCandidate && !waitsAtSpot) {
-                ++context.unreachableTargetCount;
-                if (hasTimeReachableCandidate) {
-                    context.fuelRisk += std::max(
-                        1,
-                        (setting.fuelLimit + 1) / 2 - projectedFuel);
+            } else if (!waitsAtSpot) {
+                bool hasCandidate = false;
+                bool hasTimeReachableCandidate = false;
+                for (std::size_t spotIndex = 0;
+                     spotIndex < state.spotCount;
+                     ++spotIndex) {
+                    if (state.remainingStocks[spotIndex] <= 0 ||
+                        state.hasAcquired(agentIndex, spotIndex)) {
+                        continue;
+                    }
+                    hasCandidate = true;
+                    const std::size_t pos = static_cast<std::size_t>(projected);
+                    const std::int32_t distance =
+                        spotDistances.steps[spotIndex][pos];
+                    if (distance < kImpassableCost &&
+                        distance <= availableSteps) {
+                        hasTimeReachableCandidate = true;
+                        break;
+                    }
+                }
+                if (hasCandidate) {
+                    ++context.unreachableTargetCount;
+                    if (hasTimeReachableCandidate) {
+                        context.fuelRisk += std::max(
+                            1,
+                            (setting.fuelLimit + 1) / 2 - projectedFuel);
+                    }
                 }
             }
 

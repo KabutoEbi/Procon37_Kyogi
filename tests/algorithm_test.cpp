@@ -388,6 +388,31 @@ void testTrialsAndTuning() {
     const auto trial = runTrial(s, {AgentKind::Patrol}, {}, cfg);
     assert(trial.success && trial.days == 2);
     assert((trialScore(trial.score) == TrialScore{2, 3, 3}));
+    TrialFirstDay sharedFirstDay;
+    TrialTraffic smooth(2, std::vector<TrafficStatus>(3, TrafficStatus::Smooth));
+    TrialTraffic changed = smooth;
+    changed[1][0] = TrafficStatus::Jammed;
+    for (const auto& scenario : {smooth, changed}) {
+        const auto direct = runTrial(s, {AgentKind::Patrol}, scenario, cfg);
+        const auto reused = runTrial(s, {AgentKind::Patrol}, scenario, cfg,
+                                     0, kNoTrialDeadline, &sharedFirstDay);
+        assert(reused.success && reused.days == direct.days);
+        assert(trialScore(reused.score) == trialScore(direct.score));
+    }
+    const auto expiredCached = runTrial(
+        s, {AgentKind::Patrol}, smooth, cfg, 0,
+        std::chrono::steady_clock::now() - std::chrono::seconds(1),
+        &sharedFirstDay);
+    assert(!expiredCached.success);
+    // 初日の交通まで変わった場合は、以前の結果を流用しない。
+    changed[0][0] = TrafficStatus::Busy;
+    const auto differentFirstDay = runTrial(
+        s, {AgentKind::Patrol}, changed, cfg, 0, kNoTrialDeadline,
+        &sharedFirstDay);
+    const auto directFirstDay = runTrial(s, {AgentKind::Patrol}, changed, cfg);
+    assert(differentFirstDay.success &&
+           trialScore(differentFirstDay.score) ==
+               trialScore(directFirstDay.score));
     WeightTuningCase train{1, s, {AgentKind::Patrol}, {}};
     WeightTuningCase valid{2, s, {AgentKind::Patrol}, {}};
     WeightTuningConfig tuning;
@@ -426,6 +451,18 @@ void testTrialsAndTuning() {
     auto multi = line(7, {4, 5}, 6, {0, 3, 6},
         {{1, 0, 1, -1}, {2, 2, 1, -1}, {3, 6, 1, -1}});
     multi.field.cells[1].type = CellType::Road;
+    TrialFirstDay changedKindsCache;
+    const std::vector<AgentKind> leftSupply{
+        AgentKind::Supply, AgentKind::Patrol, AgentKind::Patrol};
+    const std::vector<AgentKind> rightSupply{
+        AgentKind::Patrol, AgentKind::Patrol, AgentKind::Supply};
+    (void)runTrial(multi, leftSupply, {}, cfg, 0,
+                   kNoTrialDeadline, &changedKindsCache);
+    const auto changedKinds = runTrial(multi, rightSupply, {}, cfg, 0,
+                                       kNoTrialDeadline, &changedKindsCache);
+    const auto directKinds = runTrial(multi, rightSupply, {}, cfg);
+    assert(changedKinds.success == directKinds.success);
+    assert(trialScore(changedKinds.score) == trialScore(directKinds.score));
     AgentSelectorConfig fair;
     fair.maxSupplyCount = 1;
     fair.trialCandidateLimit = 3;

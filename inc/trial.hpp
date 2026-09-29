@@ -28,6 +28,18 @@ struct TrialResult {
     std::size_t days = 0;
 };
 
+// 同じ種別配置を複数の道路シナリオで試す際の初日結果。
+// 呼び出し元は配置・設定・探索条件ごとに新しい値を使う。
+struct TrialFirstDay {
+    bool valid = false;
+    const MatchSetting* setting = nullptr;
+    std::vector<AgentKind> kinds;
+    std::size_t dayCount = 0;
+    std::vector<TrafficStatus> traffic;
+    std::vector<Agent> agents;
+    TrialResult result;
+};
+
 namespace trial_detail {
 
 inline bool applyDeadline(
@@ -52,7 +64,8 @@ inline TrialResult runTrial(
     const MatchSetting& setting, const std::vector<AgentKind>& kinds,
     const TrialTraffic& traffic, BeamSearchConfig beam,
     std::size_t dayLimit = 0,
-    TrialDeadline deadline = kNoTrialDeadline) {
+    TrialDeadline deadline = kNoTrialDeadline,
+    TrialFirstDay* firstDay = nullptr) {
     TrialResult result;
     const std::size_t days = dayLimit == 0 ? setting.dayCount()
                                          : std::min(dayLimit, setting.dayCount());
@@ -72,11 +85,26 @@ inline TrialResult runTrial(
     for (AgentIndex a = 0; a < kinds.size(); ++a)
         state.agents.push_back({a, kinds[a], setting.agentStarts[a], setting.fuelLimit});
     beam.useStateDeadline = false;
-    for (std::size_t day = 0; day < days; ++day) {
+    const std::vector<TrafficStatus> initialTraffic = traffic.empty()
+        ? std::vector<TrafficStatus>(setting.field.cellCount(), TrafficStatus::Smooth)
+        : traffic[0];
+    if (deadline != kNoTrialDeadline &&
+        std::chrono::steady_clock::now() >= deadline) return result;
+    std::size_t firstUnfinishedDay = 0;
+    if (firstDay != nullptr && firstDay->valid &&
+        firstDay->setting == &setting && firstDay->kinds == kinds &&
+        firstDay->dayCount == days &&
+        firstDay->traffic == initialTraffic) {
+        result = firstDay->result;
+        state.agents = firstDay->agents;
+        firstUnfinishedDay = 1;
+    }
+    for (std::size_t day = firstUnfinishedDay; day < days; ++day) {
         state.day = static_cast<std::int32_t>(day);
-        state.trafficByPos = traffic.empty()
-            ? std::vector<TrafficStatus>(setting.field.cellCount(), TrafficStatus::Smooth)
-            : traffic[day];
+        state.trafficByPos = day == 0 ? initialTraffic :
+            (traffic.empty()
+                ? std::vector<TrafficStatus>(setting.field.cellCount(), TrafficStatus::Smooth)
+                : traffic[day]);
         auto dailyBeam = beam;
         if (!trial_detail::applyDeadline(dailyBeam, deadline, days - day))
             return result;
@@ -89,6 +117,15 @@ inline TrialResult runTrial(
         state.agents.assign(sim.state.agents.begin(),
                             sim.state.agents.begin() + sim.state.agentCount);
         ++result.days;
+        if (day == 0 && firstDay != nullptr) {
+            firstDay->valid = true;
+            firstDay->setting = &setting;
+            firstDay->kinds = kinds;
+            firstDay->dayCount = days;
+            firstDay->traffic = initialTraffic;
+            firstDay->agents = state.agents;
+            firstDay->result = result;
+        }
     }
     result.evaluation.newBrandCount = static_cast<std::int32_t>(countBits(result.score.matchBrands));
     result.evaluation.dailyBrandCount = result.score.sumOfDailyBrandCounts;

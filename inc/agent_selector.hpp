@@ -422,6 +422,7 @@ public:
             TrialScore total{};
             EvaluationBreakdown worstEval{};
             bool valid = true;
+            TrialFirstDay firstDay;
             for (const auto& traffic : scenarios) {
                 if (expired()) {
                     res.timedOut = true;
@@ -429,7 +430,8 @@ public:
                     break;
                 }
                 const auto trial = runTrial(
-                    s, c.kinds, traffic, beam, cfg.trialDays, deadline);
+                    s, c.kinds, traffic, beam, cfg.trialDays, deadline,
+                    &firstDay);
                 ++res.trialSimulations;
                 if (!trial.success) { valid = false; break; }
                 const auto score = trialScore(trial.score);
