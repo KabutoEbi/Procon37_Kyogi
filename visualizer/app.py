@@ -21,7 +21,9 @@ import json
 import math
 import queue
 import threading
+import time
 from dataclasses import replace
+from datetime import datetime
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -93,6 +95,8 @@ class SolverGUI(tk.Tk):
         self._closing = False
         self._active_token = ""
         self._selected_kinds: list[int] = []
+        self._logged_schedule: tuple[int, tuple[int, ...]] | None = None
+        self._milestones: dict[str, tuple[float, str]] = {}
         self._simple_server = SimpleServer(PROJECT_ROOT / "runtime/simple-server")
         self._simple_teams: tuple[tuple[str, str], ...] = ()
         self.mode_var = tk.StringVar(value="manual")
@@ -678,6 +682,7 @@ class SolverGUI(tk.Tk):
             pass
         except Exception as error:
             self._log(f"画面更新エラー: {error}")
+        self._emit_due_milestones()
         if self._closing and not self._busy:
             self._simple_server.stop()
             self.destroy()
@@ -770,6 +775,7 @@ class SolverGUI(tk.Tk):
             self.score_var.set("")
             self.day_var.set(0)
             self._active_token = info.token
+            self._set_simple_server_milestones(info)
             self._log(
                 f"簡易サーバー起動: {info.url} / team={info.team_label}\n"
                 f"ログ: {info.log_path}\n通常の通信確認・手動操作・自動操作を使用できます"
@@ -786,6 +792,7 @@ class SolverGUI(tk.Tk):
 
     def _stop_simple_server(self) -> None:
         stopped = self._simple_server.stop()
+        self._milestones.clear()
         self._log("簡易サーバーを停止しました" if stopped else "簡易サーバーは停止済みです")
         self.status_var.set("簡易サーバー停止")
         self._sync_simple_server_buttons()
@@ -814,6 +821,8 @@ class SolverGUI(tk.Tk):
         self._selected_kinds = []
         self._day_count = 0
         self._current_snapshot = None
+        self._logged_schedule = None
+        self._milestones.clear()
         self._clear_answer_route()
         self._clear_search_result()
         self.map_canvas.delete("all")
@@ -835,6 +844,46 @@ class SolverGUI(tk.Tk):
         self.log_text.insert(tk.END, message.rstrip() + "\n")
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
+
+    def _set_simple_server_milestones(self, info: SimpleServerInfo) -> None:
+        self._milestones.clear()
+        if info.selection_ends_at > 0:
+            self._milestones["selection-end"] = (
+                info.selection_ends_at, "選択時間終了"
+            )
+        if info.match_starts_at <= 0:
+            return
+        self._milestones["match-start"] = (info.match_starts_at, "試合開始")
+        ends_at = info.match_starts_at
+        for day, seconds in enumerate(info.day_seconds, start=1):
+            ends_at += seconds
+            self._milestones[f"day-{day}-end"] = (
+                ends_at, f"{day}日目終了"
+            )
+
+    def _set_setting_milestones(
+        self, starts_at: int, day_seconds: tuple[int, ...]
+    ) -> None:
+        if starts_at <= 0:
+            return
+        self._milestones["match-start"] = (float(starts_at), "試合開始")
+        ends_at = float(starts_at)
+        for day, seconds in enumerate(day_seconds, start=1):
+            ends_at += seconds
+            self._milestones[f"day-{day}-end"] = (
+                ends_at, f"{day}日目終了"
+            )
+
+    def _emit_due_milestones(self) -> None:
+        now = time.time()
+        due = sorted(
+            (when, key, label)
+            for key, (when, label) in self._milestones.items()
+            if when <= now
+        )
+        for _when, key, label in due:
+            self._milestones.pop(key, None)
+            self._log(f"⏰ {label}")
 
     def _reload_env(self, show_dialog: bool = True) -> None:
         try:
@@ -908,6 +957,53 @@ class SolverGUI(tk.Tk):
         self.day_spinbox.configure(to=9)
         self.day_var.set(0)
         self._refresh_views()
+        self._log_match_schedule(path)
+
+    def _log_match_schedule(self, path: Path) -> None:
+        try:
+            setting = read_json(path)
+        except WorkflowError:
+            return
+        if not isinstance(setting, dict):
+            return
+        starts_at = setting.get("startsAt")
+        raw_seconds = setting.get("daySeconds")
+        if type(starts_at) is not int or not isinstance(raw_seconds, list) or any(
+            type(seconds) is not int or seconds <= 0 for seconds in raw_seconds
+        ):
+            return
+        day_seconds = tuple(raw_seconds)
+        signature = (starts_at, day_seconds)
+        if signature == self._logged_schedule:
+            return
+        self._logged_schedule = signature
+        self._set_setting_milestones(starts_at, day_seconds)
+
+        if starts_at > 0:
+            def timestamp_text(value: int) -> str:
+                try:
+                    return datetime.fromtimestamp(value).astimezone().strftime(
+                        "%Y-%m-%d %H:%M:%S %Z"
+                    )
+                except (OverflowError, OSError, ValueError):
+                    return f"UNIX {value}"
+
+            self._log("⏱ 試合日程")
+            self._log(
+                f"  試合開始予定: {timestamp_text(starts_at)}"
+            )
+            ends_at = starts_at
+            for day, seconds in enumerate(day_seconds, start=1):
+                ends_at += seconds
+                self._log(f"  {day}日目終了予定: {timestamp_text(ends_at)}")
+            return
+
+        self._log("⏱ 試合日程（開始時刻未確定）")
+        self._log("  試合開始予定: 未確定")
+        elapsed = 0
+        for day, seconds in enumerate(day_seconds, start=1):
+            elapsed += seconds
+            self._log(f"  {day}日目終了予定: 試合開始+{elapsed}秒")
 
     def _agents_loaded(self, path: Path) -> None:
         self._selected_kinds = read_json(path)
@@ -1058,8 +1154,9 @@ class SolverGUI(tk.Tk):
         steps = "-"
         if snapshot.day is not None and snapshot.day < len(snapshot.day_steps):
             steps = str(snapshot.day_steps[snapshot.day])
+        days_text = str(len(snapshot.day_steps)) if snapshot.day_steps else "未取得"
         self.map_info_var.set(
-            f"{snapshot.width}×{snapshot.height}  day={day_text}  "
+            f"{snapshot.width}×{snapshot.height}  day={day_text}  days={days_text}  "
             f"steps={steps}  agents={len(snapshot.agents)}  fuelLimit={snapshot.fuel_limit}"
         )
 

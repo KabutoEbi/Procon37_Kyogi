@@ -202,6 +202,9 @@ class SimpleServerInfo:
     token: str
     team_label: str
     log_path: Path
+    selection_ends_at: float = 0.0
+    match_starts_at: float = 0.0
+    day_seconds: tuple[float, ...] = ()
 
 
 SIMPLE_SERVER_ROOT = (
@@ -298,9 +301,19 @@ class SimpleServer:
         for label, value in (("種別締切", kind_deadline), ("試合開始待ち", match_start_delay)):
             if not math.isfinite(value) or value <= 0:
                 raise WorkflowError(f"{label}は0より大きくしてください")
+        config_value = read_json(config)
+        problem = config_value.get("problem") if isinstance(config_value, dict) else None
+        raw_day_seconds = problem.get("daySeconds") if isinstance(problem, dict) else None
+        if not isinstance(raw_day_seconds, list) or not raw_day_seconds or any(
+            type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0
+            for seconds in raw_day_seconds
+        ):
+            raise WorkflowError("簡易サーバー設定のproblem.daySecondsが不正です")
+        day_seconds = tuple(float(seconds) for seconds in raw_day_seconds)
         with self._lock:
             if self.process is not None and self.process.poll() is None:
                 raise WorkflowError("簡易サーバーは既に起動しています")
+        launched_at = time.time()
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                 raise WorkflowError(f"ポート{port}は既に使用されています")
@@ -342,7 +355,10 @@ class SimpleServer:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                     name, token = teams[team_index]
                     return SimpleServerInfo(
-                        f"http://127.0.0.1:{port}", token, name, self.log_path
+                        f"http://127.0.0.1:{port}", token, name, self.log_path,
+                        launched_at + kind_deadline,
+                        launched_at + kind_deadline + match_start_delay,
+                        day_seconds,
                     )
             except (ConnectionRefusedError, TimeoutError, OSError):
                 time.sleep(0.05)

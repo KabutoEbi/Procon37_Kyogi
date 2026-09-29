@@ -439,9 +439,12 @@ void testTrialsAndTuning() {
     assert(budgeted.totalTrialScore == choice.totalTrialScore);
     assert(budgeted.completedTrialScenarios == 2);
 
-    auto roads = line(16, {4, 4}, 8, {0}, {{1, 15, 1, -1}});
+    auto roads = line(16, {32, 32, 32}, 8, {0, 1, 2, 3},
+        {{1, 15, 1, -1}});
     for (auto& cell : roads.field.cells) cell.type = CellType::Road;
     roads.field.cells[0].type = CellType::Plain;
+    roads.busyThreshold = 7;
+    roads.jammedThreshold = 9;
     const auto scenarios = makeTrialScenarios(roads);
     assert(scenarios.size() == 3);
     assert(scenarios == makeTrialScenarios(roads));
@@ -450,8 +453,28 @@ void testTrialsAndTuning() {
             [](TrafficStatus traffic) { return traffic == TrafficStatus::Smooth; }));
         assert(scenario[1][0] == TrafficStatus::Smooth);
     }
-    assert(scenarios[0][1] != scenarios[1][1]);
-    assert(scenarios[1][1] != scenarios[2][1]);
+    bool lowToMiddle = false;
+    bool middleToHigh = false;
+    for (std::size_t pos = 0; pos < roads.field.cellCount(); ++pos) {
+        assert(scenarios[0][1][pos] <= scenarios[1][1][pos]);
+        assert(scenarios[1][1][pos] <= scenarios[2][1][pos]);
+        lowToMiddle = lowToMiddle || scenarios[0][1][pos] < scenarios[1][1][pos];
+        middleToHigh = middleToHigh || scenarios[1][1][pos] < scenarios[2][1][pos];
+    }
+    assert(lowToMiddle && middleToHigh);
+
+    const auto baseLoad = predictRoadLoad(roads, 1);
+    auto moreAgents = roads;
+    moreAgents.agentStarts.insert(
+        moreAgents.agentStarts.end(), {4, 5, 6, 7});
+    const auto agentLoad = predictRoadLoad(moreAgents, 1);
+    assert(agentLoad.meanPerTeam > baseLoad.meanPerTeam);
+
+    auto moreTeams = roads;
+    moreTeams.playerCount = roads.playerCount * 4;
+    const auto teamLoad = predictRoadLoad(moreTeams, 1);
+    assert(std::abs(teamLoad.meanPerTeam - baseLoad.meanPerTeam) < 1e-9);
+    assert(teamLoad.deviationPerTeam < baseLoad.deviationPerTeam);
 }
 
 void testConsoleReport() {

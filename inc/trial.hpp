@@ -4,6 +4,8 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -95,15 +97,59 @@ inline TrialResult runTrial(
     return result;
 }
 
-// 予測値ではなく種別比較用の条件。初日は必ず全道路が順調。
-// 以後は全順調と、固定シードで道路ごとに混雑を生成した条件を比較する。
+struct PredictedRoadLoad {
+    double meanPerTeam = 0.0;
+    double deviationPerTeam = 0.0;
+};
+
+// 全チームのエージェント滞在を道路へ分配したときの、1道路セルあたりの
+// チーム平均交通量を見積もる。道路は移動経路に選ばれやすいため、他の
+// 通行可能セルの2倍の重みを持たせる。
+inline PredictedRoadLoad predictRoadLoad(
+    const MatchSetting& setting, std::size_t day) noexcept {
+    if (day == 0 || day >= setting.dayCount() ||
+        setting.playerCount <= 0 || setting.agentCount() == 0) {
+        return {};
+    }
+
+    double weightedCells = 0.0;
+    for (const Cell& cell : setting.field.cells) {
+        if (!cell.isPassable()) continue;
+        weightedCells += cell.type == CellType::Road ? 2.0 : 1.0;
+    }
+    if (weightedCells <= 0.0) return {};
+
+    std::int64_t historySteps = setting.daySteps[day - 1];
+    if (day >= 2) historySteps += setting.daySteps[day - 2];
+    if (historySteps <= 0) return {};
+
+    const double teams = static_cast<double>(setting.playerCount);
+    const double trials = teams * static_cast<double>(setting.agentCount()) *
+                          static_cast<double>(historySteps);
+    const double roadProbability = std::min(1.0, 2.0 / weightedCells);
+    PredictedRoadLoad load;
+    load.meanPerTeam = trials * roadProbability / teams;
+    load.deviationPerTeam = std::sqrt(
+        trials * roadProbability * (1.0 - roadProbability)) / teams;
+    return load;
+}
+
+inline TrafficStatus predictedTrafficStatus(
+    const MatchSetting& setting, double load) noexcept {
+    const std::int32_t busy = std::max(1, setting.busyThreshold);
+    const std::int32_t jammed = std::max(busy + 1, setting.jammedThreshold);
+    if (load >= static_cast<double>(jammed)) return TrafficStatus::Jammed;
+    if (load >= static_cast<double>(busy)) return TrafficStatus::Busy;
+    return TrafficStatus::Smooth;
+}
+
+// 初日は必ず全道路が順調。以後はチーム数・エージェント数・直前の
+// ステップ数から予測した低位／中央／高位の交通条件を比較する。
 inline std::vector<TrialTraffic> makeTrialScenarios(
     const MatchSetting& setting, std::size_t count = 3) {
-    auto randomSample = [](std::size_t scenario, std::size_t day,
-                           std::size_t pos) noexcept {
+    auto spatialDeviation = [](std::size_t day, std::size_t pos) noexcept {
         std::uint64_t value =
             0x9e3779b97f4a7c15ULL ^
-            (static_cast<std::uint64_t>(scenario) * 0xbf58476d1ce4e5b9ULL) ^
             (static_cast<std::uint64_t>(day) * 0x94d049bb133111ebULL) ^
             static_cast<std::uint64_t>(pos);
         value ^= value >> 30;
@@ -111,25 +157,29 @@ inline std::vector<TrialTraffic> makeTrialScenarios(
         value ^= value >> 27;
         value *= 0x94d049bb133111ebULL;
         value ^= value >> 31;
-        return value >> 60; // 0～15を一様に使う。
+        const double unit = static_cast<double>(value >> 53) /
+                            static_cast<double>(std::uint64_t{1} << 11);
+        return (unit - 0.5) * 1.5;
     };
     std::vector<TrialTraffic> scenarios;
     for (std::size_t scenario = 0; scenario < count; ++scenario) {
         TrialTraffic traffic(setting.dayCount(), std::vector<TrafficStatus>(
             setting.field.cellCount(), TrafficStatus::Smooth));
-        if (scenario > 0)
-            for (std::size_t day = 1; day < traffic.size(); ++day)
-                for (std::size_t pos = 0; pos < traffic[day].size(); ++pos)
-                    if (setting.field.cells[pos].type == CellType::Road) {
-                        const std::uint64_t sample =
-                            randomSample(scenario, day, pos);
-                        const std::size_t busy = scenario == 1 ? 2 : 4;
-                        const std::size_t jammed = scenario == 1 ? 3 : 6;
-                        if (sample < busy)
-                            traffic[day][pos] = TrafficStatus::Busy;
-                        else if (sample < jammed)
-                            traffic[day][pos] = TrafficStatus::Jammed;
-                    }
+        const double scenarioDeviation = count <= 1
+            ? 0.0
+            : -1.0 + 2.0 * static_cast<double>(scenario) /
+                         static_cast<double>(count - 1);
+        for (std::size_t day = 1; day < traffic.size(); ++day) {
+            const PredictedRoadLoad prediction = predictRoadLoad(setting, day);
+            for (std::size_t pos = 0; pos < traffic[day].size(); ++pos) {
+                if (setting.field.cells[pos].type != CellType::Road) continue;
+                const double load = std::max(
+                    0.0,
+                    prediction.meanPerTeam + prediction.deviationPerTeam *
+                        (scenarioDeviation + spatialDeviation(day, pos)));
+                traffic[day][pos] = predictedTrafficStatus(setting, load);
+            }
+        }
         if (std::find(scenarios.begin(), scenarios.end(), traffic) == scenarios.end())
             scenarios.push_back(std::move(traffic));
     }

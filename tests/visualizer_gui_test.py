@@ -67,6 +67,8 @@ class GUITest(unittest.TestCase):
             main_thread = threading.get_ident()
             setting = json.loads((ROOT / "sample_maps/sample_16.json").read_text())
             setting["daySteps"] = setting["daySteps"][:4]
+            setting["daySeconds"] = setting["daySeconds"][:4]
+            setting["startsAt"] = 1_800_000_000
             posted = []
             day = 0
 
@@ -138,12 +140,16 @@ result
                 gui.update()
                 self.assertTrue(gui.simple_start_button.winfo_ismapped())
                 self.assertTrue(gui.simple_clear_button.winfo_ismapped())
+                simple_now = time.time()
                 with mock.patch.object(
                     gui._simple_server,
                     "start",
                     return_value=SimpleServerInfo(
                         "http://127.0.0.1:18080", "local-token", "local-team",
                         Path(directory) / "simple-server.log",
+                        simple_now + 0.05,
+                        simple_now + 0.10,
+                        (0.05, 0.05),
                     ),
                 ) as start:
                     gui._start_simple_server()
@@ -152,6 +158,18 @@ result
                 self.assertEqual(gui.url_var.get(), "http://127.0.0.1:18080")
                 self.assertEqual(gui.token_var.get(), "local-token")
                 self.assertIn("runtime/simple-server/client", gui.work_var.get())
+                milestone_deadline = time.monotonic() + 1
+                milestone_log = ""
+                while time.monotonic() < milestone_deadline:
+                    gui.update()
+                    milestone_log = gui.log_text.get("1.0", "end")
+                    if "⏰ 2日目終了" in milestone_log:
+                        break
+                    time.sleep(0.01)
+                self.assertIn("⏰ 選択時間終了", milestone_log)
+                self.assertIn("⏰ 試合開始", milestone_log)
+                self.assertIn("⏰ 1日目終了", milestone_log)
+                self.assertIn("⏰ 2日目終了", milestone_log)
                 with mock.patch("app.messagebox.askyesno", return_value=True), \
                      mock.patch.object(gui._simple_server, "clear_client_work", return_value=3) as clear:
                     gui.simple_clear_button.invoke()
@@ -181,6 +199,12 @@ result
                 self.assertEqual(gui._selected_kinds, [0, 0, 0, 0])
                 self.assertEqual(gui.day_var.get(), 0)
                 self.assertEqual(int(gui.day_spinbox.cget("to")), 3)
+                self.assertIn("day=未取得", gui.map_info_var.get())
+                self.assertIn("days=4", gui.map_info_var.get())
+                schedule_log = gui.log_text.get("1.0", "end")
+                self.assertIn("試合開始予定", schedule_log)
+                self.assertIn("1日目終了予定", schedule_log)
+                self.assertIn("4日目終了予定", schedule_log)
 
                 with mock.patch("backend.Workflow._run", autospec=True, side_effect=solver):
                     gui._solve_local()
@@ -199,6 +223,10 @@ result
                 self.assertEqual(gui.search_result_vars["total_count"].get(), "25玉")
                 self.assertEqual(gui.search_result_vars["daily_brands"].get(), "3系列")
                 self.assertEqual(gui.search_result_vars["total_brands"].get(), "4系列")
+                self.assertEqual(
+                    gui.log_text.get("1.0", "end").count("試合開始予定"),
+                    1,
+                )
 
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver):
