@@ -42,3 +42,5 @@ make test-python
 補給車の目的地先回りと無目的な移動の抑制は[補給車移動の比較記録](supply-movement-results-2026-09-30.md)を参照。
 
 8台時の補給車2台・3台と候補配分の比較は[8台時の種別選択記録](agent-selection-8-results-2026-09-30.md)を参照。
+
+混雑・渋滞下での古い合流先の再計画と、エージェント選択の再評価は[混合交通での再計画・種別選択記録](mixed-traffic-reroute-results-2026-09-30.md)を参照。

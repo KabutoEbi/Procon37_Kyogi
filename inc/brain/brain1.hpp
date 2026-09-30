@@ -2240,7 +2240,21 @@ public:
                             const bool periodicReplan =
                                 cfg.macroReplanInterval != 0 &&
                                 eventStep % cfg.macroReplanInterval == 0;
-                            if (!depletedTarget && !periodicReplan)
+                            bool staleSupplyRoute = false;
+                            if (!node.state.agents[a].isPatrol()) {
+                                const auto current = coordinatedAssignments(
+                                    node.state, s, ms, spotDist);
+                                const auto replacement = std::find_if(
+                                    current.meets.begin(), current.meets.end(),
+                                    [&](const RendezvousPlan& meet) {
+                                        return meet.valid && meet.supply == a;
+                                    });
+                                staleSupplyRoute =
+                                    replacement != current.meets.end() &&
+                                    replacement->pos != aim;
+                            }
+                            if (!depletedTarget && !periodicReplan &&
+                                !staleSupplyRoute)
                                 continue;
                         }
                         // 補給予定が実現しなかった等の場合は、その場から再計画。
