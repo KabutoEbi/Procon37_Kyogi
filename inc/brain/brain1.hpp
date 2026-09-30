@@ -1103,8 +1103,13 @@ private:
         }
         // 巡回車だけの時間・燃料では劣る迂回でも、補給車に近づくことで
         // 合流込みでは早くなる。到着時刻の下界で候補を絞って実経路を確認。
-        if (best.required && !best.valid && dist.planning.detourRendezvous &&
+        // 合流が見つかっていても、待ち時間や燃料節約経路の迂回を
+        // 短縮できる余地があれば、経路外の合流地点も比較する。
+        const int earliestGoal = delay + dist.steps[target.spotIndex][start];
+        if (best.required && (!best.valid || best.goalArrival > earliestGoal ||
+                              best.needsRefuelAgain) && dist.planning.detourRendezvous &&
             dist.planning.detourCandidateLimit > 0 && fuel > 0) {
+            const bool refineExisting = best.valid;
             using Candidate = std::tuple<int, int, AgentIndex, CellPos>;
             std::vector<Candidate> candidates;
             for (AgentIndex q = 0; q < state.agentCount; ++q) {
@@ -1113,6 +1118,9 @@ private:
                 for (CellPos cell = 0;
                      cell < static_cast<CellPos>(setting.field.cellCount()); ++cell) {
                     const int patrol = dist.travel[start][cell];
+                    // 全地形・交通で移動時間 <= 2 * 消費燃料。
+                    // 最短時間さえ2*fuelを超える地点には補給前に届かない。
+                    if (patrol > 2LL * fuel) continue;
                     const int supply = dist.travel[projectedPosition(state, q)][cell];
                     if (patrol >= kImpassableCost || supply >= kImpassableCost)
                         continue;
@@ -1122,7 +1130,8 @@ private:
                     const int suffixSteps = dist.steps[target.spotIndex][cell];
                     if (suffixSteps > available - at) continue;
                     const int lower = at + suffixSteps;
-                    if (best.valid && lower >= best.goalArrival) continue;
+                    if (best.valid && (lower > best.goalArrival ||
+                        (lower == best.goalArrival && !best.needsRefuelAgain))) continue;
                     candidates.emplace_back(lower, supply, q, cell);
                 }
             }
@@ -1134,13 +1143,34 @@ private:
             for (const auto& entry : candidates) {
                 if (checked++ >= dist.planning.detourCandidateLimit ||
                     (dist.stop && dist.stop())) break;
+                const int lower = std::get<0>(entry);
+                if (best.valid && (lower > best.goalArrival ||
+                    (lower == best.goalArrival && !best.needsRefuelAgain))) break;
                 const auto q = std::get<2>(entry);
                 const auto cell = std::get<3>(entry);
-                const auto prefix = Brain0::shortestFuelConstrainedPath(
-                    setting, matchState, start, cell, AgentKind::Patrol,
-                    fuel, dist.stop);
-                if (!prefix.reachable) continue;
-                const int arrival = delay + prefix.cost.steps;
+                AgentPlan actions;
+                int prefixSteps = 0;
+                if (refineExisting) {
+                    // 追加改善の試行は事前計算済み最短路の復元だけに限定。
+                    // 既存の合流がない場合の燃料節約経路探索は従来どおり行う。
+                    actions = routeTo(setting, matchState, dist, start, cell,
+                                      AgentKind::Patrol, available - delay, fuel);
+                    CellPos reached = start;
+                    for (const int action : actions) {
+                        prefixSteps += moveStepCost(setting, matchState, reached);
+                        reached = setting.field.neighbor(reached, static_cast<Direction>(action));
+                    }
+                    if (reached != cell) continue;
+                } else {
+                    const auto prefix = Brain0::shortestFuelConstrainedPath(
+                        setting, matchState, start, cell, AgentKind::Patrol,
+                        fuel, dist.stop);
+                    if (!prefix.reachable) continue;
+                    prefixSteps = prefix.cost.steps;
+                    for (const auto direction : prefix.directions)
+                        actions.push_back(static_cast<int>(direction));
+                }
+                const int arrival = delay + prefixSteps;
                 const int supply = std::get<1>(entry);
                 const int supplyArrival = projectedDelay(state, q) + supply;
                 const int at = meetingStep(state, arrival, supplyArrival);
@@ -1148,10 +1178,8 @@ private:
                     cell, available - at, setting.fuelLimit);
                 if (!suffix) continue;
                 const int goalArrival = at + suffix->steps;
-                if (best.valid && goalArrival >= best.goalArrival) continue;
-                AgentPlan actions;
-                for (const auto direction : prefix.directions)
-                    actions.push_back(static_cast<int>(direction));
+                if (best.valid && (goalArrival > best.goalArrival ||
+                    (goalArrival == best.goalArrival && !best.needsRefuelAgain))) continue;
                 best.pos = cell;
                 best.supply = q;
                 best.patrolArrival = arrival;

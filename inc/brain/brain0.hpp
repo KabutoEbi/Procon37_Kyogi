@@ -187,15 +187,23 @@ public:
         DialQueue<std::pair<CellPos, std::int32_t>> queue;
         distances[index(start, 0)] = 0;
         queue.push(0, {start, 0});
+        std::int32_t goalSteps = kImpassableCost;
         while (!queue.empty()) {
             if (stop && stop()) {
                 return PathResult{};
             }
             const auto [steps, state] = queue.pop();
+            // 正の移動コストなので、最初の目的地より遅い経路は不要。
+            // 同時刻の目的地ラベルは残し、最小燃料のタイブレークを保つ。
+            if (steps > goalSteps) break;
             const CellPos from = state.first;
             const std::int32_t used = state.second;
             const std::size_t fromIndex = index(from, used);
             if (steps != distances[fromIndex]) {
+                continue;
+            }
+            if (from == goal) {
+                goalSteps = steps;
                 continue;
             }
             const std::int32_t edgeSteps = moveStepCost(s, st, from);

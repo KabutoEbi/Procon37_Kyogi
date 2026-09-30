@@ -13,8 +13,8 @@
 | [`agent_selection_benchmark.cpp`](agent_selection_benchmark.md) | ランダム生成マップでの種別選択と全日試走の比較 |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
-| [`recovery_test.py`](recovery_test.md) | 永続復旧・同一回答再送・送信時間確保の回帰テスト |
-| [`visualizer_gui_test.py`](visualizer_gui_test.md) | Tk上での初期設定・日次探索・手動／自動送信テスト |
+| [`recovery_test.py`](recovery_test.md) | 永続復旧・同日回答更新・同一候補再送・送信時間確保の回帰テスト |
+| [`visualizer_gui_test.py`](visualizer_gui_test.md) | Tk上での初期設定・同日再探索・日終了時の更新・手動／自動送信テスト |
 | [`visualizer_runtime_test.py`](visualizer_runtime_test.md) | 対応するPython/Tkの選択テスト |
 | [`visualizer_simple_server_test.py`](visualizer_simple_server_test.md) | 同梱簡易サーバーと実ソルバーの結合テスト |
 | [`solver_options_test.cpp`](solver_options_test.md) | 探索引数の反映と不正値拒否 |
@@ -36,3 +36,5 @@ GUIバックエンドはPython標準の`unittest`で個別に実行する。
 ```sh
 make test-python
 ```
+
+補給車の合流候補拡張・燃料制約付き経路の改善結果は[合流改善の比較記録](rendezvous-results-2026-09-30.md)を参照。固定探索量での改善と、300ms制限下に残る退行を分けて記録している。

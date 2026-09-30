@@ -46,6 +46,7 @@ from backend import (
     Paused,
     connection_from_env,
     load_snapshot,
+    file_hash,
     map_acquisition_totals,
     parse_solver_result,
     read_json,
@@ -92,6 +93,8 @@ class SolverGUI(tk.Tk):
         self._answer_routes: tuple[tuple[int, ...], ...] | None = None
         self._answer_route_day: int | None = None
         self._day_count = 0
+        self._daily_inputs: dict[tuple, tuple[Path, Path | None, str]] = {}
+        self._day_deadlines: dict[int, float] = {}
         self._map_redraw_job: str | None = None
         self._stop = threading.Event()
         self._closing = False
@@ -144,6 +147,10 @@ class SolverGUI(tk.Tk):
         self._build_ui()
         self._reload_simple_teams(show_dialog=False)
         self._reload_env(show_dialog=False)
+        self.day_var.trace_add("write", lambda *_: self._sync_day_button())
+        for variable in (self.url_var, self.token_var, self.work_var, self.setting_var):
+            variable.trace_add("write", lambda *_: self._reset_daily_inputs())
+        self._sync_day_button()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(100, self._poll_messages)
 
@@ -263,8 +270,8 @@ class SolverGUI(tk.Tk):
         window = tk.Toplevel(self)
         self.settings_window = window
         window.title("Procon37 実行設定・使用ファイル")
-        window.geometry("1000x450")
-        window.minsize(820, 410)
+        window.geometry("1000x480")
+        window.minsize(820, 440)
         window.protocol("WM_DELETE_WINDOW", self._hide_settings_window)
 
         header = ttk.Frame(window, padding=(12, 10, 12, 6))
@@ -358,13 +365,24 @@ class SolverGUI(tk.Tk):
                 frame, textvariable=self.random_setting_vars[key], width=10
             ).grid(row=row, column=column + 1, sticky=tk.EW, pady=2)
             frame.columnconfigure(column + 1, weight=1)
+        traffic_row = ttk.Frame(frame)
+        traffic_row.grid(row=3, column=0, columnspan=6, sticky=tk.W, padx=6, pady=3)
+        ttk.Label(traffic_row, text="道路状態（ローカル探索）").pack(side=tk.LEFT)
+        self.random_traffic_check = ttk.Checkbutton(
+            traffic_row,
+            text="混雑・渋滞を含める",
+            variable=self.random_setting_vars["include_congestion"],
+            onvalue="1",
+            offvalue="0",
+        )
+        self.random_traffic_check.pack(side=tk.LEFT, padx=6)
         generate = ttk.Button(
             frame,
             text="ランダム生成して探索",
             command=self._generate_and_solve_local,
             style="Primary.TButton",
         )
-        generate.grid(row=3, column=0, columnspan=6, sticky=tk.EW, padx=6, pady=(6, 2))
+        generate.grid(row=4, column=0, columnspan=6, sticky=tk.EW, padx=6, pady=(6, 2))
         self.random_generate_button = generate
         self._action_buttons.append(generate)
 
@@ -471,6 +489,8 @@ class SolverGUI(tk.Tk):
             )
             button.grid(row=row, column=0, sticky=tk.EW, pady=3)
             self._action_buttons.append(button)
+            if command == self._fetch_and_solve_day:
+                self.solve_day_button = button
             if command == self._send_answer:
                 self.send_answer_button = button
             row += 1
@@ -730,6 +750,7 @@ class SolverGUI(tk.Tk):
         except Exception as error:
             self._log(f"画面更新エラー: {error}")
         self._emit_due_milestones()
+        self._advance_finished_day()
         if self._closing and not self._busy:
             self._simple_server.stop()
             self.destroy()
@@ -747,10 +768,11 @@ class SolverGUI(tk.Tk):
         self._mode_changed()
         self.stop_button.configure(state=tk.NORMAL if busy else tk.DISABLED)
         self._sync_simple_server_buttons()
+        self._sync_day_button()
 
     def _set_controls(self, parent: tk.Widget, disabled: bool) -> None:
         for widget in parent.winfo_children():
-            if isinstance(widget, (ttk.Entry, ttk.Button, ttk.Spinbox)):
+            if isinstance(widget, (ttk.Entry, ttk.Button, ttk.Spinbox, ttk.Checkbutton)):
                 widget.configure(state=tk.DISABLED if disabled else tk.NORMAL)
             self._set_controls(widget, disabled)
 
@@ -976,6 +998,12 @@ class SolverGUI(tk.Tk):
             self._setting_loaded(data)
         elif key == "agents":
             self._agents_loaded(data)
+        elif key == "day_state":
+            context, state, checkpoint, digest = data
+            self._daily_inputs[context] = (state, checkpoint, digest)
+            self.state_var.set(str(state))
+            self._state_loaded(state)
+            self._sync_day_button()
         elif key == "solve_start":
             self._clear_answer_route()
 
@@ -994,6 +1022,8 @@ class SolverGUI(tk.Tk):
             return None
 
     def _setting_loaded(self, path: Path) -> None:
+        self._daily_inputs.clear()
+        self._day_deadlines.clear()
         self._clear_answer_route()
         self._clear_search_result()
         self.setting_var.set(str(path))
@@ -1021,6 +1051,11 @@ class SolverGUI(tk.Tk):
             return
         day_seconds = tuple(raw_seconds)
         signature = (starts_at, day_seconds)
+        end = float(starts_at)
+        if starts_at > 0:
+            for day, seconds in enumerate(day_seconds):
+                end += seconds
+                self._day_deadlines.setdefault(day, end)
         if signature == self._logged_schedule:
             return
         self._logged_schedule = signature
@@ -1049,12 +1084,72 @@ class SolverGUI(tk.Tk):
         self._refresh_views()
         self._show_json(path)
 
+    def _reset_daily_inputs(self) -> None:
+        identity = (self.url_var.get(), self.token_var.get(),
+                    self.work_var.get(), self.setting_var.get())
+        if getattr(self, "_input_identity", None) == identity:
+            return
+        self._input_identity = identity
+        self._daily_inputs.clear()
+        self._day_deadlines.clear()
+        self._logged_schedule = None
+        self._sync_day_button()
+
+    def _advance_finished_day(self) -> None:
+        if self._busy or not self._day_count:
+            return
+        try:
+            day = self.day_var.get()
+        except tk.TclError:
+            return
+        original = day
+        now = time.time()
+        while day < self._day_count and 0 < self._day_deadlines.get(day, 0) <= now:
+            day += 1
+        if day != original:
+            self.day_var.set(day)
+            self.score_var.set(str(self._work_path(f"score-day{day}.json")))
+            self._log(f"対象日をday={day}へ更新" if day < self._day_count else "全日程が終了しました")
+
+    def _day_context(self, day: int) -> tuple:
+        setting = Path(self.setting_var.get()).expanduser().resolve()
+        return (self.url_var.get().rstrip("/"), self.token_var.get(),
+                str(Path(self.work_var.get()).expanduser().resolve()),
+                str(setting), file_hash(setting), day)
+
+    def _cached_day(self, context: tuple) -> tuple[Path, Path | None, str] | None:
+        cached = self._daily_inputs.get(context)
+        if cached is not None and (not cached[0].is_file() or file_hash(cached[0]) != cached[2]):
+            self._daily_inputs.pop(context, None)
+            return None
+        return cached
+
+    def _sync_day_button(self) -> None:
+        try:
+            cached = self._cached_day(self._day_context(self.day_var.get()))
+        except (OSError, WorkflowError, tk.TclError, ValueError):
+            cached = None
+        try:
+            finished = bool(self._day_count and self.day_var.get() >= self._day_count)
+        except tk.TclError:
+            finished = False
+        self.solve_day_button.configure(
+            text="全日程終了" if finished else ("2  探索" if cached else "2  当日状態を取得・探索"),
+            state=tk.DISABLED if self._busy or finished else tk.NORMAL,
+        )
+
     def _fetch_and_solve_day(self) -> None:
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
         day = self._day_or_dialog()
         if day is None:
+            return
+        try:
+            context = self._day_context(day)
+            cached = self._cached_day(context)
+        except (OSError, WorkflowError) as error:
+            messagebox.showerror("当日状態", str(error), parent=self)
             return
         auto_send = self.mode_var.get() == "auto"
         self._begin_search_result(f"day={day}")
@@ -1068,8 +1163,14 @@ class SolverGUI(tk.Tk):
                 self.score_var.set(score_text)
             checkpoint = Path(score_text)
 
+        if cached is not None:
+            state, checkpoint, _digest = cached
+
         def fetch_and_solve() -> CommandResult:
-            workflow.fetch_state(day, state)
+            if cached is None:
+                workflow.fetch_state(day, state)
+                self._messages.put(("event", "day_state",
+                                    (context, state, checkpoint, file_hash(state))))
             self._messages.put(("event", "solve_start", day))
             return workflow.solve_day(setting, state, checkpoint)
 
@@ -1085,7 +1186,7 @@ class SolverGUI(tk.Tk):
                 )
 
         self._run_task(
-            f"day={day} 状態取得・探索",
+            f"day={day} " + ("探索" if cached else "状態取得・探索"),
             fetch_and_solve,
             completed,
             self._search_result_failed,
@@ -1166,8 +1267,6 @@ class SolverGUI(tk.Tk):
 
         def accepted(result: tuple[int, Path, Path]) -> None:
             revision, archived, checkpoint = result
-            self.score_var.set(str(checkpoint))
-            self.day_var.set(day + 1)
             self._log(
                 f"revision={revision}\n保存: {archived}\n次日チェックポイント: {checkpoint}"
             )
@@ -1183,6 +1282,9 @@ class SolverGUI(tk.Tk):
             value = read_json(path)
             if isinstance(value, dict) and type(value.get("day")) is int:
                 day = value["day"]
+                ends_at = value.get("endsAt", 0)
+                if type(ends_at) in (int, float) and ends_at > 0:
+                    self._day_deadlines[day] = float(ends_at)
                 self.day_var.set(day)
                 if day > 0:
                     candidate = self._work_path(f"score-day{day}.json")

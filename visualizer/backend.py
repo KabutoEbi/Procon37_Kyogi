@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import hashlib
 import math
 import os
@@ -77,6 +78,7 @@ class RandomSettingParameters:
     seconds: int = 60
     teams: int = 2
     seed: int = 1
+    include_congestion: int = 0
 
     def arguments(self) -> list[str]:
         values = vars(self)
@@ -85,6 +87,7 @@ class RandomSettingParameters:
             "agents": (3, 8), "days": (4, 10),
             "seconds": (1, 2147483647), "teams": (1, 2147483647),
             "seed": (0, 18446744073709551615),
+            "include_congestion": (0, 1),
         }
         for name, (lower, upper) in limits.items():
             value = values[name]
@@ -99,6 +102,8 @@ class RandomSettingParameters:
             raise WorkflowError("brands: 1以上spots以下で指定してください")
         result: list[str] = []
         for name, value in values.items():
+            if name == "include_congestion":
+                continue
             result.extend(["--" + name, str(value)])
         return result
 
@@ -497,7 +502,10 @@ def load_snapshot(setting_path: Path, state_path: Path | None = None) -> MapSnap
         if isinstance(spot, dict):
             spots[int(spot["pos"])] = (int(spot["brand"]), int(spot["stocks"]))
 
-    traffics: dict[int, int] = {}
+    traffics: dict[int, int] = {
+        int(entry["pos"]): int(entry["status"])
+        for entry in setting.get("localTraffics", [])
+    }
     agents: tuple[AgentView, ...] = tuple(
         AgentView(index, -1, int(pos), int(setting.get("fuelLimits", 0)))
         for index, pos in enumerate(setting.get("agents", []))
@@ -725,6 +733,16 @@ class Workflow:
             raise WorkflowError(f"ランダム設定の生成に失敗しました\n{detail}")
         try:
             load_snapshot(temporary)
+            value = read_json(temporary)
+            statuses = [0, 1, 2] if parameters.include_congestion else [0]
+            rng = random.Random(parameters.seed)
+            width = value["map"]["width"]
+            value["localTraffics"] = [
+                {"pos": y * width + x, "status": rng.choice(statuses)}
+                for y, row in enumerate(value["map"]["cells"])
+                for x, terrain in enumerate(row) if terrain == 1
+            ]
+            atomic_write(temporary, json.dumps(value).encode())
             temporary.replace(output)
         except Exception:
             temporary.unlink(missing_ok=True)
@@ -787,12 +805,14 @@ class Workflow:
         state: Path,
         checkpoint: Path | None = None,
     ) -> CommandResult:
-        self._require_no_pending(f"day{read_json(state)['day']}")
+        daily = read_json(state)
+        day = daily["day"]
+        self._require_no_pending(f"day{day}")
+        if day > 0:
+            self._require_no_pending(f"day{day - 1}")
         self._invalidate_answer()
         if not self.solver.is_file():
             raise WorkflowError(f"ソルバーがありません: {self.solver}")
-        daily = read_json(state)
-        day = daily["day"]
         setting_value = read_json(setting)
         durations = setting_value.get("daySeconds")
         if not isinstance(durations, list) or not 0 <= day < len(durations):
@@ -841,18 +861,30 @@ class Workflow:
                     score: Path | None = None) -> tuple[Path, dict]:
         """送信前に不変の候補を保存。応答不明の別回答への置換は禁止。"""
         path = self.work_dir / f"submission-{name}.json"
+        suffix = ""
         if path.exists():
             saved = read_json(path)
-            if saved["receipt"] != receipt:
-                raise WorkflowError("別の送信記録があります。復旧では同じ候補だけを使用してください。別試合は新しい作業フォルダを使用してください")
-            else:
+            if saved["receipt"] == receipt:
                 return path, saved
-        payload_path = self.work_dir / f"submitted-{name}.json"
-        score_path = self.work_dir / f"submitted-{name}-score.json"
+            previous = saved["receipt"]
+            # 受理済み回答だけを同じ日の新候補で更新する。結果不明や別試合は保護。
+            context_keys = ("day", "endsAt", "identity", "setting", "state")
+            if (score is None or saved.get("status") != "accepted"
+                    or any(previous.get(key) != receipt.get(key) for key in context_keys)):
+                raise WorkflowError("別の送信記録があります。復旧では同じ候補だけを使用してください。別試合は新しい作業フォルダを使用してください")
+            digest = hashlib.sha256(json.dumps(receipt, sort_keys=True).encode()).hexdigest()
+            suffix = "-" + digest
+            history = self.work_dir / f"submission-{name}-accepted-{saved['revision']}.json"
+            atomic_write(history, json.dumps(saved).encode())
+        # 新候補は別ファイルへ保存し、最後に記録を切り替える。
+        # 保存途中で停止しても以前の受理記録と候補の整合性を保つ。
+        payload_path = self.work_dir / f"submitted-{name}{suffix}.json"
+        score_path = self.work_dir / f"submitted-{name}{suffix}-score.json"
         atomic_write(payload_path, payload.read_bytes())
         if score is not None:
             atomic_write(score_path, score.read_bytes())
-        saved = {"receipt": receipt, "status": "pending", "revision": None}
+        saved = {"receipt": receipt, "status": "pending", "revision": None,
+                 "snapshotSuffix": suffix}
         atomic_write(path, json.dumps(saved).encode())
         return path, saved
 
@@ -875,12 +907,31 @@ class Workflow:
         durations = setting_value.get("daySeconds")
         if not isinstance(durations, list) or not durations or type(durations[0]) not in (int, float):
             raise WorkflowError("設定から1日の試合時間を取得できません")
-        result = self._run(
-            [str(setting.resolve())],
-            day_seconds=float(durations[0]),
-        )
+        arguments = [str(setting.resolve())]
+        if "localTraffics" in setting_value:
+            kinds_path = self.work_dir / "local-agents.json"
+            self._run(["select", str(setting.resolve()), str(kinds_path)])
+            kinds = read_json(kinds_path)
+            agents = [
+                {"kind": kind, "pos": pos, "fuel": setting_value["fuelLimits"]}
+                for kind, pos in zip(kinds, setting_value["agents"])
+            ]
+            initial = {
+                "day": 0, "endsAt": 0, "agents": agents,
+                "others": [{"id": i, "agents": agents}
+                           for i in range(setting_value["players"] - 1)],
+                "traffics": setting_value["localTraffics"],
+            }
+            state_path = self.work_dir / "local-state.json"
+            atomic_write(state_path, json.dumps(initial).encode())
+            arguments.append(str(state_path))
+        result = self._run(arguments, day_seconds=float(durations[0]))
         if not result_state.is_file():
             raise WorkflowError("ソルバーが探索後状態 result-state.json を生成しませんでした")
+        if "localTraffics" in setting_value:
+            final = read_json(result_state)
+            final["traffics"] = setting_value["localTraffics"]
+            atomic_write(result_state, json.dumps(final).encode())
         return result
 
     def send_agents(self, payload: Path, setting: Path | None = None) -> None:
@@ -932,8 +983,9 @@ class Workflow:
         self.check_stop()
         archived_answer = self.work_dir / f"answer-day{day}.json"
         journal, saved = self._submission(f"day{day}", receipt, answer, candidate_score)
-        frozen_answer = self.work_dir / f"submitted-day{day}.json"
-        frozen_score = self.work_dir / f"submitted-day{day}-score.json"
+        suffix = saved.get("snapshotSuffix", "")
+        frozen_answer = self.work_dir / f"submitted-day{day}{suffix}.json"
+        frozen_score = self.work_dir / f"submitted-day{day}{suffix}-score.json"
         if file_hash(frozen_answer) != receipt["answer"] or file_hash(frozen_score) != receipt["score"]:
             raise WorkflowError("保存済み送信候補が変更されています")
         atomic_write(archived_answer, frozen_answer.read_bytes())

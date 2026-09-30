@@ -38,6 +38,13 @@ class GUITest(unittest.TestCase):
             gui._show_settings_window()
             gui.update()
             self.assertTrue(gui.settings_window.winfo_viewable())
+            self.assertTrue(gui.random_generate_button.winfo_ismapped())
+            self.assertTrue(gui.random_traffic_check.winfo_ismapped())
+            gui.random_traffic_check.invoke()
+            parameters = gui._random_setting_parameters()
+            self.assertEqual(parameters.include_congestion, 1)
+            gui.random_traffic_check.invoke()
+            self.assertEqual(gui._random_setting_parameters().include_congestion, 0)
             gui._hide_settings_window()
             gui.update()
             self.assertFalse(gui.settings_window.winfo_viewable())
@@ -48,7 +55,6 @@ class GUITest(unittest.TestCase):
             self.assertNotEqual(gui.parameters_frame.master.winfo_class(), "Canvas")
             self.assertEqual(gui.files_frame.master, gui.config_frame)
             self.assertEqual(gui.random_setting_frame.master, gui.config_frame)
-            self.assertTrue(gui.random_generate_button.winfo_ismapped())
             self.assertEqual(gui.log_frame.master, gui.content_pane)
             self.assertEqual(gui.controls_frame.master, gui.control_panel)
             self.assertLess(gui.control_panel.winfo_width(), 320)
@@ -83,6 +89,7 @@ class GUITest(unittest.TestCase):
             )
             posted = []
             day = 0
+            answer_text = "[[2,-31],[2,-31],[-32],[-32]]"
 
             def fetch(_url, token, kind, path, **_kwargs):
                 self.assertNotEqual(threading.get_ident(), main_thread)
@@ -101,7 +108,7 @@ class GUITest(unittest.TestCase):
                 if args[0] == "select":
                     Path(args[2]).write_text("[0,0,0,0]")
                 else:
-                    (workflow.work_dir / "answer.json").write_text("[[2,-31],[2,-31],[-32],[-32]]")
+                    (workflow.work_dir / "answer.json").write_text(answer_text)
                     (workflow.work_dir / "score-next.json").write_text(json.dumps({"nextDay": day + 1}))
                     if args[0] != "solve":
                         (workflow.work_dir / "result-state.json").write_text(json.dumps({
@@ -129,12 +136,10 @@ result
                 return CommandResult((), report, "")
 
             def send(_url, token, kind, _path, **_kwargs):
-                nonlocal day
                 self.assertEqual(token, "entered-token")
                 posted.append(kind)
                 if kind == "action":
-                    day += 1
-                    return day
+                    return posted.count("action")
                 return None
 
             def drain(expected_posts=None):
@@ -270,7 +275,25 @@ result
                      mock.patch("backend.send", side_effect=send):
                     gui._send_answer()
                     drain(expected_posts=2)
+                self.assertEqual(gui.day_var.get(), 0)
+                self.assertEqual(gui.solve_day_button.cget("text"), "2  探索")
+                # 同じ日の再探索はGETなし。自動モードでは新しい回答を送信する。
+                gui.mode_var.set("auto")
+                answer_text = "[[-32],[2,-31],[-32],[-32]]"
+                with mock.patch("backend.fetch") as fetch_again, \
+                     mock.patch("backend.Workflow._run", autospec=True, side_effect=solver), \
+                     mock.patch("backend.send", side_effect=send):
+                    gui.solve_day_button.invoke()
+                    drain(expected_posts=3)
+                    fetch_again.assert_not_called()
+                self.assertEqual(gui.day_var.get(), 0)
+                self.assertEqual(json.loads((Path(directory) / "submission-day0.json").read_text())["revision"], 2)
+                # 終了時刻を過ぎたときだけ対象日を進め、初回取得ボタンに戻す。
+                gui._day_deadlines[0] = time.time() - 1
+                gui._advance_finished_day()
+                day = 1
                 self.assertEqual(gui.day_var.get(), 1)
+                self.assertEqual(gui.solve_day_button.cget("text"), "2  当日状態を取得・探索")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 gui.mode_var.set("auto")
                 gui._mode_changed()
@@ -279,10 +302,11 @@ result
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver), \
                      mock.patch("backend.send", side_effect=send):
                     gui._fetch_and_solve_day()
-                    drain(expected_posts=3)
-                self.assertEqual(posted, ["agent", "action", "action"])
-                self.assertEqual(gui.day_var.get(), 2)
-                self.assertIn("score-day2.json", gui.score_var.get())
+                    drain(expected_posts=4)
+                self.assertEqual(posted, ["agent", "action", "action", "action"])
+                self.assertEqual(gui.day_var.get(), 1)
+                self.assertIn("score-day1.json", gui.score_var.get())
+                self.assertEqual(gui.solve_day_button.cget("text"), "2  探索")
                 self.assertEqual(gui._current_snapshot.day, 1)
                 self.assertFalse((Path(directory) / "state-day2.json").exists())
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
@@ -300,6 +324,26 @@ result
                 gui.mode_var.set("manual")
                 gui._mode_changed()
                 self.assertEqual(str(gui.send_answer_button["state"]), "normal")
+                deadline = gui._day_deadlines[1]
+                with mock.patch("app.time.time", return_value=deadline - 0.01):
+                    gui._advance_finished_day()
+                    self.assertEqual(gui.day_var.get(), 1)
+                with mock.patch("app.time.time", return_value=deadline):
+                    gui._busy = True
+                    gui._advance_finished_day()
+                    self.assertEqual(gui.day_var.get(), 1)
+                    gui._busy = False
+                    gui._advance_finished_day()
+                    self.assertEqual(gui.day_var.get(), 2)
+                with mock.patch("app.time.time", return_value=gui._day_deadlines[3]):
+                    gui._advance_finished_day()
+                    self.assertEqual(gui.day_var.get(), 4)
+                    self.assertEqual(str(gui.solve_day_button["state"]), "disabled")
+                gui.day_var.set(0)
+                gui.url_var.set("http://another-match")
+                self.assertFalse(gui._daily_inputs)
+                self.assertFalse(gui._day_deadlines)
+                self.assertEqual(gui.solve_day_button.cget("text"), "2  当日状態を取得・探索")
             finally:
                 gui.destroy()
 

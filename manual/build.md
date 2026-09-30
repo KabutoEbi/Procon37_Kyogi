@@ -18,7 +18,7 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 | `make test` | C++モデル・探索・引数・3サイズサンプル、Pythonバックエンド・復旧・起動環境。実ソルバーとの4日間連携も実行 |
 | `make test-core` | サンプルJSONを必要としないC++・Pythonテスト |
 | `make test-cpp` | C++4テスト（サンプルを含む） |
-| `make test-python` | Python23テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
+| `make test-python` | Python31テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |
 | `make test-sanitize` | モデル・探索・引数テストをASan/UBSanでビルド・実行 |

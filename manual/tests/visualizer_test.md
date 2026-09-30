@@ -28,3 +28,5 @@ HTTP送信はモックへ置き換えるため、回答システムへは接続�
 c++ -std=c++17 -O2 -pthread main.cpp -o /tmp/procon37_gui_main
 PROCON_TEST_SOLVER=/tmp/procon37_gui_main python3 -m unittest tests/visualizer_test.py
 ```
+
+ランダム生成では「混雑・渋滞を含める」のオフ／オンを実ソルバーで検証する。道路セルだけに許可した状態が現れること、同seedで地形と交通が再現すること、初期状態ファイルを探索へ渡し終了表示にも交通を保持することを確認する。

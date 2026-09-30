@@ -78,6 +78,41 @@ class RecoveryTest(unittest.TestCase):
                 post.assert_not_called()
             self.assertEqual((work / "score-day1.json").read_bytes(), score.read_bytes())
 
+    def test_accepted_answer_can_be_replaced_on_same_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            w, _, answer, score, state, setting = self.prepare(work)
+            with mock.patch("backend.send", return_value=1):
+                w.send_answer(0, answer, score, state, setting)
+            old_payload = (work / "submitted-day0.json").read_bytes()
+            old_score = (work / "score-day1.json").read_bytes()
+            answer.write_text("[[-2]]")
+            score.write_text('{"nextDay":1,"totalUdon":2}')
+            receipt_path = work / "prepared-answer.json"
+            receipt = read_json(receipt_path)
+            receipt.update(answer=file_hash(answer), score=file_hash(score))
+            receipt_path.write_text(json.dumps(receipt))
+            with mock.patch("backend.send", side_effect=ApiError(0, "lost")):
+                with self.assertRaises(WorkflowError):
+                    w.send_answer(0, answer, score, state, setting)
+            self.assertEqual((work / "submitted-day0.json").read_bytes(), old_payload)
+            self.assertEqual((work / "score-day1.json").read_bytes(), old_score)
+            self.assertEqual(read_json(work / "submission-day0-accepted-1.json")["revision"], 1)
+            with self.assertRaisesRegex(WorkflowError, "保護"):
+                w.solve_day(setting, state)
+            next_state = work / "state-day1.json"
+            next_state.write_text('{"day":1}')
+            with self.assertRaisesRegex(WorkflowError, "保護"):
+                w.solve_day(setting, next_state, work / "score-day1.json")
+            def fetch(day, path):
+                path.write_bytes(state.read_bytes())
+            with mock.patch.object(w, "fetch_state", side_effect=fetch), \
+                 mock.patch("backend.send", return_value=2) as post:
+                w.send_answer(0, answer, score, state, setting)
+                post.assert_called_once()
+            self.assertEqual(read_json(work / "submission-day0.json")["revision"], 2)
+            self.assertEqual((work / "score-day1.json").read_bytes(), score.read_bytes())
+
     def test_unknown_result_blocks_new_search_and_future_day(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)

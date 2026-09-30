@@ -150,6 +150,62 @@ void testSearchEquivalence() {
     assert(!searchStateDominates(a, b));
 }
 
+// 燃料は移動ごとに増えるため、使用燃料順のDPで最短路を独立検証できる。
+void testFuelConstrainedAgainstDP() {
+    for (int seed = 1; seed <= 3; ++seed) {
+        CreateConfig create;
+        create.width = create.height = 8;
+        create.agentCount = 3;
+        create.spotCount = 8;
+        create.brandCount = 5;
+        create.seed = seed;
+        const auto s = ProblemCreator::generate(create).setting;
+        auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply, AgentKind::Patrol});
+        for (std::size_t i = 0; i < ms.trafficByPos.size(); ++i)
+            ms.trafficByPos[i] = static_cast<TrafficStatus>((i + seed) % 3);
+        const auto start = s.agentStarts[0];
+        constexpr int budget = 6;
+        std::array<std::vector<int>, budget + 1> dp;
+        for (auto& row : dp) row.assign(s.field.cellCount(), kImpassableCost);
+        dp[0][start] = 0;
+        for (int used = 0; used <= budget; ++used) {
+            for (CellPos from = 0; from < static_cast<CellPos>(s.field.cellCount()); ++from) {
+                if (dp[used][from] >= kImpassableCost) continue;
+                const int fuel = moveFuelCost(s, AgentKind::Patrol, from);
+                if (fuel > budget - used) continue;
+                for (int d = 0; d < 6; ++d) {
+                    const auto to = s.field.neighbor(from, static_cast<Direction>(d));
+                    if (!s.field.contains(to) || !s.field.at(to).isPassable()) continue;
+                    dp[used + fuel][to] = std::min(dp[used + fuel][to],
+                        dp[used][from] + moveStepCost(s, ms, from));
+                }
+            }
+        }
+        for (CellPos goal = 0; goal < static_cast<CellPos>(s.field.cellCount()); ++goal) {
+            if (!s.field.at(goal).isPassable()) continue;
+            for (int limit = 0; limit <= budget; ++limit) {
+                std::pair<int, int> expected{kImpassableCost, 0};
+                for (int used = 0; used <= limit; ++used)
+                    expected = std::min(expected, std::make_pair(dp[used][goal], used));
+                const auto path = brain0FuelConstrained(s, ms, start, goal,
+                                                       AgentKind::Patrol, limit);
+                assert(path.reachable == (expected.first < kImpassableCost));
+                if (!path.reachable) continue;
+                assert(path.cost.steps == expected.first && path.cost.fuel == expected.second);
+                int steps = 0, fuel = 0;
+                CellPos pos = start;
+                for (const auto direction : path.directions) {
+                    steps += moveStepCost(s, ms, pos);
+                    fuel += moveFuelCost(s, AgentKind::Patrol, pos);
+                    pos = s.field.neighbor(pos, direction);
+                    assert(s.field.contains(pos) && s.field.at(pos).isPassable());
+                }
+                assert(pos == goal && steps == expected.first && fuel == expected.second);
+            }
+        }
+    }
+}
+
 void testFuelTimeTradeoff() {
     auto s = line(3, {4}, 2, {0}, {});
     s.field.height = 2;
@@ -371,6 +427,30 @@ void testDetourRendezvousAndTwoSpots() {
     assert(detour.success && detour.finalState.dayUdon == 1);
     assert(detour.detourPlans > 0);
     assert(validateDailyPlan(s, ms, detour.plan).valid);
+
+    // 8ステップあれば従来の経路上合流も成立するが、取得は6ステップ目。
+    // 経路外の合流を比較し、幅1でも4ステップ目に取得する。
+    s.daySteps = {8};
+    cfg.beamWidth = cfg.jointBeamWidth = cfg.maxActionsPerAgent = 1;
+    cfg.adaptiveBeamWidth = false;
+    const auto faster = brain1(s, ms, {}, cfg);
+    assert(faster.success && faster.finalState.dayUdon == 1);
+    assert(validateDailyPlan(s, ms, faster.plan).valid);
+    CellPos pos = s.agentStarts[0];
+    int arrival = 0;
+    for (const int action : faster.plan[0]) {
+        if (isWaitAction(action)) arrival -= action;
+        else {
+            arrival += moveStepCost(s, ms, pos);
+            pos = s.field.neighbor(pos, static_cast<Direction>(action));
+        }
+        if (pos == 5) break;
+    }
+    assert(pos == 5 && arrival == 4 && faster.detourPlans > 0);
+    cfg.threadCount = 2;
+    cfg.parallelThreshold = 1;
+    assert(brain1(s, ms, {}, cfg).plan == faster.plan);
+    cfg = smallBeam();
 
     s = line(5, {8}, 4, {2}, {{1, 1, 1, -1}, {2, 0, 1, -1}, {3, 4, 1, -1}});
     ms = stateFor(s, {AgentKind::Patrol});
@@ -625,6 +705,7 @@ int main() {
     testDialAgainstHeap();
     testFlowAgainstEnumeration();
     testSearchEquivalence();
+    testFuelConstrainedAgainstDP();
     testFuelTimeTradeoff();
     testTrafficNeverSchedulesAnUnfinishableMove();
     testRendezvousObstaclesAndMultipleSupplies();

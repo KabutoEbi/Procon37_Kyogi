@@ -51,6 +51,12 @@ class BackendTest(unittest.TestCase):
             RandomSettingParameters(agents=5, spots=4).arguments()
         with self.assertRaisesRegex(WorkflowError, "brands"):
             RandomSettingParameters(spots=8, brands=9).arguments()
+        with self.assertRaisesRegex(WorkflowError, "include_congestion"):
+            RandomSettingParameters(include_congestion=2).arguments()
+        self.assertNotIn(
+            "--include_congestion",
+            RandomSettingParameters(include_congestion=1).arguments(),
+        )
 
     def test_map_acquisition_totals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -365,6 +371,34 @@ result
             self.assertEqual(len(setting["spots"]), 8)
             self.assertEqual(len(setting["daySteps"]), 4)
             self.assertEqual(setting["players"], 3)
+            workflow.parameters = SearchParameters(
+                beam_width=8, joint_beam_width=32, threads=1,
+                time_limit_ms=100, safety_margin_ms=0, trial_candidates=0,
+            )
+            for include_congestion in (0, 1):
+                parameters = RandomSettingParameters(
+                    width=8, height=9, agents=3, spots=8, brands=5,
+                    days=4, seconds=30, teams=3, seed=123,
+                    include_congestion=include_congestion,
+                )
+                workflow.generate_random_setting(output, parameters)
+                generated = read_json(output)
+                self.assertEqual(generated["map"], setting["map"])
+                traffic = generated["localTraffics"]
+                allowed = {0, 1, 2} if include_congestion else {0}
+                self.assertEqual({t["status"] for t in traffic}, allowed)
+                self.assertEqual({t["pos"] for t in traffic}, {
+                    y * 8 + x for y, row in enumerate(generated["map"]["cells"])
+                    for x, cell in enumerate(row) if cell == 1
+                })
+                workflow.generate_random_setting(output, parameters)
+                self.assertEqual(read_json(output)["localTraffics"], traffic)
+                result = workflow.solve_local(output)
+                self.assertIn(str((work / "local-state.json").resolve()), result.command)
+                self.assertEqual(read_json(work / "local-state.json")["traffics"], traffic)
+                self.assertEqual(read_json(work / "result-state.json")["traffics"], traffic)
+                snapshot = load_snapshot(output, work / "result-state.json")
+                self.assertEqual(dict(snapshot.traffics), {t["pos"]: t["status"] for t in traffic})
 
     @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
     def test_real_solver_local_result_state(self) -> None:
