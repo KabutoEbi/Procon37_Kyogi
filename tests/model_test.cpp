@@ -82,18 +82,18 @@ void testAcquisitionOrder() {
 
 void testFuelValidation() {
     const MatchSetting s = makeSetting();
-    MatchState st = makeState();
-    st.agents[0].fuel = 0;
+    MatchState noSupply = makeState(AgentKind::Patrol);
+    noSupply.agents[0].fuel = 0;
 
-    // step 0 ではまだ補給フェーズを経ていないため、即移動は不正。
-    const SimulationResult invalid =
-        simulateDay(s, st, {{2, -1}, {2, -1}});
+    // 完了までに補給を受けられなければ燃料不足となる。
+    const SimulationResult invalid = simulateDay(s, noSupply, {{2, -1}, {2, -1}});
     assert(!invalid.valid);
     assert(invalid.failure.error == SimulationError::InsufficientFuel);
 
     // 1ステップ待機して補給を受ければ、その後の移動は可能。
-    const SimulationResult valid =
-        simulateDay(s, st, {{-1, 2}, {-1, 2}});
+    MatchState st = makeState();
+    st.agents[0].fuel = 0;
+    const SimulationResult valid = simulateDay(s, st, {{-1, 2}, {-1, 2}});
     assert(valid.valid);
 }
 
@@ -114,10 +114,8 @@ void testWaitCompression() {
     MatchSetting s = makeSetting();
     s.daySteps = {15};
     const MatchState st = makeState();
-    const auto rawResult = simulateDay(
-        s, st, DailyPlan{{-1, -14}, {-1, -14}});
-    const auto compressedResult = simulateDay(
-        s, st, DailyPlan{{-15}, {-15}});
+    const auto rawResult = simulateDay(s, st, DailyPlan{{-1, -14}, {-1, -14}});
+    const auto compressedResult = simulateDay(s, st, DailyPlan{{-15}, {-15}});
     assert(rawResult.valid);
     assert(compressedResult.valid);
     assert(rawResult.state == compressedResult.state);
@@ -135,8 +133,7 @@ void testResultStateJson() {
     assert(printResultStateJson(output, state));
     const std::string json = output.str();
     assert(json.find("\"day\": 0") != std::string::npos);
-    assert(json.find("\"kind\": 0, \"pos\": 3, \"fuel\": 0") !=
-           std::string::npos);
+    assert(json.find("\"kind\": 0, \"pos\": 3, \"fuel\": 0") != std::string::npos);
     assert(json.find("\"remainingStocks\": [2]") != std::string::npos);
 
     state.remainingStocks[0] = -1;
@@ -199,20 +196,17 @@ void testDijkstra() {
     assert(table.canReach(2));
     assert(table.distances[2] == 3);
 
-    const PathResult patrol =
-        Brain0::restorePath(s, table, 2, AgentKind::Patrol);
+    const PathResult patrol = Brain0::restorePath(s, table, 2, AgentKind::Patrol);
     assert(patrol.reachable);
     assert(patrol.cost.steps == 3);
     assert(patrol.cost.fuel == 3);
     assert((patrol.positions == std::vector<CellPos>{4, 5, 2}));
-    assert((patrol.directions ==
-            std::vector<Direction>{
-                Direction::Right,
-                Direction::UpperRight,
-            }));
+    assert((patrol.directions == std::vector<Direction>{
+                                     Direction::Right,
+                                     Direction::UpperRight,
+                                 }));
 
-    const PathResult supply =
-        Brain0::restorePath(s, table, 2, AgentKind::Supply);
+    const PathResult supply = Brain0::restorePath(s, table, 2, AgentKind::Supply);
     assert(supply.reachable);
     assert(supply.cost.fuel == 0);
 
@@ -227,15 +221,13 @@ void testDijkstra() {
     assert(tradeoff.field.rebuildSpotIndex());
     MatchState tradeoffState;
     tradeoffState.trafficByPos.assign(6, TrafficStatus::Smooth);
-    const auto constrained = brain0FuelConstrained(
-        tradeoff, tradeoffState, 0, 5, AgentKind::Patrol, 2);
+    const auto constrained =
+        brain0FuelConstrained(tradeoff, tradeoffState, 0, 5, AgentKind::Patrol, 2);
     assert(constrained.reachable);
     assert(constrained.cost.steps == 4);
     assert(constrained.cost.fuel == 2);
     assert((constrained.positions == std::vector<CellPos>{0, 4, 5}));
-    assert(!brain0FuelConstrained(
-                tradeoff, tradeoffState, 0, 5,
-                AgentKind::Patrol, 1).reachable);
+    assert(!brain0FuelConstrained(tradeoff, tradeoffState, 0, 5, AgentKind::Patrol, 1).reachable);
 
     // 直接経路を池で塞ぐと、4 -> 1 -> 2 の迂回路になる。
     s.field.cells[5].type = CellType::Pond;
@@ -244,8 +236,7 @@ void testDijkstra() {
     assert(detour.cost.steps == 4);
     assert((detour.positions == std::vector<CellPos>{4, 1, 2}));
 
-    const PathResult invalid =
-        Brain0::shortestPath(s, st, kInvalidCell, 2);
+    const PathResult invalid = Brain0::shortestPath(s, st, kInvalidCell, 2);
     assert(!invalid.reachable);
 }
 
@@ -300,8 +291,7 @@ void testBeamSearch() {
     assert(parallel.fullEvaluations > 0);
     for (const AgentPlan& actions : parallel.plan) {
         for (std::size_t i = 1; i < actions.size(); ++i) {
-            assert(!(isWaitAction(actions[i - 1]) &&
-                     isWaitAction(actions[i])));
+            assert(!(isWaitAction(actions[i - 1]) && isWaitAction(actions[i])));
         }
     }
 
@@ -322,7 +312,7 @@ void testBeamSearch() {
     assert(validateDailyPlan(slow, slowState, slowResult.plan).valid);
 }
 
-void testDayStartMoveStillAcquiresOriginSpot() {
+void testDayStartAcquisitionOccursAtStepOne() {
     MatchSetting s;
     s.daySteps = {2};
     s.daySeconds = {60};
@@ -346,9 +336,9 @@ void testDayStartMoveStillAcquiresOriginSpot() {
     GameState initial;
     assert(initial.initialize(s, st));
     assert(initial.step == 0);
-    assert(initial.dayUdon == 1);
-    assert(initial.hasAcquired(0, 0));
-    assert(initial.remainingStocks[0] == 0);
+    assert(initial.dayUdon == 0);
+    assert(!initial.hasAcquired(0, 0));
+    assert(initial.remainingStocks[0] == 1);
 
     BeamSearchConfig cfg;
     cfg.beamWidth = 32;
@@ -362,6 +352,18 @@ void testDayStartMoveStillAcquiresOriginSpot() {
     assert(countBits(result.finalState.dayBrands) == 2);
     assert(result.plan[0].size() == 1);
     assert(result.plan[0][0] == static_cast<std::int32_t>(Direction::Right));
+
+    // 道路から1stepで離れる場合、step 1の取得フェーズでは移動先に
+    // いるため、開始スポットからは取得しない（公式Q&A Q7）。
+    s.daySteps = {1};
+    s.field.cells[0].type = CellType::Road;
+    st.trafficByPos.assign(2, TrafficStatus::Smooth);
+    const auto leavesImmediately =
+        simulateDay(s, st, DailyPlan{{static_cast<int>(Direction::Right)}});
+    assert(leavesImmediately.valid);
+    assert(leavesImmediately.state.dayUdon == 1);
+    assert(!leavesImmediately.state.hasAcquired(0, 0));
+    assert(leavesImmediately.state.hasAcquired(0, 1));
 }
 
 void testPatrolsSplitAcrossBrands() {
@@ -398,8 +400,7 @@ void testPatrolsSplitAcrossBrands() {
     assert(validateDailyPlan(s, st, result.plan).valid);
     assert(result.finalState.dayUdon == 2);
     assert(countBits(result.finalState.dayBrands) == 2);
-    assert(result.finalState.agents[0].pos !=
-           result.finalState.agents[1].pos);
+    assert(result.finalState.agents[0].pos != result.finalState.agents[1].pos);
 }
 
 void testPathRendezvous() {
@@ -486,8 +487,7 @@ void testWaitAtLastReachableSpotAndRefuel() {
             continue;
         }
         assert(!reachedSpot);
-        patrolPos = s.field.neighbor(
-            patrolPos, static_cast<Direction>(action));
+        patrolPos = s.field.neighbor(patrolPos, static_cast<Direction>(action));
         reachedSpot = patrolPos == 0;
     }
     assert(reachedSpot);
@@ -509,14 +509,9 @@ void testAgentSelector() {
     assert(first.evaluatedAssignments == 2);
     assert(first.trialAssignments == 2);
     assert(first.supplyCount >= 1);
-    assert(std::count(
-               first.kinds.begin(),
-               first.kinds.end(),
-               AgentKind::Supply) == first.supplyCount);
-    assert(std::count(
-               first.kinds.begin(),
-               first.kinds.end(),
-               AgentKind::Patrol) >= 1);
+    assert(std::count(first.kinds.begin(), first.kinds.end(), AgentKind::Supply) ==
+           first.supplyCount);
+    assert(std::count(first.kinds.begin(), first.kinds.end(), AgentKind::Patrol) >= 1);
 
     cfg.minSupplyCount = 1;
     cfg.maxSupplyCount = 1;
@@ -535,10 +530,7 @@ void testAgentSelector() {
     assert(timed.timedOut);
     assert(timed.kinds.size() == s.agentCount());
     assert(timed.supplyCount == 1);
-    assert(std::count(
-               timed.kinds.begin(),
-               timed.kinds.end(),
-               AgentKind::Supply) == 1);
+    assert(std::count(timed.kinds.begin(), timed.kinds.end(), AgentKind::Supply) == 1);
 }
 
 void testSelectorValuesParallelPatrols() {
@@ -605,8 +597,7 @@ void testPersistentJsonAndFallback() {
     assert(parsed.nextDay == checkpoint.nextDay);
     assert(parsed.score.matchBrands == checkpoint.score.matchBrands);
     assert(parsed.score.totalUdon == checkpoint.score.totalUdon);
-    assert(parsed.score.sumOfDailyBrandCounts ==
-           checkpoint.score.sumOfDailyBrandCounts);
+    assert(parsed.score.sumOfDailyBrandCounts == checkpoint.score.sumOfDailyBrandCounts);
 
     const MatchSetting s = makeSetting();
     const MatchState st = makeState();
@@ -625,8 +616,7 @@ void testMatchRunner() {
     MatchRunnerConfig plannedCfg;
     plannedCfg.beam.beamWidth = 32;
     plannedCfg.beam.jointBeamWidth = 128;
-    const auto planned = runMatch(
-        normal, {AgentKind::Patrol, AgentKind::Supply}, plannedCfg);
+    const auto planned = runMatch(normal, {AgentKind::Patrol, AgentKind::Supply}, plannedCfg);
     assert(planned.success);
     assert(!planned.days[0].usedFallback);
     assert(planned.score.totalUdon == 1);
@@ -640,14 +630,11 @@ void testMatchRunner() {
     s.field.cells[4].type = CellType::Road;
 
     MatchRunnerConfig cfg;
-    cfg.beam.beamWidth = 0;  // 待機フォールバックを確実に使う。
-    cfg.trafficByDay.assign(
-        3,
-        std::vector<TrafficStatus>(9, TrafficStatus::Smooth));
+    cfg.beam.beamWidth = 0; // 待機フォールバックを確実に使う。
+    cfg.trafficByDay.assign(3, std::vector<TrafficStatus>(9, TrafficStatus::Smooth));
     cfg.trafficByDay[1][4] = TrafficStatus::Busy;
     cfg.trafficByDay[2][4] = TrafficStatus::Jammed;
-    const auto res = runMatch(
-        s, {AgentKind::Patrol, AgentKind::Supply}, cfg);
+    const auto res = runMatch(s, {AgentKind::Patrol, AgentKind::Supply}, cfg);
 
     assert(res.success);
     assert(res.failedDay == -1);
@@ -674,8 +661,7 @@ void testMatchRunner() {
     reset.agentStarts = {5, 5};
     MatchRunnerConfig resetCfg = cfg;
     resetCfg.trafficByDay.clear();
-    const auto scored = runMatch(
-        reset, {AgentKind::Patrol, AgentKind::Supply}, resetCfg);
+    const auto scored = runMatch(reset, {AgentKind::Patrol, AgentKind::Supply}, resetCfg);
     assert(scored.success);
     assert(scored.score.totalUdon == 2);
     assert(scored.score.sumOfDailyBrandCounts == 2);
@@ -718,21 +704,18 @@ void testProblemCreator() {
     assert(json.find("\"agentStarts\"") != std::string::npos);
     assert(json.find("\"fuelLimits\"") != std::string::npos);
     assert(json.find("\"teams\"") != std::string::npos);
-    assert(ProblemCreator::writeJson(
-        first, "/tmp/procon37-generated-problem-test.json"));
+    assert(ProblemCreator::writeJson(first, "/tmp/procon37-generated-problem-test.json"));
 
     MatchSetting s = first.setting;
     s.startsAt = 1'800'000'000;
     const std::string setJson = ProblemCreator::toMatchSettingJson(s);
-    assert(setJson.find("\"startsAt\": 1800000000") !=
-           std::string::npos);
+    assert(setJson.find("\"startsAt\": 1800000000") != std::string::npos);
     assert(setJson.find("\"map\"") != std::string::npos);
     assert(setJson.find("\"spots\"") != std::string::npos);
     assert(setJson.find("\"agents\"") != std::string::npos);
     assert(setJson.find("\"players\": 2") != std::string::npos);
     assert(setJson.find("\"problem\"") == std::string::npos);
-    assert(createMatchSettingJson(
-        s, "/tmp/procon37-match-setting-test.json"));
+    assert(createMatchSettingJson(s, "/tmp/procon37-match-setting-test.json"));
 
     const MatchSetting parsedSetting = parseMatchSettingJson(setJson);
     assert(parsedSetting.startsAt == s.startsAt);
@@ -743,8 +726,7 @@ void testProblemCreator() {
     assert(parsedSetting.field.height == s.field.height);
     assert(parsedSetting.field.spots.size() == s.field.spots.size());
     assert(ProblemCreator::toMatchSettingJson(parsedSetting) == setJson);
-    const MatchSetting fileSetting = readMatchSettingJson(
-        "/tmp/procon37-match-setting-test.json");
+    const MatchSetting fileSetting = readMatchSettingJson("/tmp/procon37-match-setting-test.json");
     assert(fileSetting.agentStarts == s.agentStarts);
 
     CreateMatchStateConfig stateCfg;
@@ -767,17 +749,12 @@ void testProblemCreator() {
         assert(traffic == TrafficStatus::Smooth);
     }
 
-    const std::string stateJson =
-        ProblemCreator::toMatchStateJson(st, s.field);
-    assert(stateJson.find("\"endsAt\": 1800000060") !=
-           std::string::npos);
+    const std::string stateJson = ProblemCreator::toMatchStateJson(st, s.field);
+    assert(stateJson.find("\"endsAt\": 1800000060") != std::string::npos);
     assert(stateJson.find("\"day\": 0") != std::string::npos);
     assert(stateJson.find("\"others\"") != std::string::npos);
     assert(stateJson.find("\"traffics\"") != std::string::npos);
-    assert(createMatchStateJson(
-        st,
-        s.field,
-        "/tmp/procon37-match-state-test.json"));
+    assert(createMatchStateJson(st, s.field, "/tmp/procon37-match-state-test.json"));
 
     const MatchState parsedState = parseMatchStateJson(stateJson, s);
     assert(parsedState.endsAt == st.endsAt);
@@ -791,22 +768,16 @@ void testProblemCreator() {
         assert(parsedState.agents[i].pos == st.agents[i].pos);
         assert(parsedState.agents[i].fuel == st.agents[i].fuel);
     }
-    const MatchState fileState = readMatchStateJson(
-        "/tmp/procon37-match-state-test.json", s);
+    const MatchState fileState = readMatchStateJson("/tmp/procon37-match-state-test.json", s);
     assert(fileState.trafficByPos == st.trafficByPos);
 
-    const MatchState direct = createMatchStateJson(
-        s,
-        stateCfg,
-        "/tmp/procon37-match-state-direct-test.json");
+    const MatchState direct =
+        createMatchStateJson(s, stateCfg, "/tmp/procon37-match-state-direct-test.json");
     assert(ProblemCreator::toMatchStateJson(direct, s.field) == stateJson);
 
     stateCfg.day = 1;
     const MatchState later = ProblemCreator::generateMatchState(s, stateCfg);
-    assert(createMatchStateJson(
-        later,
-        s.field,
-        "/tmp/procon37-match-state-day1-test.json"));
+    assert(createMatchStateJson(later, s.field, "/tmp/procon37-match-state-day1-test.json"));
     for (const Agent& agent : later.agents) {
         assert(s.field.contains(agent.pos));
         assert(s.field.at(agent.pos).isPassable());
@@ -830,13 +801,12 @@ void testProblemCreator() {
     try {
         (void)parseMatchSettingJson("{}");
     } catch (const JsonInputError& error) {
-        rejected = std::string(error.what()).find("startsAt") !=
-                   std::string::npos;
+        rejected = std::string(error.what()).find("startsAt") != std::string::npos;
     }
     assert(rejected);
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     testHexNeighbors();
@@ -848,7 +818,7 @@ int main() {
     testHashAndEvaluation();
     testDijkstra();
     testBeamSearch();
-    testDayStartMoveStillAcquiresOriginSpot();
+    testDayStartAcquisitionOccursAtStepOne();
     testPatrolsSplitAcrossBrands();
     testPathRendezvous();
     testWaitAtLastReachableSpotAndRefuel();

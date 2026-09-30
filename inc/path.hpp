@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.hpp"
+#include "agent.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,9 +12,7 @@ struct RouteCost {
     std::int32_t steps = kImpassableCost;
     std::int32_t fuel = kImpassableCost;
 
-    constexpr bool reachable() const noexcept {
-        return steps < kImpassableCost;
-    }
+    constexpr bool reachable() const noexcept { return steps < kImpassableCost; }
 };
 
 struct PathResult {
@@ -26,6 +24,27 @@ struct PathResult {
     std::vector<Direction> directions;
 };
 
+// 指定stepの補給フェーズで、補給車と同じセルにいると満タンになる予定。
+struct TimedRefuel {
+    CellPos pos = kInvalidCell;
+    std::int32_t step = 0;
+};
+
+// 移動に加えて補給待ちを含む経路。actionsはそのままAgentPlanとして使える。
+struct TimedPathResult {
+    bool reachable = false;
+    CellPos start = kInvalidCell;
+    CellPos goal = kInvalidCell;
+    std::int32_t startStep = 0;
+    std::int32_t arrivalStep = kImpassableCost;
+    std::int32_t finalFuel = 0;
+    std::int32_t refuelCount = 0;
+    RouteCost cost{};
+    std::vector<CellPos> positions;
+    std::vector<Direction> directions;
+    AgentPlan actions;
+};
+
 // 全セルへのダイクストラ結果。goalごとの経路を前駆配列から復元する。
 struct DijkstraTable {
     CellPos start = kInvalidCell;
@@ -35,8 +54,7 @@ struct DijkstraTable {
     std::vector<CellPos> firstHop;
 
     bool canReach(CellPos pos) const noexcept {
-        return pos >= 0 &&
-               static_cast<std::size_t>(pos) < distances.size() &&
+        return pos >= 0 && static_cast<std::size_t>(pos) < distances.size() &&
                distances[static_cast<std::size_t>(pos)] < kImpassableCost;
     }
 };
@@ -46,9 +64,7 @@ struct FuelPathState {
     CellPos pos = kInvalidCell;
     std::int32_t fuel = 0;
 
-    friend constexpr bool operator==(
-        FuelPathState lhs,
-        FuelPathState rhs) noexcept {
+    friend constexpr bool operator==(FuelPathState lhs, FuelPathState rhs) noexcept {
         return lhs.pos == rhs.pos && lhs.fuel == rhs.fuel;
     }
 };
@@ -60,4 +76,4 @@ struct FuelPathLabel {
     Direction previousDirection = Direction::UpperLeft;
 };
 
-}  // namespace benzen
+} // namespace benzen

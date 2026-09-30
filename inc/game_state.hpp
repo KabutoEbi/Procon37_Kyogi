@@ -49,19 +49,15 @@ struct PendingAction {
     CellPos destination = kInvalidCell;
     std::int32_t fuelCost = 0;
 
-    constexpr bool isMove() const noexcept {
-        return active && move;
-    }
+    constexpr bool isMove() const noexcept { return active && move; }
 
-    constexpr bool isWait() const noexcept {
-        return active && !move;
-    }
+    constexpr bool isWait() const noexcept { return active && !move; }
 };
 
 // 1日分の探索・シミュレーションで変化する状態。
 // 固定長配列のみなので、ビームサーチのノードとして安価にコピーできる。
 class GameState {
-public:
+  public:
     std::int32_t day = 0;
     std::int32_t step = 0;
     std::int32_t dayStepLimit = 0;
@@ -84,18 +80,14 @@ public:
     // finishDay() の二重反映を防ぐ。
     bool finalized = false;
 
-    // API状態から当日開始時の状態を作り、開始位置の取得を先に確定する。
+    // API状態から当日開始時の状態を作る。step 0はアクションフェーズ
+    // だけなので、開始位置の取得はstep 1の反映フェーズで判定する。
     // 失敗時は自身を変更しない。
-    bool initialize(
-        const MatchSetting& s,
-        const MatchState& ms,
-        ScoreState prev = {}) noexcept {
+    bool initialize(const MatchSetting& s, const MatchState& ms, ScoreState prev = {}) noexcept {
         if (!s.hasConsistentDaySettings() || ms.day < 0 ||
             static_cast<std::size_t>(ms.day) >= s.dayCount() ||
-            s.field.cells.size() != s.field.cellCount() ||
-            ms.agents.size() != s.agentCount() ||
-            ms.agents.size() > kMaxAgents ||
-            s.field.spots.size() > kMaxSpots ||
+            s.field.cells.size() != s.field.cellCount() || ms.agents.size() != s.agentCount() ||
+            ms.agents.size() > kMaxAgents || s.field.spots.size() > kMaxSpots ||
             s.field.brands.size() > kMaxBrands) {
             return false;
         }
@@ -114,40 +106,24 @@ public:
         for (std::size_t i = 0; i < next.agentCount; ++i) {
             next.agents[i] = ms.agents[i];
             next.agents[i].index = i;
-            if (!s.field.contains(next.agents[i].pos) ||
-                next.agents[i].fuel < 0) {
+            if (!s.field.contains(next.agents[i].pos) || next.agents[i].fuel < 0) {
                 return false;
             }
         }
         for (std::size_t i = 0; i < next.spotCount; ++i) {
             const Spot& spot = s.field.spots[i];
             if (spot.maxStock <= 0 || spot.brandIndex < 0 ||
-                static_cast<std::size_t>(spot.brandIndex) >=
-                    s.field.brands.size()) {
+                static_cast<std::size_t>(spot.brandIndex) >= s.field.brands.size()) {
                 return false;
             }
             next.remainingStocks[i] = spot.maxStock;
-        }
-
-        // 日開始時は最初の行動を予約する前に、現在地のスポットを
-        // エージェント添字順で取得する。
-        for (AgentIndex i = 0; i < next.agentCount; ++i) {
-            const Cell& cell = s.field.at(next.agents[i].pos);
-            if (cell.hasSpot()) {
-                next.tryAcquire(
-                    i,
-                    static_cast<std::size_t>(cell.spotIndex),
-                    s.field);
-            }
         }
 
         *this = next;
         return true;
     }
 
-    constexpr std::int32_t remainingSteps() const noexcept {
-        return dayStepLimit - step;
-    }
+    constexpr std::int32_t remainingSteps() const noexcept { return dayStepLimit - step; }
 
     bool advanceTo(std::int32_t nextStep) noexcept {
         if (finalized || nextStep < step || nextStep > dayStepLimit) {
@@ -166,10 +142,7 @@ public:
 
     // 取得フェーズでエージェント添字の昇順に呼ぶ。
     // 取得条件を満たした場合だけ状態を更新する。
-    bool tryAcquire(
-        AgentIndex agentIndex,
-        std::size_t spotIndex,
-        const Field& field) noexcept {
+    bool tryAcquire(AgentIndex agentIndex, std::size_t spotIndex, const Field& field) noexcept {
         if (finalized || agentIndex >= agentCount || spotIndex >= spotCount ||
             spotIndex >= field.spots.size()) {
             return false;
@@ -177,8 +150,7 @@ public:
 
         Agent& agent = agents[agentIndex];
         const Spot& spot = field.spots[spotIndex];
-        if (!agent.isPatrol() || agent.pos != spot.pos ||
-            remainingStocks[spotIndex] <= 0 ||
+        if (!agent.isPatrol() || agent.pos != spot.pos || remainingStocks[spotIndex] <= 0 ||
             hasAcquired(agentIndex, spotIndex) || spot.brandIndex < 0 ||
             static_cast<std::size_t>(spot.brandIndex) >= field.brands.size()) {
             return false;
@@ -186,8 +158,7 @@ public:
 
         --remainingStocks[spotIndex];
         acquiredSpots[agentIndex] |= spotBit(spotIndex);
-        const BrandMask bit =
-            brandBit(static_cast<std::size_t>(spot.brandIndex));
+        const BrandMask bit = brandBit(static_cast<std::size_t>(spot.brandIndex));
         dayBrands |= bit;
         score.matchBrands |= bit;
         ++dayUdon;
@@ -218,11 +189,10 @@ public:
         if (finalized || step != dayStepLimit) {
             return false;
         }
-        score.sumOfDailyBrandCounts +=
-            static_cast<std::int32_t>(countBits(dayBrands));
+        score.sumOfDailyBrandCounts += static_cast<std::int32_t>(countBits(dayBrands));
         finalized = true;
         return true;
     }
 };
 
-}  // namespace benzen
+} // namespace benzen

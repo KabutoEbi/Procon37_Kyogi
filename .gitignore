@@ -10,3 +10,6 @@ __pycache__/
 *.py[cod]
 /runtime/
 .env
+.github/
+.clang-format
+.clang-tidy

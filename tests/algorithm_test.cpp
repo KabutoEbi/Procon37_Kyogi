@@ -11,8 +11,8 @@ using namespace benzen;
 
 namespace {
 
-MatchSetting line(int width, std::vector<int> days, int fuel,
-                  std::vector<CellPos> starts, std::vector<Spot> spots) {
+MatchSetting line(int width, std::vector<int> days, int fuel, std::vector<CellPos> starts,
+                  std::vector<Spot> spots) {
     MatchSetting s;
     s.field.width = width;
     s.field.height = 1;
@@ -66,19 +66,24 @@ void testDialAgainstHeap() {
                 queue.emplace(0, start);
             }
             while (!queue.empty()) {
-                const auto [distance, from] = queue.top(); queue.pop();
-                if (distance != expected[from]) continue;
+                const auto [distance, from] = queue.top();
+                queue.pop();
+                if (distance != expected[from])
+                    continue;
                 for (const CellPos to : s.field.neighbors(from)) {
-                    if (!s.field.contains(to) || !s.field.at(to).isPassable()) continue;
+                    if (!s.field.contains(to) || !s.field.at(to).isPassable())
+                        continue;
                     const int next = distance + moveStepCost(s, ms, from);
-                    if (next >= expected[to]) continue;
+                    if (next >= expected[to])
+                        continue;
                     expected[to] = next;
                     queue.emplace(next, to);
                 }
             }
             assert(table.distances == expected);
             for (CellPos goal = 0; goal < static_cast<CellPos>(s.field.cellCount()); ++goal) {
-                if (!table.canReach(goal) || goal == start) continue;
+                if (!table.canReach(goal) || goal == start)
+                    continue;
                 const auto path = Brain0::restorePath(s, table, goal);
                 assert(path.reachable && path.positions[1] == table.firstHop[goal]);
                 int cost = 0;
@@ -107,7 +112,8 @@ void testFlowAgainstEnumeration() {
             }
         }
         std::function<int(int, unsigned)> enumerate = [&](int a, unsigned used) {
-            if (a == n) return 0;
+            if (a == n)
+                return 0;
             int best = enumerate(a + 1, used);
             for (int b = 0; b < n; ++b)
                 if ((used & (1U << b)) == 0)
@@ -166,31 +172,37 @@ void testFuelConstrainedAgainstDP() {
         const auto start = s.agentStarts[0];
         constexpr int budget = 6;
         std::array<std::vector<int>, budget + 1> dp;
-        for (auto& row : dp) row.assign(s.field.cellCount(), kImpassableCost);
+        for (auto& row : dp)
+            row.assign(s.field.cellCount(), kImpassableCost);
         dp[0][start] = 0;
         for (int used = 0; used <= budget; ++used) {
             for (CellPos from = 0; from < static_cast<CellPos>(s.field.cellCount()); ++from) {
-                if (dp[used][from] >= kImpassableCost) continue;
+                if (dp[used][from] >= kImpassableCost)
+                    continue;
                 const int fuel = moveFuelCost(s, AgentKind::Patrol, from);
-                if (fuel > budget - used) continue;
+                if (fuel > budget - used)
+                    continue;
                 for (int d = 0; d < 6; ++d) {
                     const auto to = s.field.neighbor(from, static_cast<Direction>(d));
-                    if (!s.field.contains(to) || !s.field.at(to).isPassable()) continue;
-                    dp[used + fuel][to] = std::min(dp[used + fuel][to],
-                        dp[used][from] + moveStepCost(s, ms, from));
+                    if (!s.field.contains(to) || !s.field.at(to).isPassable())
+                        continue;
+                    dp[used + fuel][to] =
+                        std::min(dp[used + fuel][to], dp[used][from] + moveStepCost(s, ms, from));
                 }
             }
         }
         for (CellPos goal = 0; goal < static_cast<CellPos>(s.field.cellCount()); ++goal) {
-            if (!s.field.at(goal).isPassable()) continue;
+            if (!s.field.at(goal).isPassable())
+                continue;
             for (int limit = 0; limit <= budget; ++limit) {
                 std::pair<int, int> expected{kImpassableCost, 0};
                 for (int used = 0; used <= limit; ++used)
                     expected = std::min(expected, std::make_pair(dp[used][goal], used));
-                const auto path = brain0FuelConstrained(s, ms, start, goal,
-                                                       AgentKind::Patrol, limit);
+                const auto path =
+                    brain0FuelConstrained(s, ms, start, goal, AgentKind::Patrol, limit);
                 assert(path.reachable == (expected.first < kImpassableCost));
-                if (!path.reachable) continue;
+                if (!path.reachable)
+                    continue;
                 assert(path.cost.steps == expected.first && path.cost.fuel == expected.second);
                 int steps = 0, fuel = 0;
                 CellPos pos = start;
@@ -234,6 +246,39 @@ void testFuelTimeTradeoff() {
     assert(impossible.success && impossible.finalState.dayUdon == 0);
 }
 
+void testTimedRefuelPathAndGreedyBaseline() {
+    auto s = line(3, {5}, 1, {0, 2}, {{1, 2, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    assert(!brain0FuelConstrained(s, ms, 0, 2, AgentKind::Patrol, 1).reachable);
+    const auto timed = brain0TimedRefuels(s, ms, 0, 2, AgentKind::Patrol, 1, 1, 0, 5, {{1, 3}});
+    assert(timed.reachable);
+    assert(timed.arrivalStep == 4 && timed.cost.steps == 4);
+    assert(timed.cost.fuel == 2 && timed.finalFuel == 0);
+    assert(timed.refuelCount == 1);
+    assert((timed.positions == std::vector<CellPos>{0, 1, 2}));
+    assert(timed.actions.size() == 2);
+    assert(std::count_if(timed.actions.begin(), timed.actions.end(),
+                         [](int action) { return isMoveAction(action); }) == 2);
+
+    AgentPlan patrol = timed.actions;
+    patrol.push_back(-1);
+    DailyPlan coordinated{
+        patrol,
+        {-1, static_cast<int>(Direction::Left), -2},
+    };
+    const auto refueled = simulateDay(s, ms, coordinated);
+    assert(refueled.valid && refueled.state.dayUdon == 1);
+    assert(refueled.state.agents[0].pos == 2);
+
+    s = line(5, {8}, 10, {0, 0}, {{1, 2, 1, -1}, {2, 4, 1, -1}});
+    ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    const auto greedy = brain0Greedy(s, ms);
+    const auto baseline = simulateDay(s, ms, greedy);
+    assert(baseline.valid && baseline.state.dayUdon == 2);
+    assert(baseline.state.agents[0].pos == 4);
+    assert((greedy[1] == AgentPlan{-8}));
+}
+
 void testTrafficNeverSchedulesAnUnfinishableMove() {
     auto s = line(2, {3}, 2, {0}, {{1, 1, 1, -1}});
     s.field.cells[0].type = CellType::Road;
@@ -243,21 +288,14 @@ void testTrafficNeverSchedulesAnUnfinishableMove() {
 
     GameState state;
     assert(state.initialize(s, ms));
-    assert(tryScheduleAction(
-               state,
-               s,
-               ms,
-               0,
-               static_cast<std::int32_t>(Direction::Right)).error ==
+    assert(tryScheduleAction(state, s, ms, 0, static_cast<std::int32_t>(Direction::Right)).error ==
            SimulationError::ActionOverrunsDay);
 
     const auto jammed = brain1(s, ms, {}, smallBeam());
     assert(jammed.success);
     assert(validateDailyPlan(s, ms, jammed.plan).valid);
-    assert(std::none_of(
-        jammed.plan[0].begin(),
-        jammed.plan[0].end(),
-        [](std::int32_t action) { return isMoveAction(action); }));
+    assert(std::none_of(jammed.plan[0].begin(), jammed.plan[0].end(),
+                        [](std::int32_t action) { return isMoveAction(action); }));
 
     ms.trafficByPos[0] = TrafficStatus::Busy;
     const auto busy = brain1(s, ms, {}, smallBeam());
@@ -270,7 +308,8 @@ void testRendezvousObstaclesAndMultipleSupplies() {
     auto s = line(5, {6}, 1, {0, 10}, {});
     s.field.height = 3;
     s.field.cells.assign(15, {CellType::Plain, -1});
-    for (CellPos pos = 5; pos < 9; ++pos) s.field.cells[pos].type = CellType::Pond;
+    for (CellPos pos = 5; pos < 9; ++pos)
+        s.field.cells[pos].type = CellType::Pond;
     s.field.spots = {{1, 2, 1, -1}};
     assert(s.field.rebuildSpotIndex());
     auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
@@ -281,8 +320,7 @@ void testRendezvousObstaclesAndMultipleSupplies() {
     assert(validateDailyPlan(s, ms, result.plan).valid);
 
     s = line(7, {4}, 1, {2, 4, 1, 5}, {{1, 0, 1, -1}, {2, 6, 1, -1}});
-    ms = stateFor(s, {AgentKind::Patrol, AgentKind::Patrol,
-                      AgentKind::Supply, AgentKind::Supply});
+    ms = stateFor(s, {AgentKind::Patrol, AgentKind::Patrol, AgentKind::Supply, AgentKind::Supply});
     const auto two = brain1(s, ms, {}, cfg);
     assert(two.success && two.finalState.dayUdon == 2);
     assert(validateDailyPlan(s, ms, two.plan).valid);
@@ -293,14 +331,8 @@ void testRendezvousObstaclesAndMultipleSupplies() {
 }
 
 void testMultipleRefuelsInOneDay() {
-    const auto s = line(
-        6,
-        {10},
-        2,
-        {0, 0},
-        {{1, 5, 1, -1}});
-    const auto ms = stateFor(
-        s, {AgentKind::Patrol, AgentKind::Supply});
+    const auto s = line(6, {10}, 2, {0, 0}, {{1, 5, 1, -1}});
+    const auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
     auto cfg = smallBeam();
     cfg.beamWidth = 128;
     cfg.jointBeamWidth = 512;
@@ -331,9 +363,8 @@ void testSupplyMovesOnlyForRendezvous() {
     const auto escorted = brain1(s, ms, {}, cfg);
     assert(escorted.success && escorted.finalState.dayUdon == 1);
     assert(validateDailyPlan(s, ms, escorted.plan).valid);
-    assert(std::any_of(
-        escorted.plan[1].begin(), escorted.plan[1].end(),
-        [](std::int32_t action) { return isMoveAction(action); }));
+    assert(std::any_of(escorted.plan[1].begin(), escorted.plan[1].end(),
+                       [](std::int32_t action) { return isMoveAction(action); }));
     assert(escorted.finalState.agents[0].fuel > 0);
 
     // 緊急補給が不要でも、巡回車を待たせず目的スポットへ先着できる
@@ -353,14 +384,12 @@ void testSupplyMovesOnlyForRendezvous() {
     const auto idle = brain1(s, ms, {}, cfg);
     assert(idle.success && idle.finalState.dayUdon == 0);
     assert(validateDailyPlan(s, ms, idle.plan).valid);
-    assert(std::none_of(
-        idle.plan[1].begin(), idle.plan[1].end(),
-        [](std::int32_t action) { return isMoveAction(action); }));
+    assert(std::none_of(idle.plan[1].begin(), idle.plan[1].end(),
+                        [](std::int32_t action) { return isMoveAction(action); }));
 }
 
 void testCoordinatedPlanningAndCache() {
-    auto s = line(7, {8}, 2, {0, 6, 3},
-        {{1, 2, 1, -1}, {2, 4, 1, -1}, {3, 0, 1, -1}});
+    auto s = line(7, {8}, 2, {0, 6, 3}, {{1, 2, 1, -1}, {2, 4, 1, -1}, {3, 0, 1, -1}});
     auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Patrol, AgentKind::Supply});
     auto cfg = smallBeam();
     const auto cached = brain1(s, ms, {}, cfg);
@@ -389,8 +418,7 @@ void testCoordinatedPlanningAndCache() {
 }
 
 void testDistanceCache() {
-    auto s = line(7, {10, 10}, 6, {0, 6},
-        {{1, 2, 1, -1}, {2, 5, 1, -1}});
+    auto s = line(7, {10, 10}, 6, {0, 6}, {{1, 2, 1, -1}, {2, 5, 1, -1}});
     s.field.cells[1].type = CellType::Road;
     auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
     auto cfg = smallBeam();
@@ -479,12 +507,14 @@ void testDetourRendezvousAndTwoSpots() {
     CellPos pos = s.agentStarts[0];
     int arrival = 0;
     for (const int action : faster.plan[0]) {
-        if (isWaitAction(action)) arrival -= action;
+        if (isWaitAction(action))
+            arrival -= action;
         else {
             arrival += moveStepCost(s, ms, pos);
             pos = s.field.neighbor(pos, static_cast<Direction>(action));
         }
-        if (pos == 5) break;
+        if (pos == 5)
+            break;
     }
     assert(pos == 5 && arrival == 4 && faster.detourPlans > 0);
     cfg.threadCount = 2;
@@ -514,39 +544,36 @@ void testTrialsAndTuning() {
     changed[1][0] = TrafficStatus::Jammed;
     for (const auto& scenario : {smooth, changed}) {
         const auto direct = runTrial(s, {AgentKind::Patrol}, scenario, cfg);
-        const auto reused = runTrial(s, {AgentKind::Patrol}, scenario, cfg,
-                                     0, kNoTrialDeadline, &sharedFirstDay);
+        const auto reused =
+            runTrial(s, {AgentKind::Patrol}, scenario, cfg, 0, kNoTrialDeadline, &sharedFirstDay);
         assert(reused.success && reused.days == direct.days);
         assert(trialScore(reused.score) == trialScore(direct.score));
     }
-    const auto expiredCached = runTrial(
-        s, {AgentKind::Patrol}, smooth, cfg, 0,
-        std::chrono::steady_clock::now() - std::chrono::seconds(1),
-        &sharedFirstDay);
+    const auto expiredCached =
+        runTrial(s, {AgentKind::Patrol}, smooth, cfg, 0,
+                 std::chrono::steady_clock::now() - std::chrono::seconds(1), &sharedFirstDay);
     assert(!expiredCached.success);
     // 初日の交通まで変わった場合は、以前の結果を流用しない。
     changed[0][0] = TrafficStatus::Busy;
-    const auto differentFirstDay = runTrial(
-        s, {AgentKind::Patrol}, changed, cfg, 0, kNoTrialDeadline,
-        &sharedFirstDay);
+    const auto differentFirstDay =
+        runTrial(s, {AgentKind::Patrol}, changed, cfg, 0, kNoTrialDeadline, &sharedFirstDay);
     const auto directFirstDay = runTrial(s, {AgentKind::Patrol}, changed, cfg);
     assert(differentFirstDay.success &&
-           trialScore(differentFirstDay.score) ==
-               trialScore(directFirstDay.score));
+           trialScore(differentFirstDay.score) == trialScore(directFirstDay.score));
     // 初日だけでなく、分岐する直前までの全日を再利用する。
-    auto longMatch = line(5, {3, 4, 5, 6}, 6, {0},
-                                {{1, 0, 1, -1}, {2, 4, 1, -1}});
+    auto longMatch = line(5, {3, 4, 5, 6}, 6, {0}, {{1, 0, 1, -1}, {2, 4, 1, -1}});
     longMatch.field.cells[1].type = CellType::Road;
     TrialFirstDay prefix;
     TrialTraffic traffic(4, std::vector<TrafficStatus>(5, TrafficStatus::Smooth));
     bool firstScenario = true;
     for (const int branch : {4, 3, 2, 1, 0, 4}) {
-        if (branch < 4) traffic[branch][1] = TrafficStatus::Jammed;
+        if (branch < 4)
+            traffic[branch][1] = TrafficStatus::Jammed;
         TrialFirstDay fresh;
-        const auto direct = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg,
-                                     0, kNoTrialDeadline, &fresh);
-        const auto cached = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg,
-                                     0, kNoTrialDeadline, &prefix);
+        const auto direct =
+            runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg, 0, kNoTrialDeadline, &fresh);
+        const auto cached =
+            runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg, 0, kNoTrialDeadline, &prefix);
         assert(cached.success && cached.days == direct.days);
         assert(trialScore(cached.score) == trialScore(direct.score));
         assert(prefix.reusedDays == (firstScenario ? 0U : static_cast<std::size_t>(branch)));
@@ -558,8 +585,8 @@ void testTrialsAndTuning() {
         }
     }
     // 日数の変更で以前の末尾を参照しない。
-    const auto shorter = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg,
-                                  2, kNoTrialDeadline, &prefix);
+    const auto shorter =
+        runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg, 2, kNoTrialDeadline, &prefix);
     const auto shorterDirect = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg, 2);
     assert(shorter.success && prefix.reusedDays == 0 && prefix.laterDays.size() == 1);
     assert(trialScore(shorter.score) == trialScore(shorterDirect.score));
@@ -575,8 +602,11 @@ void testTrialsAndTuning() {
     assert(first.trainingAfter == second.trainingAfter);
     assert(first.validationAfter == second.validationAfter);
     bool rejected = false;
-    try { (void)tuneWeights({train}, {train}, {}, tuning); }
-    catch (const std::invalid_argument&) { rejected = true; }
+    try {
+        (void)tuneWeights({train}, {train}, {}, tuning);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
     assert(rejected);
 
     AgentSelectorConfig selection;
@@ -585,8 +615,9 @@ void testTrialsAndTuning() {
     selection.minSupplyCount = 0;
     selection.maxSupplyCount = 0;
     selection.trialCandidateLimit = 1;
-    selection.trialScenarios = {TrialTraffic(2, std::vector<TrafficStatus>(3, TrafficStatus::Smooth)),
-                                TrialTraffic(2, std::vector<TrafficStatus>(3, TrafficStatus::Jammed))};
+    selection.trialScenarios = {
+        TrialTraffic(2, std::vector<TrafficStatus>(3, TrafficStatus::Smooth)),
+        TrialTraffic(2, std::vector<TrafficStatus>(3, TrafficStatus::Jammed))};
     const auto selected = selectAgentKinds(s, selection);
     assert(selected.success && selected.trialSimulations == 2);
     assert(selected.completedTrialScenarios == 2);
@@ -594,22 +625,20 @@ void testTrialsAndTuning() {
 
     // 期限切れの試走は未完走として扱い、比較スコアへ混ぜない。
     const auto expired = runTrial(s, {AgentKind::Patrol}, {}, cfg, 0,
-        std::chrono::steady_clock::now() - std::chrono::seconds(1));
+                                  std::chrono::steady_clock::now() - std::chrono::seconds(1));
     assert(!expired.success && expired.days == 0);
 
     // 全候補を同じシナリオ数で比較し、選択結果の集計値を再計算できる。
-    auto multi = line(7, {4, 5}, 6, {0, 3, 6},
-        {{1, 0, 1, -1}, {2, 2, 1, -1}, {3, 6, 1, -1}});
+    auto multi = line(7, {4, 5}, 6, {0, 3, 6}, {{1, 0, 1, -1}, {2, 2, 1, -1}, {3, 6, 1, -1}});
     multi.field.cells[1].type = CellType::Road;
     TrialFirstDay changedKindsCache;
-    const std::vector<AgentKind> leftSupply{
-        AgentKind::Supply, AgentKind::Patrol, AgentKind::Patrol};
-    const std::vector<AgentKind> rightSupply{
-        AgentKind::Patrol, AgentKind::Patrol, AgentKind::Supply};
-    (void)runTrial(multi, leftSupply, {}, cfg, 0,
-                   kNoTrialDeadline, &changedKindsCache);
-    const auto changedKinds = runTrial(multi, rightSupply, {}, cfg, 0,
-                                       kNoTrialDeadline, &changedKindsCache);
+    const std::vector<AgentKind> leftSupply{AgentKind::Supply, AgentKind::Patrol,
+                                            AgentKind::Patrol};
+    const std::vector<AgentKind> rightSupply{AgentKind::Patrol, AgentKind::Patrol,
+                                             AgentKind::Supply};
+    (void)runTrial(multi, leftSupply, {}, cfg, 0, kNoTrialDeadline, &changedKindsCache);
+    const auto changedKinds =
+        runTrial(multi, rightSupply, {}, cfg, 0, kNoTrialDeadline, &changedKindsCache);
     const auto directKinds = runTrial(multi, rightSupply, {}, cfg);
     assert(changedKinds.success == directKinds.success);
     assert(trialScore(changedKinds.score) == trialScore(directKinds.score));
@@ -618,9 +647,8 @@ void testTrialsAndTuning() {
     fair.trialCandidateLimit = 3;
     fair.trialBeamWidth = 8;
     fair.trialJointBeamWidth = 32;
-    fair.trialScenarios = {
-        TrialTraffic(2, std::vector<TrafficStatus>(7, TrafficStatus::Smooth)),
-        TrialTraffic(2, std::vector<TrafficStatus>(7, TrafficStatus::Jammed))};
+    fair.trialScenarios = {TrialTraffic(2, std::vector<TrafficStatus>(7, TrafficStatus::Smooth)),
+                           TrialTraffic(2, std::vector<TrafficStatus>(7, TrafficStatus::Jammed))};
     const auto choice = selectAgentKinds(multi, fair);
     assert(choice.usedBeamTrial && choice.trialAssignments == 3);
     assert(choice.completedTrialScenarios == 2 && choice.trialSimulations == 6);
@@ -635,7 +663,8 @@ void testTrialsAndTuning() {
         assert(replay.success);
         const auto score = trialScore(replay.score);
         worst = std::min(worst, score);
-        for (std::size_t i = 0; i < total.size(); ++i) total[i] += score[i];
+        for (std::size_t i = 0; i < total.size(); ++i)
+            total[i] += score[i];
     }
     assert(choice.totalTrialScore == total && choice.worstTrialScore == worst);
     for (std::size_t supply = 0; supply < multi.agentCount(); ++supply) {
@@ -658,9 +687,9 @@ void testTrialsAndTuning() {
     assert(budgeted.totalTrialScore == choice.totalTrialScore);
     assert(budgeted.completedTrialScenarios == 2);
 
-    auto roads = line(16, {32, 32, 32}, 8, {0, 1, 2, 3},
-        {{1, 15, 1, -1}});
-    for (auto& cell : roads.field.cells) cell.type = CellType::Road;
+    auto roads = line(16, {32, 32, 32}, 8, {0, 1, 2, 3}, {{1, 15, 1, -1}});
+    for (auto& cell : roads.field.cells)
+        cell.type = CellType::Road;
     roads.field.cells[0].type = CellType::Plain;
     roads.busyThreshold = 7;
     roads.jammedThreshold = 9;
@@ -669,7 +698,7 @@ void testTrialsAndTuning() {
     assert(scenarios == makeTrialScenarios(roads));
     for (const auto& scenario : scenarios) {
         assert(std::all_of(scenario[0].begin(), scenario[0].end(),
-            [](TrafficStatus traffic) { return traffic == TrafficStatus::Smooth; }));
+                           [](TrafficStatus traffic) { return traffic == TrafficStatus::Smooth; }));
         assert(scenario[1][0] == TrafficStatus::Smooth);
     }
     bool lowToMiddle = false;
@@ -684,8 +713,7 @@ void testTrialsAndTuning() {
 
     const auto baseLoad = predictRoadLoad(roads, 1);
     auto moreAgents = roads;
-    moreAgents.agentStarts.insert(
-        moreAgents.agentStarts.end(), {4, 5, 6, 7});
+    moreAgents.agentStarts.insert(moreAgents.agentStarts.end(), {4, 5, 6, 7});
     const auto agentLoad = predictRoadLoad(moreAgents, 1);
     assert(agentLoad.meanPerTeam > baseLoad.meanPerTeam);
 
@@ -739,7 +767,7 @@ void testConsoleReport() {
     assert(jammed.str().find(" 5 ") != std::string::npos);
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     testDialAgainstHeap();
@@ -747,6 +775,7 @@ int main() {
     testSearchEquivalence();
     testFuelConstrainedAgainstDP();
     testFuelTimeTradeoff();
+    testTimedRefuelPathAndGreedyBaseline();
     testTrafficNeverSchedulesAnUnfinishableMove();
     testRendezvousObstaclesAndMultipleSupplies();
     testMultipleRefuelsInOneDay();

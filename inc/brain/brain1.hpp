@@ -335,15 +335,17 @@ private:
                 function(0);
                 return;
             }
+            std::function<void(std::size_t)> task(
+                std::forward<Function>(function));
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                job_ = std::forward<Function>(function);
+                job_ = task;
                 active_ = workers;
                 completed_ = 0;
                 ++generation_;
             }
             start_.notify_all();
-            function(0);
+            task(0);
             std::unique_lock<std::mutex> lock(mutex_);
             done_.wait(lock, [&]() {
                 return completed_ == active_ - 1;
@@ -1375,12 +1377,16 @@ private:
         static thread_local RendezvousMemo memo;
         memo.reset(state);
         ForbiddenTargets forbidden{};
+        const bool repairUnreachable =
+            dist.planning.coordinatedAssignments &&
+            !setting.daySteps.empty() &&
+            setting.fuelLimit <= setting.daySteps.front();
         for (std::size_t round = 0; round <= state.agentCount; ++round) {
             result.targets = assignPatrolTargets(
                 state, setting, matchState, dist, true, &forbidden, &memo);
             result.meets = assignRendezvous(
                 state, setting, matchState, dist, result.targets, &memo);
-            if (!dist.planning.coordinatedAssignments) break;
+            if (!repairUnreachable) break;
             bool retry = false;
             for (AgentIndex a = 0; a < state.agentCount; ++a) {
                 const auto target = result.targets[a];

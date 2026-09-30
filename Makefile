@@ -15,13 +15,14 @@ SAN_DIR := $(BUILD_DIR)/sanitize
 TOOL_DIR := $(BUILD_DIR)/tools
 COMMON_FLAGS := -std=c++17 -pthread -Iinc
 CORE_TESTS := model_test algorithm_test solver_options_test
-CPP_TESTS := $(CORE_TESTS) sample_maps_test
+CPP_TESTS := $(CORE_TESTS) official_qa_test property_test sample_maps_test
 TEST_BINS := $(addprefix $(TEST_DIR)/,$(CPP_TESTS))
-SAN_BINS := $(addprefix $(SAN_DIR)/,$(CORE_TESTS))
+SAN_TESTS := $(CORE_TESTS) official_qa_test property_test
+SAN_BINS := $(addprefix $(SAN_DIR)/,$(SAN_TESTS))
 TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark agent_selection_benchmark tune_weights)
 PY_ENV = PYTHONPYCACHEPREFIX="$(abspath $(BUILD_DIR)/pycache)" PROCON_TEST_SOLVER="$(abspath main)"
 
-.PHONY: all release tools test test-core test-cpp test-python test-samples \
+.PHONY: all release tools test test-core test-cpp test-python test-samples test-property test-official-qa \
         test-model test-algorithm test-options test-gui test-server test-sanitize \
         test-all check-samples help
 
@@ -46,8 +47,8 @@ $(BUILD_DIR) $(TEST_DIR) $(SAN_DIR) $(TOOL_DIR):
 
 # Normal regression suite: no GUI, real server, or external network.
 test: test-cpp test-python
-test-core: test-model test-algorithm test-options test-python
-test-cpp: test-model test-algorithm test-options test-samples
+test-core: test-model test-algorithm test-options test-official-qa test-property test-python
+test-cpp: test-model test-algorithm test-options test-official-qa test-property test-samples
 
 test-model: $(TEST_DIR)/model_test
 	$(TEST_DIR)/model_test
@@ -55,6 +56,10 @@ test-algorithm: $(TEST_DIR)/algorithm_test
 	$(TEST_DIR)/algorithm_test
 test-options: $(TEST_DIR)/solver_options_test
 	$(TEST_DIR)/solver_options_test
+test-property: $(TEST_DIR)/property_test
+	$(TEST_DIR)/property_test
+test-official-qa: $(TEST_DIR)/official_qa_test
+	$(TEST_DIR)/official_qa_test
 
 check-samples:
 	@for size in 16 24 32; do \
@@ -79,11 +84,15 @@ test-sanitize: $(SAN_BINS)
 	$(SAN_DIR)/model_test
 	$(SAN_DIR)/algorithm_test
 	$(SAN_DIR)/solver_options_test
+	$(SAN_DIR)/official_qa_test
+	$(SAN_DIR)/property_test
 test-all: test test-gui test-server test-sanitize
 
 help:
 	@echo "make                 Build ./main (C++17, -O2, strict warnings)"
 	@echo "make test            C++ + sample maps + Python/real solver regression"
+	@echo "make test-property   Random-map and timed-refuel property regression"
+	@echo "make test-official-qa Official Q&A rule regression"
 	@echo "make test-core       Regression without sample map files"
 	@echo "make test-gui        Display the GUI and run mocked UI tests"
 	@echo "make test-server     Run the bundled localhost server integration test"

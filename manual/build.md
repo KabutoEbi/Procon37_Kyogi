@@ -17,11 +17,11 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 | `make` / `make release` | ソルバーの最適化ビルド |
 | `make test` | C++モデル・探索・引数・3サイズサンプル、Pythonバックエンド・復旧・起動環境。実ソルバーとの4日間連携も実行 |
 | `make test-core` | サンプルJSONを必要としないC++・Pythonテスト |
-| `make test-cpp` | C++4テスト（サンプルを含む） |
+| `make test-cpp` | C++6テスト（公式Q&A・プロパティ・サンプルを含む） |
 | `make test-python` | Python31テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |
-| `make test-sanitize` | モデル・探索・引数テストをASan/UBSanでビルド・実行 |
+| `make test-sanitize` | モデル・探索・引数・公式Q&A・プロパティテストをASan/UBSanでビルド・実行 |
 | `make test-all` | 通常・GUI・簡易サーバー・サニタイザをすべて実行 |
 | `make tools` | ベンチマークと重み調整ツールを`.build/tools/`へビルド（実行しない） |
 | `make help` | コマンド一覧 |

@@ -8,6 +8,8 @@
 |---|---|
 | [`algorithm_test.cpp`](algorithm_test.md) | 低レベル探索アルゴリズムと最適化の回帰テスト |
 | [`model_test.cpp`](model_test.md) | モデルから複数日実行までの総合回帰テスト |
+| [`official_qa_test.cpp`](official-qa-coverage-2026-10-01.md) | 公式Q&Aのフェーズ順・生成範囲・補足行動例の回帰テスト |
+| [`property_test.cpp`](property_test.md) | ランダム問題と時刻付き補給最短路のプロパティテスト |
 | [`sample_maps_test.cpp`](sample_maps_test.md) | `sample_maps/`を使うスモークテスト |
 | [`solver_benchmark.cpp`](solver_benchmark.md) | 複数シード・全日程・交通変化・機能別の得点と速度比較 |
 | [`agent_selection_benchmark.cpp`](agent_selection_benchmark.md) | ランダム生成マップでの種別選択と全日試走の比較 |
@@ -25,7 +27,7 @@
 make -j3 test
 ```
 
-モデル・探索・引数・サンプルのC++4テストと、実ソルバー連携を含むPythonテストを実行する。どれかが失敗するとmakeも非ゼロで終了する。サンプルJSONが未配置ならエラーになるため、その環境では`make test-core`を使用する。
+モデル・探索・引数・公式Q&A・プロパティ・サンプルのC++テストと、実ソルバー連携を含むPythonテストを実行する。どれかが失敗するとmakeも非ゼロで終了する。サンプルJSONが未配置ならエラーになるため、その環境では`make test-core`を使用する。
 
 `make test-all`でGUI表示・同梱簡易サーバー・ASan/UBSanも含めて実行できる。環境要件と個別ターゲットは[`ビルド手順`](../build.md)を参照。
 
