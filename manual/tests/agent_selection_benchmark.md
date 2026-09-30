@@ -11,9 +11,11 @@
 ```sh
 make .build/tools/agent_selection_benchmark
 .build/tools/agent_selection_benchmark --size 24 --seeds 8 --selection-ms 5000 --constrained
+.build/tools/agent_selection_benchmark --size 32 --agents 8 --seeds 8 \
+  --min-supply 2 --max-supply 3 --trial-candidates 12
 ```
 
-`--constrained`は各日ステップ数と燃料上限をマップ幅に固定する。生成直後のパラメータを使う場合は外す。`--seed-start`で開始シード、`--seeds`で件数を指定する。`--size`を省略すると3サイズを試す。`--selection-ms 0`は相対時間制限なし。
+`--constrained`は各日ステップ数と燃料上限をマップ幅に固定する。生成直後のパラメータを使う場合は外す。`--seed-start`で開始シード、`--seeds`で件数を指定する。`--size`を省略すると3サイズを試す。`--agents`は生成するエージェント数を上書きする。`--min-supply`と`--max-supply`で比較する補給車台数を限定できる。`--trial-candidates`は試走候補数を上書きする。`--selection-ms 0`は相対時間制限なし。
 
 CSV末尾の`completed_scenarios`は選択した候補の試走が完了し、比較に使ったシナリオ数、`timed_out`は時間による比較の打ち切りを示す。短時間の比較では、着手候補数だけでなく、この完了数と選択後の再探索得点を確認する。
 
@@ -26,3 +28,5 @@ CSVの`kinds`は各車の巡回車`P`・補給車`S`を示す。`brands`、`dail
 2026-09-29に既定の試走候補数を8から12へ増やした。制約付き24×24、seed 1〜24、選択上限5秒では、順調条件が5勝17同点2敗、未使用交通が6勝17同点1敗だった。合計は順調が`420/788/861`から`420/795/864`、未使用交通が`417/782/854`から`420/797/866`へ改善し、平均選択時間は1126msから1672msへ増えた。標準設定24×24、seed 1〜8、選択上限3秒では両条件とも全件同点で、上限到達時は従来と同じ先頭候補を評価した。系列数が下がる個別例もあるため、締切内で比較対象を増やす変更として扱う。
 
 2026-09-30の共通日程再利用・行動候補軽量化の比較は[高速化記録](algorithm-speed-results-2026-09-30.md)を参照。
+
+同日の8台構成における補給車台数と候補配分の比較は[8台時の種別選択記録](agent-selection-8-results-2026-09-30.md)を参照。

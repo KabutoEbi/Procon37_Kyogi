@@ -318,6 +318,46 @@ void testMultipleRefuelsInOneDay() {
     assert(validateDailyPlan(s, ms, replanned.plan).valid);
 }
 
+void testSupplyMovesOnlyForRendezvous() {
+    // 目的地へは届くが、到着時に燃料が尽きる。補給車も移動して
+    // 合流し、次の巡回に使える燃料を残す。
+    auto s = line(5, {8}, 4, {0, 0}, {{1, 4, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    auto cfg = smallBeam();
+    cfg.beamWidth = 1;
+    cfg.jointBeamWidth = 1;
+    cfg.maxActionsPerAgent = 1;
+    cfg.adaptiveBeamWidth = false;
+    const auto escorted = brain1(s, ms, {}, cfg);
+    assert(escorted.success && escorted.finalState.dayUdon == 1);
+    assert(validateDailyPlan(s, ms, escorted.plan).valid);
+    assert(std::any_of(
+        escorted.plan[1].begin(), escorted.plan[1].end(),
+        [](std::int32_t action) { return isMoveAction(action); }));
+    assert(escorted.finalState.agents[0].fuel > 0);
+
+    // 緊急補給が不要でも、巡回車を待たせず目的スポットへ先着できる
+    // 補給車は同行し、次の巡回に備えて合流する。
+    s = line(5, {8}, 10, {0, 0}, {{1, 4, 1, -1}});
+    ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    const auto standby = brain1(s, ms, {}, cfg);
+    assert(standby.success && standby.finalState.dayUdon == 1);
+    assert(validateDailyPlan(s, ms, standby.plan).valid);
+    assert(standby.finalState.agents[0].pos == 4);
+    assert(standby.finalState.agents[1].pos == 4);
+    assert(standby.finalState.agents[0].fuel == s.fuelLimit);
+
+    // 補給が不要なら補給車は無目的に移動しない。
+    s = line(3, {4}, 6, {0, 2}, {});
+    ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    const auto idle = brain1(s, ms, {}, cfg);
+    assert(idle.success && idle.finalState.dayUdon == 0);
+    assert(validateDailyPlan(s, ms, idle.plan).valid);
+    assert(std::none_of(
+        idle.plan[1].begin(), idle.plan[1].end(),
+        [](std::int32_t action) { return isMoveAction(action); }));
+}
+
 void testCoordinatedPlanningAndCache() {
     auto s = line(7, {8}, 2, {0, 6, 3},
         {{1, 2, 1, -1}, {2, 4, 1, -1}, {3, 0, 1, -1}});
@@ -710,6 +750,7 @@ int main() {
     testTrafficNeverSchedulesAnUnfinishableMove();
     testRendezvousObstaclesAndMultipleSupplies();
     testMultipleRefuelsInOneDay();
+    testSupplyMovesOnlyForRendezvous();
     testCoordinatedPlanningAndCache();
     testDistanceCache();
     testDetourRendezvousAndTwoSpots();

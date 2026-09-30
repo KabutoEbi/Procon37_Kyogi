@@ -1027,9 +1027,14 @@ private:
             dist, target.spotIndex, start, available - delay, fuel);
         best.required = direct == nullptr;
         const int need = dist.fuel[target.spotIndex][start];
+        const int arrivalFuel = direct != nullptr
+            ? std::max(0, fuel - direct->fuel)
+            : fuel;
         best.fuelShortage = best.required
             ? std::max(1, need < kImpassableCost ? need - fuel : 1)
-            : std::max(0, (setting.fuelLimit + 1) / 2 - fuel);
+            : std::max(
+                  std::max(0, (setting.fuelLimit + 1) / 2 - fuel),
+                  arrivalFuel == 0 ? 1 : 0);
         if (!best.required && best.fuelShortage == 0) return best;
         const CellPos goal = setting.field.spots[target.spotIndex].pos;
         for (const PathLabel& route : dist.pareto[target.spotIndex][start]) {
@@ -1221,12 +1226,80 @@ private:
             flow.addEdge(p + 1, sink, 1, 0);
             const CellPos pos = projectedPosition(state, p);
             const int fuel = projectedFuel(state, p);
+            const CellPos standbyGoal = targets[p].valid
+                ? setting.field.spots[targets[p].spotIndex].pos
+                : kInvalidCell;
+            const int standbyDelay = projectedDelay(state, p);
+            const auto* standbyDirect = targets[p].valid
+                ? constrainedPath(
+                      dist, targets[p].spotIndex, pos,
+                      state.remainingSteps() - standbyDelay, fuel)
+                : nullptr;
+            const int standbyPatrolArrival = standbyDirect != nullptr
+                ? standbyDelay + standbyDirect->steps
+                : kImpassableCost;
+            int standbyFuelShortage = 0;
+            if (standbyDirect != nullptr) {
+                const int arrivalFuel = std::max(0, fuel - standbyDirect->fuel);
+                int nextPriority = 3;
+                int nextFuel = kImpassableCost;
+                const int meetAt = meetingStep(
+                    state, standbyPatrolArrival, standbyPatrolArrival);
+                for (std::size_t i = 0; i < state.spotCount; ++i) {
+                    if (i == targets[p].spotIndex ||
+                        state.remainingStocks[i] <= 0 ||
+                        state.hasAcquired(p, i)) {
+                        continue;
+                    }
+                    const int requiredFuel = dist.fuel[i][standbyGoal];
+                    const int requiredSteps = dist.steps[i][standbyGoal];
+                    if (requiredFuel > setting.fuelLimit ||
+                        requiredSteps > state.remainingSteps() - meetAt) {
+                        continue;
+                    }
+                    const auto bit = brandBit(setting.field.spots[i].brandIndex);
+                    const int priority =
+                        (state.score.matchBrands & bit) == 0 ? 0 :
+                        ((state.dayBrands & bit) == 0 ? 1 : 2);
+                    if (std::make_pair(priority, requiredFuel) <
+                        std::make_pair(nextPriority, nextFuel)) {
+                        nextPriority = priority;
+                        nextFuel = requiredFuel;
+                    }
+                }
+                if (nextFuel < kImpassableCost) {
+                    standbyFuelShortage = std::max(0, nextFuel - arrivalFuel);
+                }
+            }
             for (int q = 0; q < n; ++q) {
                 if (!state.agents[q].isSupply()) continue;
                 auto& meet = pairs[p][q];
                 if (targets[p].valid) {
                     meet = findRendezvous(
                         state, p, targets[p], setting, matchState, dist, q, memo);
+                    // 緊急の補給点がなくても、補給車が巡回車の次の
+                    // スポットへ先着できるなら待機地点として割り当てる。
+                    // 巡回車の到着を遅らせず、一対一割当の中で競合も避ける。
+                    if (!meet.valid) {
+                        const int travel = dist.travel[
+                            projectedPosition(state, q)][standbyGoal];
+                        const int supplyArrival = projectedDelay(state, q) + travel;
+                        const int meetAt = meetingStep(
+                            state, standbyPatrolArrival, supplyArrival);
+                        if (standbyDirect != nullptr && travel < kImpassableCost &&
+                            supplyArrival <= standbyPatrolArrival &&
+                            meetAt <= state.remainingSteps()) {
+                            meet.pos = standbyGoal;
+                            meet.supply = q;
+                            meet.patrolArrival = standbyPatrolArrival;
+                            meet.supplyArrival = supplyArrival;
+                            meet.supplyTravel = travel;
+                            meet.fuelShortage = standbyFuelShortage;
+                            meet.goalArrival = meetAt;
+                            meet.path = *standbyDirect;
+                            meet.valid = true;
+                        }
+                    }
                 } else if (setting.field.at(pos).hasSpot() && fuel < setting.fuelLimit) {
                     const int travel = dist.travel[projectedPosition(state, q)][pos];
                     const int arrival = projectedDelay(state, q) + travel;

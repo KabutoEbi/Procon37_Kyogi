@@ -360,18 +360,9 @@ public:
                 if (found != cs.end())
                     trials.push_back(static_cast<std::size_t>(found - cs.begin()));
             }
-            // 同じ最小補給台数でも位置が違えば結果は大きく変わる。
-            // 多台数の広域配置を試す前に、その次善案を1つ確保する。
-            for (std::size_t i = 0; i < cs.size() &&
-                 trials.size() < cfg.trialCandidateLimit; ++i) {
-                if (cs[i].supplyCount != cfg.minSupplyCount ||
-                    std::find(trials.begin(), trials.end(), i) != trials.end())
-                    continue;
-                trials.push_back(i);
-                break;
-            }
-            // 残りの枠では補給車を広く置く候補も試す。
-            for (std::int32_t count = std::max<std::int32_t>(2, cfg.minSupplyCount);
+            // 各台数について、距離評価とは性質の異なる広域配置も試す。
+            // 特定の台数の位置違いだけで候補枠を消費しない。
+            for (std::int32_t count = cfg.minSupplyCount;
                  count <= maxSupply && trials.size() < cfg.trialCandidateLimit;
                  ++count) {
                 std::size_t spread = cs.size();
@@ -385,6 +376,34 @@ public:
                 }
                 if (spread != cs.size()) trials.push_back(spread);
             }
+            // 残りは「補給車1台で巡回車およそ2台」を中心に配分する。
+            // 8台時は補給2台・3台の位置違いを交互に追加し、1台・4台の
+            // 位置違いで候補枠を使い切らない。各台数の最良・広域配置は
+            // 上で既に1件ずつ確保している。
+            const std::int32_t preferredSupply = std::clamp(
+                static_cast<std::int32_t>((n + 1) / 3),
+                cfg.minSupplyCount, maxSupply);
+            std::array<std::int32_t, 2> focusedCounts{
+                preferredSupply,
+                std::max(cfg.minSupplyCount, preferredSupply - 1),
+            };
+            bool added = true;
+            while (added && trials.size() < cfg.trialCandidateLimit) {
+                added = false;
+                for (const std::int32_t count : focusedCounts) {
+                    if (trials.size() >= cfg.trialCandidateLimit) break;
+                    for (std::size_t i = 0; i < cs.size(); ++i) {
+                        if (cs[i].supplyCount != count ||
+                            std::find(trials.begin(), trials.end(), i) !=
+                                trials.end()) {
+                            continue;
+                        }
+                        trials.push_back(i);
+                        added = true;
+                        break;
+                    }
+                }
+            }
             for (std::size_t i = 0;
                  i < cs.size() && trials.size() < cfg.trialCandidateLimit; ++i) {
                 if (std::find(trials.begin(), trials.end(), i) == trials.end())
@@ -393,16 +412,6 @@ public:
         }
 
         const Candidate* best = &cs.front();
-        // 短い締切では補給車多数の配置までしか届かず、最小補給台数の
-        // 別配置を試せない。台数の比較を1回残したうえで、位置の次善案を試す。
-        for (std::size_t t = 2; t < trials.size(); ++t) {
-            if (cs[trials[t]].supplyCount == cfg.minSupplyCount) {
-                std::rotate(trials.begin() + 2,
-                            trials.begin() + static_cast<std::ptrdiff_t>(t),
-                            trials.begin() + static_cast<std::ptrdiff_t>(t + 1));
-                break;
-            }
-        }
         EvaluationBreakdown bestEval{};
         TrialScore bestWorst{}, bestTotal{};
         bool tried = false;

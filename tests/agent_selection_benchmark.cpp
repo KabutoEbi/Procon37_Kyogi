@@ -11,7 +11,9 @@
 
 int main(int argc, char** argv) {
     using namespace benzen;
-    int sizeOnly = 0, seedStart = 1, seeds = 3;
+    int sizeOnly = 0, agentOnly = 0, seedStart = 1, seeds = 3;
+    int minSupply = -1, maxSupply = -1;
+    int trialCandidates = -1;
     int selectionMs = 5000;
     bool constrained = false;
     try {
@@ -28,13 +30,22 @@ int main(int argc, char** argv) {
             if (consumed != argument.size())
                 throw std::invalid_argument("invalid option value: " + argument);
             if (option == "--size") sizeOnly = value;
+            else if (option == "--agents") agentOnly = value;
             else if (option == "--seed-start") seedStart = value;
             else if (option == "--seeds") seeds = value;
             else if (option == "--selection-ms") selectionMs = value;
+            else if (option == "--min-supply") minSupply = value;
+            else if (option == "--max-supply") maxSupply = value;
+            else if (option == "--trial-candidates") trialCandidates = value;
             else throw std::invalid_argument("unknown option: " + option);
         }
         if ((sizeOnly != 0 && sizeOnly != 16 && sizeOnly != 24 && sizeOnly != 32) ||
             seedStart <= 0 || seeds <= 0 || selectionMs < 0 ||
+            (agentOnly != 0 &&
+             (agentOnly < 2 || agentOnly > static_cast<int>(kMaxAgents))) ||
+            minSupply < -1 || maxSupply < -1 ||
+            trialCandidates < -1 ||
+            (minSupply >= 0 && maxSupply >= 0 && minSupply > maxSupply) ||
             seedStart > std::numeric_limits<int>::max() - seeds)
             throw std::invalid_argument("invalid benchmark parameter");
 
@@ -46,7 +57,8 @@ int main(int argc, char** argv) {
             for (int seed = seedStart; seed < seedStart + seeds; ++seed) {
                 CreateConfig create;
                 create.width = create.height = size;
-                create.agentCount = size == 16 ? 4 : size == 24 ? 5 : 7;
+                create.agentCount = agentOnly > 0
+                    ? agentOnly : (size == 16 ? 4 : size == 24 ? 5 : 7);
                 create.spotCount = size;
                 create.brandCount = size == 16 ? 12 : size == 24 ? 18 : 24;
                 create.seed = static_cast<std::uint64_t>(seed);
@@ -57,6 +69,12 @@ int main(int argc, char** argv) {
                 }
 
                 AgentSelectorConfig select;
+                if (minSupply >= 0) select.minSupplyCount = minSupply;
+                if (maxSupply >= 0) select.maxSupplyCount = maxSupply;
+                if (trialCandidates >= 0) {
+                    select.trialCandidateLimit =
+                        static_cast<std::size_t>(trialCandidates);
+                }
                 select.timeLimitMs = selectionMs;
                 select.safetyMarginMs = 0;
                 select.trialBeamWidth = 8;
