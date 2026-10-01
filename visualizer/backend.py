@@ -36,6 +36,14 @@ class Paused(WorkflowError):
     pass
 
 
+def _option_arguments(values: dict[str, int], excluded: tuple[str, ...] = ()) -> list[str]:
+    arguments: list[str] = []
+    for name, value in values.items():
+        if name not in excluded:
+            arguments.extend(["--" + name.replace("_", "-"), str(value)])
+    return arguments
+
+
 @dataclass(frozen=True)
 class SearchParameters:
     beam_width: int = 128
@@ -54,17 +62,15 @@ class SearchParameters:
     clock_margin_ms: int = 1000
 
     def arguments(self) -> list[str]:
-        result = []
-        for name, value in vars(self).items():
+        values = vars(self)
+        for name, value in values.items():
             if type(value) is not int or not 0 <= value <= 2147483647:
                 raise WorkflowError(f"{name}: 0以上の整数を指定してください")
             if name.endswith("width") and value == 0:
                 raise WorkflowError(f"{name}: 1以上を指定してください")
             if name in ("macro_actions", "adaptive_beam") and value not in (0, 1):
                 raise WorkflowError(f"{name}: 0または1を指定してください")
-            if name not in ("send_reserve_ms", "clock_margin_ms"):
-                result.extend(["--" + name.replace("_", "-"), str(value)])
-        return result
+        return _option_arguments(values, ("send_reserve_ms", "clock_margin_ms"))
 
 
 @dataclass(frozen=True)
@@ -100,12 +106,7 @@ class RandomSettingParameters:
             )
         if type(self.brands) is not int or not 1 <= self.brands <= self.spots:
             raise WorkflowError("brands: 1以上spots以下で指定してください")
-        result: list[str] = []
-        for name, value in values.items():
-            if name == "include_congestion":
-                continue
-            result.extend(["--" + name, str(value)])
-        return result
+        return _option_arguments(values, ("include_congestion",))
 
 
 @dataclass(frozen=True)
@@ -564,6 +565,17 @@ def map_acquisition_totals(setting_path: Path) -> tuple[int, int]:
     return total_udon, total_brands
 
 
+def _day_duration(setting: dict[str, Any], day: int) -> float:
+    """設定から指定日の制限時間を検証して返す。"""
+    durations = setting.get("daySeconds")
+    if not isinstance(durations, list) or not 0 <= day < len(durations):
+        raise WorkflowError("設定から当日の試合時間を取得できません")
+    duration = durations[day]
+    if type(duration) not in (int, float):
+        raise WorkflowError("設定のdaySecondsが不正です")
+    return float(duration)
+
+
 class Workflow:
     def __init__(
         self,
@@ -584,6 +596,10 @@ class Workflow:
     def check_stop(self) -> None:
         if self.stop.is_set():
             raise Paused("停止しました。自動実行は同じ段階から再開できます")
+
+    def _require_solver(self) -> None:
+        if not self.solver.is_file():
+            raise WorkflowError(f"ソルバーがありません: {self.solver}")
 
     def _run(self, arguments: list[str], *, cwd: Path | None = None,
              ends_at: float = 0, day_seconds: float = 0,
@@ -706,8 +722,7 @@ class Workflow:
         parameters: RandomSettingParameters,
     ) -> CommandResult:
         self.check_stop()
-        if not self.solver.is_file():
-            raise WorkflowError(f"ソルバーがありません: {self.solver}")
+        self._require_solver()
         output = output.expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         temporary = output.with_name(output.name + ".generate")
@@ -790,8 +805,7 @@ class Workflow:
         self._require_no_pending("agents")
         marker = self.work_dir / "selected-agents.json"
         marker.unlink(missing_ok=True)
-        if not self.solver.is_file():
-            raise WorkflowError(f"ソルバーがありません: {self.solver}")
+        self._require_solver()
         result = self._run(["select", str(setting.resolve()), str(output.resolve())],
                            ends_at=read_json(setting).get("startsAt", 0))
         atomic_write(marker, json.dumps({
@@ -811,15 +825,9 @@ class Workflow:
         if day > 0:
             self._require_no_pending(f"day{day - 1}")
         self._invalidate_answer()
-        if not self.solver.is_file():
-            raise WorkflowError(f"ソルバーがありません: {self.solver}")
+        self._require_solver()
         setting_value = read_json(setting)
-        durations = setting_value.get("daySeconds")
-        if not isinstance(durations, list) or not 0 <= day < len(durations):
-            raise WorkflowError("設定から当日の試合時間を取得できません")
-        day_duration = durations[day]
-        if type(day_duration) not in (int, float):
-            raise WorkflowError("設定のdaySecondsが不正です")
+        duration = _day_duration(setting_value, day)
         if day > 0 and checkpoint is None:
             raise WorkflowError("day 1以降は得点チェックポイントが必要です")
         if checkpoint is not None and read_json(checkpoint).get("nextDay") != day:
@@ -830,7 +838,7 @@ class Workflow:
         result = self._run(
             arguments,
             ends_at=daily.get("endsAt", 0),
-            day_seconds=float(day_duration),
+            day_seconds=duration,
             reserve_for_submission=True,
         )
         answer = self.work_dir / "answer.json"
@@ -901,12 +909,9 @@ class Workflow:
         self._invalidate_answer()
         result_state = self.work_dir / "result-state.json"
         result_state.unlink(missing_ok=True)
-        if not self.solver.is_file():
-            raise WorkflowError(f"ソルバーがありません: {self.solver}")
+        self._require_solver()
         setting_value = read_json(setting)
-        durations = setting_value.get("daySeconds")
-        if not isinstance(durations, list) or not durations or type(durations[0]) not in (int, float):
-            raise WorkflowError("設定から1日の試合時間を取得できません")
+        duration = _day_duration(setting_value, 0)
         arguments = [str(setting.resolve())]
         if "localTraffics" in setting_value:
             kinds_path = self.work_dir / "local-agents.json"
@@ -925,7 +930,7 @@ class Workflow:
             state_path = self.work_dir / "local-state.json"
             atomic_write(state_path, json.dumps(initial).encode())
             arguments.append(str(state_path))
-        result = self._run(arguments, day_seconds=float(durations[0]))
+        result = self._run(arguments, day_seconds=duration)
         if not result_state.is_file():
             raise WorkflowError("ソルバーが探索後状態 result-state.json を生成しませんでした")
         if "localTraffics" in setting_value:

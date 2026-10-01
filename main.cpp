@@ -5,13 +5,42 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <string>
 #include <string_view>
 #include <vector>
 
 namespace {
 
 using namespace benzen;
+
+constexpr const char* kAgentsPath = "agents.json";
+constexpr const char* kAnswerPath = "answer.json";
+constexpr const char* kScorePath = "score-next.json";
+constexpr const char* kStatePath = "result-state.json";
+
+AgentSelectionResult selectKinds(const MatchSetting& setting,
+                                 const SolverOptions& options) {
+    auto result = selectAgentKinds(setting, options.selectorFor(setting));
+    if (!result.success) std::cerr << "failed to select agent kinds\n";
+    return result;
+}
+
+bool reportWrite(bool success, const char* path) {
+    if (!success) std::cerr << "failed to write " << path << '\n';
+    return success;
+}
+
+void printMainUsage(const char* program) {
+    std::cerr << "usage: " << program
+              << " [match-setting.json [match-state.json"
+                 " [score-checkpoint.json]]]\n"
+              << "       " << program
+              << " select match-setting.json [agents.json]\n"
+              << "       " << program
+              << " solve match-setting.json match-state.json"
+                 " [score-checkpoint.json]\n"
+              << "       " << program
+              << " generate [random-setting.json] [options]\n";
+}
 
 int runSelection(int argc, char* argv[], const SolverOptions& options) {
     if (argc < 3 || argc > 4) {
@@ -20,14 +49,10 @@ int runSelection(int argc, char* argv[], const SolverOptions& options) {
         return 1;
     }
     const auto setting = readMatchSettingJson(argv[2]);
-    const auto selected = selectAgentKinds(setting, options.selectorFor(setting));
-    if (!selected.success) {
-        std::cerr << "failed to select agent kinds\n";
-        return 1;
-    }
-    const std::string output = argc == 4 ? argv[3] : "agents.json";
-    if (!writeAgentKindsJson(selected.kinds, output)) {
-        std::cerr << "failed to write " << output << '\n';
+    const auto selected = selectKinds(setting, options);
+    if (!selected.success) return 1;
+    const char* output = argc == 4 ? argv[3] : kAgentsPath;
+    if (!reportWrite(writeAgentKindsJson(selected.kinds, output), output)) {
         return 1;
     }
     std::cout << "agents-json=" << output
@@ -56,6 +81,91 @@ bool loadScore(const char* path, const MatchSetting& setting,
     return true;
 }
 
+int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options) {
+    const auto setting = argc > firstArg
+        ? readMatchSettingJson(argv[firstArg])
+        : create(CreateConfig{}, "problem.json").setting;
+
+    MatchState state;
+    std::vector<AgentKind> kinds;
+    if (argc > firstArg + 1) {
+        state = readMatchStateJson(argv[firstArg + 1], setting);
+        kinds.reserve(state.agents.size());
+        for (const auto& agent : state.agents) kinds.push_back(agent.kind);
+    } else {
+        const auto selected = selectKinds(setting, options);
+        if (!selected.success) return 1;
+        kinds = selected.kinds;
+        state = makeInitialState(setting, kinds);
+        if (selected.timedOut) {
+            std::cerr << "agent selection stopped at deadline\n";
+        }
+    }
+
+    if (!reportWrite(writeAgentKindsJson(kinds, kAgentsPath), kAgentsPath)) {
+        return 1;
+    }
+
+    ScoreState score;
+    const char* checkpointPath = argc > firstArg + 2 ? argv[firstArg + 2] : nullptr;
+    if (!loadScore(checkpointPath, setting, state, score)) return 1;
+
+    auto config = options.beam;
+    if (state.endsAt == 0 && !options.hasTimeLimit) {
+        // sample_maps等のオフライン実行も無制限にしない。
+        config.timeLimitMs = std::min<std::int64_t>(
+            5000,
+            static_cast<std::int64_t>(setting.daySeconds[
+                static_cast<std::size_t>(state.day)]) * 1000);
+    }
+
+    std::cout << "parameters beam-width=" << config.beamWidth
+              << " joint-beam-width=" << config.jointBeamWidth
+              << " threads=" << config.threadCount
+              << " time-limit-ms=" << config.timeLimitMs
+              << " safety-margin-ms=" << config.safetyMarginMs << '\n';
+
+    const auto result = solveDay(setting, state, score, config);
+    if (!result.success) {
+        std::cerr << "failed to construct even a wait plan\n";
+        return 1;
+    }
+
+    const auto validation = validateDailyPlan(setting, state, result.plan, score);
+    if (!validation.valid) {
+        std::cerr << "refusing to write invalid plan: "
+                  << simulationErrorMessage(validation.failure.error)
+                  << '\n';
+        return 1;
+    }
+    if (!reportWrite(writePlanJson(result.plan, kAnswerPath), kAnswerPath)) {
+        return 1;
+    }
+    const ScoreCheckpoint checkpoint{
+        state.day + 1,
+        result.finalState.score,
+    };
+    if (!reportWrite(
+            writeScoreCheckpointJson(checkpoint, kScorePath), kScorePath)) {
+        return 1;
+    }
+    if (!reportWrite(
+            writeResultStateJson(result.finalState, kStatePath), kStatePath)) {
+        return 1;
+    }
+
+    ConsoleConfig consoleConfig;
+    consoleConfig.showFinalMap = false;
+    consoleConfig.showPlan = false;
+    consoleConfig.showTrace = false;
+    printConsoleReport(std::cout, setting, state, result, score, consoleConfig);
+    std::cout << "\nanswer-json=" << kAnswerPath
+              << "\nagents-json=" << kAgentsPath
+              << "\nnext-score-json=" << kScorePath
+              << "\nresult-state-json=" << kStatePath << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -63,131 +173,23 @@ int main(int argc, char* argv[]) {
         if (argc >= 2 && std::string_view(argv[1]) == "generate") {
             benzen::ApplicationConfig defaults;
             defaults.outputPath = "random-setting.json";
-            return benzen::createMatchSetting(
-                argc - 2, argv + 2, defaults);
+            return benzen::createMatchSetting(argc - 2, argv + 2, defaults);
         }
         auto options = benzen::SolverOptions::parse(argc, argv);
         argc = static_cast<int>(options.positional.size());
         argv = options.positional.data();
-        const bool selectMode = argc >= 2 && std::string_view(argv[1]) == "select";
-        const bool solveMode = argc >= 2 && std::string_view(argv[1]) == "solve";
-        if (selectMode) return runSelection(argc, argv, options);
+        const std::string_view command = argc >= 2 ? argv[1] : "";
+        if (command == "select") return runSelection(argc, argv, options);
+        const bool solveMode = command == "solve";
 
         const int firstArg = solveMode ? 2 : 1;
         if ((solveMode && (argc < 4 || argc > 5)) ||
             (!solveMode && argc > 4)) {
-            std::cerr << "usage: " << argv[0]
-                      << " [match-setting.json [match-state.json"
-                         " [score-checkpoint.json]]]\n"
-                      << "       " << argv[0]
-                      << " select match-setting.json [agents.json]\n"
-                      << "       " << argv[0]
-                      << " solve match-setting.json match-state.json"
-                         " [score-checkpoint.json]\n"
-                      << "       " << argv[0]
-                      << " generate [random-setting.json] [options]\n";
+            printMainUsage(argv[0]);
             return 1;
         }
 
-        benzen::MatchSetting setting;
-        if (argc > firstArg) {
-            setting = benzen::readMatchSettingJson(argv[firstArg]);
-        } else {
-            setting = benzen::create(
-                benzen::CreateConfig{}, "problem.json").setting;
-        }
-
-        benzen::MatchState st;
-        std::vector<benzen::AgentKind> kinds;
-        if (argc > firstArg + 1) {
-            st = benzen::readMatchStateJson(argv[firstArg + 1], setting);
-            kinds.reserve(st.agents.size());
-            for (const auto& agent : st.agents) kinds.push_back(agent.kind);
-        } else {
-            const auto sel = benzen::selectAgentKinds(
-                setting, options.selectorFor(setting));
-            if (!sel.success) {
-                std::cerr << "failed to select agent kinds\n";
-                return 1;
-            }
-            kinds = sel.kinds;
-            st = benzen::makeInitialState(setting, kinds);
-            if (sel.timedOut) {
-                std::cerr << "agent selection stopped at deadline\n";
-            }
-        }
-
-        if (!benzen::writeAgentKindsJson(kinds, "agents.json")) {
-            std::cerr << "failed to write agents.json\n";
-            return 1;
-        }
-
-        benzen::ScoreState previousScore;
-        const char* scorePath = argc > firstArg + 2 ? argv[firstArg + 2] : nullptr;
-        if (!loadScore(scorePath, setting, st, previousScore)) return 1;
-
-        auto beam = options.beam;
-        if (st.endsAt == 0 && !options.hasTimeLimit) {
-            // sample_maps等のオフライン実行も無制限にしない。
-            beam.timeLimitMs = std::min<std::int64_t>(
-                5000,
-                static_cast<std::int64_t>(setting.daySeconds[
-                    static_cast<std::size_t>(st.day)]) * 1000);
-        }
-
-        std::cout << "parameters beam-width=" << beam.beamWidth
-                  << " joint-beam-width=" << beam.jointBeamWidth
-                  << " threads=" << beam.threadCount
-                  << " time-limit-ms=" << beam.timeLimitMs
-                  << " safety-margin-ms=" << beam.safetyMarginMs << '\n';
-
-        const auto ans = benzen::solveDay(
-            setting, st, previousScore, beam);
-        if (!ans.success) {
-            std::cerr << "failed to construct even a wait plan\n";
-            return 1;
-        }
-
-        const auto validation = benzen::validateDailyPlan(
-            setting, st, ans.plan, previousScore);
-        if (!validation.valid) {
-            std::cerr << "refusing to write invalid plan: "
-                      << benzen::simulationErrorMessage(
-                             validation.failure.error)
-                      << '\n';
-            return 1;
-        }
-        constexpr const char* answerPath = "answer.json";
-        if (!benzen::writePlanJson(ans.plan, answerPath)) {
-            std::cerr << "failed to write " << answerPath << '\n';
-            return 1;
-        }
-        const benzen::ScoreCheckpoint nextCheckpoint{
-            st.day + 1,
-            ans.finalState.score,
-        };
-        if (!benzen::writeScoreCheckpointJson(
-                nextCheckpoint, "score-next.json")) {
-            std::cerr << "failed to write score-next.json\n";
-            return 1;
-        }
-        constexpr const char* resultStatePath = "result-state.json";
-        if (!benzen::writeResultStateJson(ans.finalState, resultStatePath)) {
-            std::cerr << "failed to write " << resultStatePath << '\n';
-            return 1;
-        }
-
-        benzen::ConsoleConfig console;
-        console.showFinalMap = false;
-        console.showPlan = false;
-        console.showTrace = false;
-        benzen::printConsoleReport(
-            std::cout, setting, st, ans, previousScore, console);
-        std::cout << "\nanswer-json=" << answerPath
-                  << "\nagents-json=agents.json"
-                  << "\nnext-score-json=score-next.json"
-                  << "\nresult-state-json=" << resultStatePath << '\n';
-        return 0;
+        return runSolver(argc, argv, firstArg, options);
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
         return 1;

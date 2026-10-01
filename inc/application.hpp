@@ -112,6 +112,42 @@ inline ApplicationConfig parseOptions(
     return cfg;
 }
 
+template <class Printer>
+bool writeJsonFile(const std::string& path, Printer&& print) {
+    std::ofstream output(path);
+    return output && print(output) && static_cast<bool>(output);
+}
+
+inline void printCreatedProblem(
+    std::ostream& output,
+    const std::string& path,
+    const GeneratedProblem& problem) {
+    output << "created " << path
+           << " (seed=" << problem.seed
+           << ", map=" << problem.setting.field.width << 'x'
+           << problem.setting.field.height
+           << ", agents=" << problem.setting.agentCount()
+           << ", spots=" << problem.setting.field.spots.size()
+           << ", brands=" << problem.setting.field.brands.size()
+           << ")\n";
+}
+
+template <class Writer>
+int createProblem(
+    int argc,
+    char* argv[],
+    const ApplicationConfig& defaults,
+    Writer&& write) {
+    const ApplicationConfig options = parseOptions(argc, argv, true, defaults);
+    const GeneratedProblem problem = ProblemCreator::generate(options.createConfig);
+    if (!write(problem, options.outputPath)) {
+        std::cerr << "failed to write: " << options.outputPath << '\n';
+        return 1;
+    }
+    printCreatedProblem(std::cout, options.outputPath, problem);
+    return 0;
+}
+
 }  // namespace application_detail
 
 inline void printUsage(std::ostream& output, const char* program) {
@@ -238,10 +274,10 @@ inline bool writeAgentKindsJson(
             })) {
         return false;
     }
-    std::ofstream output(path);
-    if (!output) return false;
-    printAgentKinds(output, kinds);
-    return static_cast<bool>(output);
+    return application_detail::writeJsonFile(path, [&](std::ostream& output) {
+        printAgentKinds(output, kinds);
+        return true;
+    });
 }
 
 inline void printScoreCheckpoint(
@@ -264,10 +300,10 @@ inline bool writeScoreCheckpointJson(
         (checkpoint.score.matchBrands >> kMaxBrands) != 0) {
         return false;
     }
-    std::ofstream output(path);
-    if (!output) return false;
-    printScoreCheckpoint(output, checkpoint);
-    return static_cast<bool>(output);
+    return application_detail::writeJsonFile(path, [&](std::ostream& output) {
+        printScoreCheckpoint(output, checkpoint);
+        return true;
+    });
 }
 
 // 探索終了時の表示に必要な自チーム状態とスポット残在庫を保存する。
@@ -313,44 +349,30 @@ inline bool printResultStateJson(
 inline bool writeResultStateJson(
     const GameState& state,
     const std::string& path = "result-state.json") {
-    std::ofstream output(path);
-    return output && printResultStateJson(output, state);
+    return application_detail::writeJsonFile(path, [&](std::ostream& output) {
+        return printResultStateJson(output, state);
+    });
 }
 
 // POST / の本文と同じJSON配列をファイルへ保存する。
 inline bool writePlanJson(
     const DailyPlan& plan,
     const std::string& path = "answer.json") {
-    std::ofstream output(path);
-    if (!output) {
-        return false;
-    }
-    printPlan(output, plan);
-    return static_cast<bool>(output);
+    return application_detail::writeJsonFile(path, [&](std::ostream& output) {
+        printPlan(output, plan);
+        return true;
+    });
 }
 
 inline int create(
     int argc,
     char* argv[],
     const ApplicationConfig& defaults = {}) {
-    const ApplicationConfig options = application_detail::parseOptions(
-        argc, argv, true, defaults);
-    const GeneratedProblem problem =
-        ProblemCreator::generate(options.createConfig);
-    if (!ProblemCreator::writeJson(problem, options.outputPath)) {
-        std::cerr << "failed to write: " << options.outputPath << '\n';
-        return 1;
-    }
-
-    std::cout << "created " << options.outputPath
-              << " (seed=" << problem.seed
-              << ", map=" << problem.setting.field.width << 'x'
-              << problem.setting.field.height
-              << ", agents=" << problem.setting.agentCount()
-              << ", spots=" << problem.setting.field.spots.size()
-              << ", brands=" << problem.setting.field.brands.size()
-              << ")\n";
-    return 0;
+    return application_detail::createProblem(
+        argc, argv, defaults,
+        [](const GeneratedProblem& problem, const std::string& path) {
+            return ProblemCreator::writeJson(problem, path);
+        });
 }
 
 // GUIやローカル探索で直接読み込めるGET /setting形式を生成する。
@@ -358,24 +380,11 @@ inline int createMatchSetting(
     int argc,
     char* argv[],
     const ApplicationConfig& defaults = {}) {
-    const ApplicationConfig options = application_detail::parseOptions(
-        argc, argv, true, defaults);
-    const GeneratedProblem problem =
-        ProblemCreator::generate(options.createConfig);
-    if (!ProblemCreator::writeMatchSettingJson(
-            problem.setting, options.outputPath)) {
-        std::cerr << "failed to write: " << options.outputPath << '\n';
-        return 1;
-    }
-    std::cout << "created " << options.outputPath
-              << " (seed=" << problem.seed
-              << ", map=" << problem.setting.field.width << 'x'
-              << problem.setting.field.height
-              << ", agents=" << problem.setting.agentCount()
-              << ", spots=" << problem.setting.field.spots.size()
-              << ", brands=" << problem.setting.field.brands.size()
-              << ")\n";
-    return 0;
+    return application_detail::createProblem(
+        argc, argv, defaults,
+        [](const GeneratedProblem& problem, const std::string& path) {
+            return ProblemCreator::writeMatchSettingJson(problem.setting, path);
+        });
 }
 
 inline int runLocalSolver(

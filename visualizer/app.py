@@ -1421,6 +1421,14 @@ class SolverGUI(tk.Tk):
         total_height = margin * 2 + 1.5 * radius * max(0, snapshot.height - 1)
         offset_x = max(0.0, (canvas_width - total_width) / 2.0)
         offset_y = max(0.0, (canvas_height - total_height) / 2.0)
+
+        def cell_center(pos: int) -> tuple[float, float]:
+            y, x = divmod(pos, snapshot.width)
+            return (
+                offset_x + margin + hex_width * (x + (0.5 if y % 2 == 0 else 0.0)),
+                offset_y + margin + 1.5 * radius * y,
+            )
+
         agent_groups: dict[int, list[Any]] = {}
         for agent in snapshot.agents:
             agent_groups.setdefault(agent.pos, []).append(agent)
@@ -1428,8 +1436,7 @@ class SolverGUI(tk.Tk):
         for y, row in enumerate(snapshot.cells):
             for x, terrain in enumerate(row):
                 pos = y * snapshot.width + x
-                cx = offset_x + margin + hex_width * (x + (0.5 if y % 2 == 0 else 0.0))
-                cy = offset_y + margin + 1.5 * radius * y
+                cx, cy = cell_center(pos)
                 points = []
                 for index in range(6):
                     angle = math.radians(30 + 60 * index)
@@ -1482,11 +1489,7 @@ class SolverGUI(tk.Tk):
                 for start, end in zip(route, route[1:]):
                     points = []
                     for pos in (start, end):
-                        x, y = pos % snapshot.width, pos // snapshot.width
-                        points.extend((
-                            offset_x + margin + hex_width * (x + (0.5 if y % 2 == 0 else 0.0)),
-                            offset_y + margin + 1.5 * radius * y,
-                        ))
+                        points.extend(cell_center(pos))
                     canvas.create_line(
                         *points,
                         fill=self.ROUTE_COLORS[agent_index % len(self.ROUTE_COLORS)],
@@ -1561,27 +1564,55 @@ class SolverGUI(tk.Tk):
         self.json_text.configure(state=tk.DISABLED)
         self.status_var.set(f"表示: {path}")
 
+    def _choose_file(
+        self,
+        variable: tk.StringVar | None,
+        *,
+        initial_dir: Path | str,
+        title: str = "",
+        json_file: bool = False,
+        on_select: Callable[[Path], None] | None = None,
+        show_json: bool = False,
+    ) -> None:
+        options: dict[str, Any] = {
+            "parent": self,
+            "initialdir": initial_dir,
+            "title": title,
+        }
+        if json_file:
+            options["filetypes"] = [("JSON", "*.json")]
+        selected = filedialog.askopenfilename(**options)
+        if not selected:
+            return
+        path = Path(selected)
+        if variable is not None:
+            variable.set(str(path))
+        if on_select is not None:
+            on_select(path)
+        if show_json:
+            self._show_json(path)
+
     def _choose_env(self) -> None:
-        path = filedialog.askopenfilename(parent=self, initialdir=PROJECT_ROOT, title=".envを選択")
-        if path:
-            self.env_var.set(path)
-            self._reload_env()
+        self._choose_file(
+            self.env_var,
+            initial_dir=PROJECT_ROOT,
+            title=".envを選択",
+            on_select=lambda _path: self._reload_env(),
+        )
 
     def _choose_simple_config(self) -> None:
-        path = filedialog.askopenfilename(
-            parent=self,
-            initialdir=DEFAULT_SIMPLE_CONFIG.parent,
+        self._choose_file(
+            self.simple_config_var,
+            initial_dir=DEFAULT_SIMPLE_CONFIG.parent,
             title="簡易サーバー設定JSONを選択",
-            filetypes=[("JSON", "*.json")],
+            json_file=True,
+            on_select=lambda _path: self._reload_simple_teams(),
         )
-        if path:
-            self.simple_config_var.set(path)
-            self._reload_simple_teams()
 
     def _choose_solver(self) -> None:
-        path = filedialog.askopenfilename(parent=self, initialdir=PROJECT_ROOT, title="solverを選択")
-        if path:
-            self.solver_var.set(path)
+        self._choose_file(
+            self.solver_var, initial_dir=PROJECT_ROOT, title="solverを選択"
+        )
 
     def _choose_work_dir(self) -> None:
         path = filedialog.askdirectory(parent=self, initialdir=PROJECT_ROOT, title="作業フォルダを選択")
@@ -1589,23 +1620,30 @@ class SolverGUI(tk.Tk):
             self.work_var.set(path)
 
     def _choose_setting(self) -> None:
-        path = filedialog.askopenfilename(parent=self, initialdir=PROJECT_ROOT, filetypes=[("JSON", "*.json")])
-        if path:
-            self._setting_loaded(Path(path))
-            self._show_json(Path(path))
+        self._choose_file(
+            None,
+            initial_dir=PROJECT_ROOT,
+            json_file=True,
+            on_select=self._setting_loaded,
+            show_json=True,
+        )
 
     def _choose_state(self) -> None:
-        path = filedialog.askopenfilename(parent=self, initialdir=self.work_var.get(), filetypes=[("JSON", "*.json")])
-        if path:
-            self.state_var.set(path)
-            self._state_loaded(Path(path))
-            self._show_json(Path(path))
+        self._choose_file(
+            self.state_var,
+            initial_dir=self.work_var.get(),
+            json_file=True,
+            on_select=self._state_loaded,
+            show_json=True,
+        )
 
     def _choose_score(self) -> None:
-        path = filedialog.askopenfilename(parent=self, initialdir=self.work_var.get(), filetypes=[("JSON", "*.json")])
-        if path:
-            self.score_var.set(path)
-            self._show_json(Path(path))
+        self._choose_file(
+            self.score_var,
+            initial_dir=self.work_var.get(),
+            json_file=True,
+            show_json=True,
+        )
 
 
 def main() -> None:

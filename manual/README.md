@@ -4,6 +4,7 @@
 
 ## ディレクトリ
 
+- [`../IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md): 実装済み機能、残る改善候補、直近の検証結果
 - [`build.md`](build.md): Makefileによるビルド・一括テスト
 - [`inc/`](inc/): C++ヘッダーのAPIと利用例
 - [`tests/`](tests/): テスト・ベンチマーク・重み調整ツールのビルド方法
@@ -35,3 +36,4 @@ make test-core
 - JSON生成物、実行ファイル、`.env`、`runtime/`はGit管理対象外である。
 - `.env`には本物のトークンが入るため、Gitへ追加しない。
 - 回答の送信はGUI、`send_answer.py`、`auto_submit.py`から行える。`main`単体は送信しない。
+- 内部処理を共通化した場合も、公開API、生成ファイル、CLI引数に影響する内容は対応するファイル別マニュアルと`IMPLEMENTATION_STATUS.md`へ同時に反映する。

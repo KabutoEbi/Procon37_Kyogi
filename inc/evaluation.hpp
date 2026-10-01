@@ -87,76 +87,76 @@ struct EvaluationBreakdown {
 };
 
 inline double evaluationTotal(
-    const EvaluationBreakdown& res,
-    const EvaluationWeights& w) noexcept {
-    return w.newBrand * res.newBrandCount +
-           w.dailyBrand * res.dailyBrandCount +
-           w.udon * res.udonCount +
-           w.remainingFuel * res.remainingFuel +
-           w.unusedStep * res.unusedSteps +
-           w.valuableSpotDistance * res.valuableSpotDistance +
-           w.newBrandSpotDistance * res.newBrandSpotDistance +
-           w.dailyBrandSpotDistance * res.dailyBrandSpotDistance +
-           w.targetSlack * res.targetSlack +
-           w.supplyDistance * res.supplyDistance +
-           w.rendezvousMismatch * res.rendezvousMismatch +
-           w.fuelRisk * res.fuelRisk +
-           w.unreachableTarget * res.unreachableTargetCount +
-           w.concentration * res.concentrationCount +
-           w.nextDayNewBrand * res.nextDayNewBrandCount +
-           w.nextDayBrand * res.nextDayBrandCount +
-           w.nextDayUdon * res.nextDayUdonCount +
-           w.nextDayNewBrandApproach * res.nextDayNewBrandApproach +
-           w.nextDayBrandApproach * res.nextDayBrandApproach;
+    const EvaluationBreakdown& result,
+    const EvaluationWeights& weights) noexcept {
+    return weights.newBrand * result.newBrandCount +
+           weights.dailyBrand * result.dailyBrandCount +
+           weights.udon * result.udonCount +
+           weights.remainingFuel * result.remainingFuel +
+           weights.unusedStep * result.unusedSteps +
+           weights.valuableSpotDistance * result.valuableSpotDistance +
+           weights.newBrandSpotDistance * result.newBrandSpotDistance +
+           weights.dailyBrandSpotDistance * result.dailyBrandSpotDistance +
+           weights.targetSlack * result.targetSlack +
+           weights.supplyDistance * result.supplyDistance +
+           weights.rendezvousMismatch * result.rendezvousMismatch +
+           weights.fuelRisk * result.fuelRisk +
+           weights.unreachableTarget * result.unreachableTargetCount +
+           weights.concentration * result.concentrationCount +
+           weights.nextDayNewBrand * result.nextDayNewBrandCount +
+           weights.nextDayBrand * result.nextDayBrandCount +
+           weights.nextDayUdon * result.nextDayUdonCount +
+           weights.nextDayNewBrandApproach * result.nextDayNewBrandApproach +
+           weights.nextDayBrandApproach * result.nextDayBrandApproach;
 }
 
 inline EvaluationBreakdown evaluateGameState(
-    const GameState& st,
-    const EvaluationContext& ctx,
-    const EvaluationWeights& w = {}) noexcept {
-    EvaluationBreakdown res;
-    res.newBrandCount = static_cast<std::int32_t>(countBits(
-        st.score.matchBrands & ~ctx.scoreAtDayStart.matchBrands));
-    res.dailyBrandCount = static_cast<std::int32_t>(countBits(st.dayBrands));
-    res.udonCount = st.score.totalUdon - ctx.scoreAtDayStart.totalUdon;
-    res.unusedSteps = st.remainingSteps();
-    res.concentrationCount = ctx.concentrationCount;
-    res.targetSlack = ctx.targetSlack;
-    res.rendezvousMismatch = ctx.rendezvousMismatch;
-    res.fuelRisk = ctx.fuelRisk;
-    res.unreachableTargetCount = ctx.unreachableTargetCount;
-    res.nextDayNewBrandCount = ctx.nextDayNewBrandCount;
-    res.nextDayBrandCount = ctx.nextDayBrandCount;
-    res.nextDayUdonCount = ctx.nextDayUdonCount;
-    res.nextDayNewBrandApproach = ctx.nextDayNewBrandApproach;
-    res.nextDayBrandApproach = ctx.nextDayBrandApproach;
+    const GameState& state,
+    const EvaluationContext& context,
+    const EvaluationWeights& weights = {}) noexcept {
+    EvaluationBreakdown result;
+    result.newBrandCount = static_cast<std::int32_t>(countBits(
+        state.score.matchBrands & ~context.scoreAtDayStart.matchBrands));
+    result.dailyBrandCount = static_cast<std::int32_t>(countBits(state.dayBrands));
+    result.udonCount = state.score.totalUdon - context.scoreAtDayStart.totalUdon;
+    result.unusedSteps = state.remainingSteps();
+    result.concentrationCount = context.concentrationCount;
+    result.targetSlack = context.targetSlack;
+    result.rendezvousMismatch = context.rendezvousMismatch;
+    result.fuelRisk = context.fuelRisk;
+    result.unreachableTargetCount = context.unreachableTargetCount;
+    result.nextDayNewBrandCount = context.nextDayNewBrandCount;
+    result.nextDayBrandCount = context.nextDayBrandCount;
+    result.nextDayUdonCount = context.nextDayUdonCount;
+    result.nextDayNewBrandApproach = context.nextDayNewBrandApproach;
+    result.nextDayBrandApproach = context.nextDayBrandApproach;
 
-    for (std::size_t i = 0; i < st.agentCount; ++i) {
-        const Agent& a = st.agents[i];
-        if (a.isPatrol()) {
-            res.remainingFuel += a.fuel;
-            if (ctx.nearestValuableSpotSteps[i] < kImpassableCost) {
-                res.valuableSpotDistance += ctx.nearestValuableSpotSteps[i];
-                ++res.valuableSpotAgentCount;
+    for (std::size_t i = 0; i < state.agentCount; ++i) {
+        const Agent& agent = state.agents[i];
+        if (agent.isPatrol()) {
+            result.remainingFuel += agent.fuel;
+            if (context.nearestValuableSpotSteps[i] < kImpassableCost) {
+                result.valuableSpotDistance += context.nearestValuableSpotSteps[i];
+                ++result.valuableSpotAgentCount;
             }
-            if (ctx.nearestNewBrandSpotSteps[i] < kImpassableCost) {
-                res.newBrandSpotDistance +=
-                    ctx.nearestNewBrandSpotSteps[i];
-                ++res.newBrandSpotAgentCount;
+            if (context.nearestNewBrandSpotSteps[i] < kImpassableCost) {
+                result.newBrandSpotDistance +=
+                    context.nearestNewBrandSpotSteps[i];
+                ++result.newBrandSpotAgentCount;
             }
-            if (ctx.nearestDailyBrandSpotSteps[i] < kImpassableCost) {
-                res.dailyBrandSpotDistance +=
-                    ctx.nearestDailyBrandSpotSteps[i];
-                ++res.dailyBrandSpotAgentCount;
+            if (context.nearestDailyBrandSpotSteps[i] < kImpassableCost) {
+                result.dailyBrandSpotDistance +=
+                    context.nearestDailyBrandSpotSteps[i];
+                ++result.dailyBrandSpotAgentCount;
             }
-            if (ctx.nearestSupplySteps[i] < kImpassableCost) {
-                res.supplyDistance += ctx.nearestSupplySteps[i];
+            if (context.nearestSupplySteps[i] < kImpassableCost) {
+                result.supplyDistance += context.nearestSupplySteps[i];
             }
         }
     }
 
-    res.total = evaluationTotal(res, w);
-    return res;
+    result.total = evaluationTotal(result, weights);
+    return result;
 }
 
 }  // namespace benzen
