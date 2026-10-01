@@ -54,11 +54,15 @@ struct BeamSearchConfig {
 
     // 有効な途中解を再シミュレーションして保存する間隔。
     std::size_t incumbentInterval = 4;
+    // 燃料制約の厳しい問題では未実行マクロも完了させ、待機案と比較する。
+    bool completeIncumbentRoutes = true;
 
     // 各エージェントで残す合法行動数。0なら全候補を残す。
     std::size_t maxActionsPerAgent = 4;
     bool adaptiveActionLimit = true;
     bool autoTuneWeights = true;
+    // 燃料制約が厳しく、有効予算300ms以下の場合だけ使う重み補正。
+    bool fuelAwareWeights = true;
     bool useMacroActions = true;
     std::size_t macroTargetLimit = 3;
     // マクロ継続を残しつつ、定期的に別経路も探索する。0なら再検討しない。
@@ -399,7 +403,6 @@ private:
         std::array<ActionLink, kMaxAgents> planTails{};
         std::array<ActionRoutes::Id, kMaxAgents> routes{};
         std::array<CellPos, kMaxAgents> aims{};
-        EvaluationBreakdown evaluation{};
         double orderingScore = 0.0;
         std::uint64_t orderKey = 0;
         std::uint64_t serial = 0;
@@ -1653,12 +1656,20 @@ private:
     static EvaluationWeights tunedWeights(
         const MatchSetting& setting,
         const MatchState& state,
-        const BeamSearchConfig& config) noexcept {
+        const BeamSearchConfig& config,
+        std::int64_t budgetMs) noexcept {
         EvaluationWeights weights = config.weights;
         if (!config.autoTuneWeights) {
             return weights;
         }
 
+        if (config.fuelAwareWeights && budgetMs > 0 && budgetMs <= 300 &&
+            setting.fuelLimit < setting.daySteps.front()) {
+            weights.remainingFuel /= 1.5;
+            weights.newBrandSpotDistance *= 1.5;
+            weights.nextDayUdon /= 1.5;
+            weights.nextDayBrandApproach /= 1.5;
+        }
         const std::int32_t steps = setting.daySteps[
             static_cast<std::size_t>(state.day)];
         const double fuelRatio = static_cast<double>(setting.fuelLimit) /
@@ -1925,11 +1936,26 @@ public:
         using Clock = std::chrono::steady_clock;
         const auto started = Clock::now();
         BeamSearchResult res;
+        BeamSearchResult routeBest;
+        const auto officialScore = [](const GameState& state) {
+            return std::make_tuple(countBits(state.score.matchBrands),
+                state.score.sumOfDailyBrandCounts, state.score.totalUdon);
+        };
         auto cache = std::make_shared<AssignmentCache>();
         auto timings = std::make_shared<PlanningTimings>();
         std::atomic<std::size_t> fullEvals{0};
         std::atomic<std::size_t> reusedEvals{0};
         auto finish = [&](SearchStopReason reason) {
+            // 経路完了案は従来の途中解を上書きせず別に保持する。
+            // 最後に当日の確定得点と翌日を含む評価の両方で改善を確認する。
+            if (routeBest.success && (!res.success ||
+                (officialScore(routeBest.finalState) > officialScore(res.finalState) &&
+                 routeBest.evaluation.total >= res.evaluation.total))) {
+                res.success = true;
+                res.plan = std::move(routeBest.plan);
+                res.finalState = routeBest.finalState;
+                res.evaluation = routeBest.evaluation;
+            }
             if (res.success) {
                 res.plan = compressWaitActions(res.plan);
             }
@@ -2033,7 +2059,7 @@ public:
             return std::min(configured, std::max(minimum, scaled));
         };
 
-        const EvaluationWeights weights = tunedWeights(s, ms, cfg);
+        const EvaluationWeights weights = tunedWeights(s, ms, cfg, budgetMs);
         ParallelExecutor executor(threadCount);
         constexpr std::size_t kArenaReserveLimit = 4'000'000;
         auto cappedProduct = [=](std::size_t lhs, std::size_t rhs) {
@@ -2107,12 +2133,47 @@ public:
         }
         BeamNode root;
         root.state = init;
-        root.evaluation =
-            evaluate(root.state, s, ms, prev, spotDist, weights);
+        root.orderingScore =
+            evaluate(root.state, s, ms, prev, spotDist, weights).total;
         fullEvals.fetch_add(1, std::memory_order_relaxed);
-        root.orderingScore = root.evaluation.total;
         root.orderKey = UINT64_C(1469598103934665603);
 
+        auto considerPlan = [&](DailyPlan plan, bool requireScoreGain = false) {
+            const SimulationResult sim = simulateDay(s, ms, plan, prev);
+            if (!sim.valid) {
+                return;
+            }
+            if (requireScoreGain && hasBest &&
+                officialScore(sim.state) <= officialScore(res.finalState)) return;
+            const EvaluationBreakdown eval = evaluate(
+                sim.state, s, ms, prev, spotDist, weights);
+            fullEvals.fetch_add(1, std::memory_order_relaxed);
+            if (requireScoreGain) {
+                if (!routeBest.success ||
+                    officialScore(sim.state) > officialScore(routeBest.finalState) ||
+                    (officialScore(sim.state) == officialScore(routeBest.finalState) &&
+                     (eval.total > routeBest.evaluation.total ||
+                      (eval.total == routeBest.evaluation.total &&
+                       preferPlan(plan, routeBest.plan))))) {
+                    routeBest.success = true;
+                    routeBest.plan = std::move(plan);
+                    routeBest.finalState = sim.state;
+                    routeBest.evaluation = eval;
+                }
+                return;
+            }
+            if (hasBest &&
+                (eval.total < res.evaluation.total ||
+                 (eval.total == res.evaluation.total &&
+                  !preferPlan(plan, res.plan)))) {
+                return;
+            }
+            hasBest = true;
+            res.success = true;
+            res.plan = std::move(plan);
+            res.finalState = sim.state;
+            res.evaluation = eval;
+        };
         auto consider = [&](const BeamNode& node) {
             DailyPlan plan = actionArena.materialize(
                 node.planTails, node.state.agentCount);
@@ -2127,24 +2188,17 @@ public:
                 }
             }
 
-            const SimulationResult sim = simulateDay(s, ms, plan, prev);
-            if (!sim.valid) {
+            considerPlan(std::move(plan));
+            if (!cfg.completeIncumbentRoutes ||
+                s.fuelLimit >= s.daySteps.front() ||
+                std::all_of(node.routes.begin(), node.routes.end(),
+                    [](ActionRoutes::Id id) { return id == ActionRoutes::none; }))
                 return;
-            }
-            const EvaluationBreakdown eval = evaluate(
-                sim.state, s, ms, prev, spotDist, weights);
-            fullEvals.fetch_add(1, std::memory_order_relaxed);
-            if (hasBest &&
-                (eval.total < res.evaluation.total ||
-                 (eval.total == res.evaluation.total &&
-                  !preferPlan(plan, res.plan)))) {
-                return;
-            }
-            hasBest = true;
-            res.success = true;
-            res.plan = std::move(plan);
-            res.finalState = sim.state;
-            res.evaluation = eval;
+            plan = actionArena.materialize(node.planTails, node.state.agentCount);
+            if (!appendRemainingRoutes(node.state, node.routes, routes, s, ms,
+                                       plan, [&]() { return expired(); })) return;
+            // 開始状態からの合法性と、確定得点の改善を確認してから保存する。
+            considerPlan(std::move(plan), true);
         };
         if (hasBest) {
             res.evaluation = evaluate(
@@ -2477,11 +2531,10 @@ public:
                             static_cast<std::size_t>(delta - 1),
                             std::memory_order_relaxed);
                     }
-                    node.evaluation = evaluate(
-                        node.state, s, ms, prev, spotDist, weights);
+                    node.orderingScore = evaluate(
+                        node.state, s, ms, prev, spotDist, weights).total;
                     fullEvals.fetch_add(
                         1, std::memory_order_relaxed);
-                    node.orderingScore = node.evaluation.total;
                     output.push_back(std::move(node));
                 }
             };
@@ -2557,16 +2610,21 @@ public:
             uniqueIndices,
             dedupScratch);
 
+        EvaluationBreakdown finalEvaluation;
+        const BeamNode* finalBest = nullptr;
         for (BeamNode& node : beam) {
             if (!node.state.finishDay()) {
                 node.orderingScore =
                     -std::numeric_limits<double>::infinity();
                 continue;
             }
-            node.evaluation =
-                evaluate(node.state, s, ms, prev, spotDist, weights);
+            const auto evaluation = evaluate(node.state, s, ms, prev, spotDist, weights);
+            node.orderingScore = evaluation.total;
+            if (finalBest == nullptr || betterNode(node, *finalBest)) {
+                finalBest = &node;
+                finalEvaluation = evaluation;
+            }
             fullEvals.fetch_add(1, std::memory_order_relaxed);
-            node.orderingScore = node.evaluation.total;
         }
         sortAndLimit(beam, 1);
         if (beam.empty() ||
@@ -2580,13 +2638,13 @@ public:
             beam.front().planTails, beam.front().state.agentCount);
         if (validateDailyPlan(s, ms, finalPlan, prev).valid) {
             const BeamNode& best = beam.front();
-            if (!hasBest || best.evaluation.total > res.evaluation.total ||
-                (best.evaluation.total == res.evaluation.total &&
+            if (!hasBest || best.orderingScore > res.evaluation.total ||
+                (best.orderingScore == res.evaluation.total &&
                  preferPlan(finalPlan, res.plan))) {
                 res.success = true;
                 res.plan = finalPlan;
                 res.finalState = best.state;
-                res.evaluation = best.evaluation;
+                res.evaluation = finalEvaluation;
             }
         }
         return finish(

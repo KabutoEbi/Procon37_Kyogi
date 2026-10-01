@@ -59,3 +59,22 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 2026-09-30の合流改善について、固定探索量と1日300ms制限の変更前後比較を[合流改善の比較記録](rendezvous-results-2026-09-30.md)にまとめた。
 
 同日の補給車先回り移動については[補給車移動の比較記録](supply-movement-results-2026-09-30.md)にまとめた。
+
+## 重み・途中解・変更前後の比較（2026-10-01）
+
+- `--current-only`: `--variant`の構成だけを実行する。異なるバイナリの同条件比較用。
+- `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
+- `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。
+- `--no-completion`: 途中解の未実行マクロ経路の完了を無効にする。
+- `--tight-fuel`: 燃料上限を初日ステップ数の半分にする。
+
+```sh
+.build/tools/solver_benchmark --current-only --seed-start 3001 --seeds 3 \
+  --repeats 2 --time-ms 300 --mixed-traffic > current.csv
+# 高速化だけの比較では、重みと途中解保存方式を変更前に合わせる
+.build/tools/solver_benchmark --current-only --legacy-weights --no-completion \
+  --fixed-work --seeds 3 --repeats 1 --mixed-traffic > speed.csv
+```
+
+`--current-only`では別バイナリ間の実行順を自動交替しない。比較側で順序を変えた反復も行う。
+結果は[改善記録](search-improvements-2026-10-01.md)を参照。

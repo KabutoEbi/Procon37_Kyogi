@@ -74,39 +74,38 @@ struct GameStateEqual {
 struct GameStateHash {
     std::size_t operator()(const GameState& st) const noexcept {
         std::size_t h = 0;
-        detail::hashValue(h, st.day);
-        detail::hashValue(h, st.step);
+        // 32bit値をロスなく束ね、依存するhashCombineの回数を減らす。
+        // パディングや未使用配列を読まず、完全比較と同じフィールドを使う。
+        const auto pair = [&](std::int32_t lo, std::int32_t hi) {
+            detail::hashValue(h, static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(lo)) |
+                (static_cast<std::uint64_t>(static_cast<std::uint32_t>(hi)) << 32));
+        };
+        pair(st.day, st.step);
         detail::hashValue(h, st.dayStepLimit);
         detail::hashValue(h, st.agentCount);
         detail::hashValue(h, st.spotCount);
-
         for (std::size_t i = 0; i < st.agentCount; ++i) {
             const Agent& a = st.agents[i];
-            detail::hashValue(h, a.index);
-            detail::hashValue(h, static_cast<std::uint8_t>(a.kind));
-            detail::hashValue(h, a.pos);
-            detail::hashValue(h, a.fuel);
-
             const PendingAction& p = st.pendingActions[i];
-            detail::hashValue(h, p.active);
-            detail::hashValue(h, p.move);
-            detail::hashValue(h, p.rawAction);
-            detail::hashValue(h, p.remainingSteps);
-            detail::hashValue(h, p.from);
-            detail::hashValue(h, p.destination);
-            detail::hashValue(h, p.fuelCost);
+            detail::hashValue(h, a.index);
+            const auto flags = static_cast<std::uint32_t>(a.kind) |
+                (static_cast<std::uint32_t>(p.active) << 8) |
+                (static_cast<std::uint32_t>(p.move) << 9);
+            pair(static_cast<std::int32_t>(flags), p.fuelCost);
+            pair(a.pos, a.fuel);
+            pair(p.rawAction, p.remainingSteps);
+            pair(p.from, p.destination);
             detail::hashValue(h, st.acquiredSpots[i]);
         }
-        for (std::size_t i = 0; i < st.spotCount; ++i) {
-            detail::hashValue(h, st.remainingStocks[i]);
-        }
-
+        std::size_t i = 0;
+        for (; i + 1 < st.spotCount; i += 2)
+            pair(st.remainingStocks[i], st.remainingStocks[i + 1]);
+        if (i < st.spotCount) detail::hashValue(h, st.remainingStocks[i]);
         detail::hashValue(h, st.dayBrands);
-        detail::hashValue(h, st.dayUdon);
+        pair(st.dayUdon, st.score.totalUdon);
         detail::hashValue(h, st.score.matchBrands);
-        detail::hashValue(h, st.score.totalUdon);
-        detail::hashValue(h, st.score.sumOfDailyBrandCounts);
-        detail::hashValue(h, st.finalized);
+        pair(st.score.sumOfDailyBrandCounts, st.finalized ? 1 : 0);
         return h;
     }
 };

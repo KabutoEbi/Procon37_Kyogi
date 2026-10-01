@@ -3,6 +3,7 @@
 #include "trial.hpp"
 
 #include <cmath>
+#include <map>
 #include <ostream>
 #include <random>
 #include <set>
@@ -15,6 +16,7 @@ struct WeightTuningCase {
     MatchSetting setting;
     std::vector<AgentKind> kinds;
     TrialTraffic traffic;
+    std::uint64_t group = 0; // 交通・燃料等の条件別にも退行を検査する。
 };
 
 struct WeightTuningConfig {
@@ -23,6 +25,7 @@ struct WeightTuningConfig {
     std::uint64_t seed = 1;
     double scale = 1.5;
     BeamSearchConfig beam{};
+    bool fixedWork = true; // falseならbeam.timeLimitMsで実運用の短時間評価を行う。
 };
 
 struct WeightTuningResult {
@@ -57,27 +60,54 @@ inline constexpr std::array<WeightParameter, 15> kTunableWeights = {{
     {"nextDayBrandApproach", &EvaluationWeights::nextDayBrandApproach},
 }};
 
-inline TrialScore evaluateWeights(
+inline std::map<std::uint64_t, TrialScore> evaluateWeightGroups(
     const std::vector<WeightTuningCase>& cases, const EvaluationWeights& weights,
     const WeightTuningConfig& config) {
-    TrialScore score{};
+    std::map<std::uint64_t, TrialScore> scores;
     auto beam = config.beam;
     beam.weights = weights;
-    beam.timeLimitMs = 0;
+    if (config.fixedWork) beam.timeLimitMs = 0;
+    else if (beam.timeLimitMs <= 0)
+        throw std::invalid_argument("timed weight evaluation requires a positive time limit");
+    beam.safetyMarginMs = 0;
     beam.useStateDeadline = false;
-    beam.threadCount = 1; // 同一の探索予算による再現可能な比較。
+    beam.threadCount = 1; // 固定探索量なら再現可能。実時間評価には計測変動がある。
     for (const auto& problem : cases) {
         const auto trial = runTrial(problem.setting, problem.kinds, problem.traffic,
                                     beam, config.trialDays);
         if (!trial.success) throw std::runtime_error("weight tuning trial failed");
         const auto value = trialScore(trial.score);
+        auto& score = scores[problem.group];
         for (std::size_t k = 0; k < score.size(); ++k) score[k] += value[k];
     }
-    return score;
+    return scores;
+}
+
+inline TrialScore sumWeightScores(const std::map<std::uint64_t, TrialScore>& groups) {
+    TrialScore sum{};
+    for (const auto& entry : groups)
+        for (std::size_t k = 0; k < sum.size(); ++k) sum[k] += entry.second[k];
+    return sum;
+}
+
+inline bool weightGroupsNotWorse(
+    const std::map<std::uint64_t, TrialScore>& baseline,
+    const std::map<std::uint64_t, TrialScore>& candidate) {
+    for (const auto& entry : baseline) {
+        const auto found = candidate.find(entry.first);
+        if (found == candidate.end() || found->second < entry.second) return false;
+    }
+    return true;
+}
+
+inline TrialScore evaluateWeights(
+    const std::vector<WeightTuningCase>& cases, const EvaluationWeights& weights,
+    const WeightTuningConfig& config) {
+    return sumWeightScores(evaluateWeightGroups(cases, weights, config));
 }
 
 // 固定seedの乗法的座標探索。候補選択は学習集合だけで行い、最後に一度
-// 検証集合を評価する。検証スコアが初期値未満なら初期重みへ戻す。
+// 検証集合を評価する。いずれかの条件群が初期値未満なら初期重みへ戻す。
 inline WeightTuningResult tuneWeights(
     const std::vector<WeightTuningCase>& training,
     const std::vector<WeightTuningCase>& validation,
@@ -92,8 +122,10 @@ inline WeightTuningResult tuneWeights(
                 throw std::invalid_argument("duplicate training/validation case id");
     WeightTuningResult result;
     result.weights = initial;
-    result.trainingBefore = evaluateWeights(training, initial, config);
-    result.validationBefore = evaluateWeights(validation, initial, config);
+    const auto trainingBaseline = evaluateWeightGroups(training, initial, config);
+    result.trainingBefore = sumWeightScores(trainingBaseline);
+    const auto validationBaseline = evaluateWeightGroups(validation, initial, config);
+    result.validationBefore = sumWeightScores(validationBaseline);
     result.trainingAfter = result.trainingBefore;
     result.validationAfter = result.validationBefore;
     std::mt19937_64 random(config.seed);
@@ -112,16 +144,18 @@ inline WeightTuningResult tuneWeights(
         candidate.*member = std::clamp(center.*member * factor,
             std::min(initial.*member / 4.0, initial.*member * 4.0),
             std::max(initial.*member / 4.0, initial.*member * 4.0));
-        const auto score = evaluateWeights(training, candidate, config);
+        const auto groups = evaluateWeightGroups(training, candidate, config);
+        const auto score = sumWeightScores(groups);
         ++result.evaluatedCandidates;
-        if (score > result.trainingAfter) {
+        if (score > result.trainingAfter && weightGroupsNotWorse(trainingBaseline, groups)) {
             result.weights = candidate;
             result.trainingAfter = score;
         }
     }
     if (result.trainingAfter > result.trainingBefore) {
-        result.validationAfter = evaluateWeights(validation, result.weights, config);
-        result.accepted = result.validationAfter >= result.validationBefore;
+        const auto groups = evaluateWeightGroups(validation, result.weights, config);
+        result.validationAfter = sumWeightScores(groups);
+        result.accepted = weightGroupsNotWorse(validationBaseline, groups);
         if (!result.accepted) {
             result.weights = initial;
             result.trainingAfter = result.trainingBefore;

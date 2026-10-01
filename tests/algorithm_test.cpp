@@ -44,6 +44,73 @@ BeamSearchConfig smallBeam() {
     return cfg;
 }
 
+void testCompleteIncumbentRoutes() {
+    auto s = line(3, {6}, 1, {0, 1}, {{1, 2, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    GameState state;
+    assert(state.initialize(s, ms));
+    assert(tryScheduleAction(state, s, ms, 0, 2).error == SimulationError::None);
+    assert(tryScheduleAction(state, s, ms, 1, -6).error == SimulationError::None);
+    assert(advanceSimulationStep(state, s).error == SimulationError::None);
+    assert(state.pendingActions[0].remainingSteps == 1);
+    ActionRoutes routes;
+    std::array<ActionRoutes::Id, kMaxAgents> tails;
+    tails.fill(ActionRoutes::none);
+    // 予約中の移動後、補給してもう1マス。最後の盤外移動は待機へ置換。
+    tails[0] = routes.intern({2, 2});
+    DailyPlan malformed;
+    assert(!appendRemainingRoutes(state, tails, routes, s, ms, malformed, [] { return false; }));
+    DailyPlan plan{{2}, {-6}};
+    assert(appendRemainingRoutes(state, tails, routes, s, ms, plan, [] { return false; }));
+    const auto check = simulateDay(s, ms, plan);
+    assert(check.valid && check.state.score.totalUdon == 1);
+    assert(check.state.agents[0].pos == 2);
+    DailyPlan stopped{{2}, {-6}};
+    assert(!appendRemainingRoutes(state, tails, routes, s, ms, stopped, [] { return true; }));
+    assert(stopped == DailyPlan({{2}, {-6}}));
+
+    // 補給車不在で残燃料が足りなければ、実行不能な経路は送信しない。
+    s.agentStarts.resize(1);
+    ms = stateFor(s, {AgentKind::Patrol});
+    assert(state.initialize(s, ms));
+    assert(tryScheduleAction(state, s, ms, 0, 2).error == SimulationError::None);
+    plan = {{2}};
+    assert(!appendRemainingRoutes(state, tails, routes, s, ms, plan, [] { return false; }));
+}
+
+void testCompletionPreservesIncumbentScore() {
+    for (std::uint64_t seed = 61; seed <= 64; ++seed) {
+        CreateConfig create;
+        create.width = create.height = 8;
+        create.agentCount = 3;
+        create.spotCount = 8;
+        create.brandCount = 5;
+        create.seed = seed;
+        auto s = ProblemCreator::generate(create).setting;
+        s.fuelLimit = std::max(1, s.daySteps.front() / 2);
+        auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Patrol, AgentKind::Supply});
+        for (std::size_t c = 0; c < ms.trafficByPos.size(); ++c)
+            ms.trafficByPos[c] = static_cast<TrafficStatus>((c + seed) % 3);
+        auto cfg = smallBeam();
+        cfg.beamWidth = 8;
+        cfg.jointBeamWidth = 24;
+        cfg.adaptiveBeamWidth = false;
+        cfg.completeIncumbentRoutes = false;
+        const auto baseline = brain1(s, ms, {}, cfg);
+        cfg.fuelAwareWeights = false;
+        const auto unweighted = brain1(s, ms, {}, cfg);
+        assert(unweighted.plan == baseline.plan); // 無期限では短時間用の重みを使わない。
+        cfg.fuelAwareWeights = true;
+        cfg.completeIncumbentRoutes = true;
+        const auto completed = brain1(s, ms, {}, cfg);
+        assert(baseline.success && completed.success);
+        assert(trialScore(completed.finalState.score) >= trialScore(baseline.finalState.score));
+        assert(completed.expandedNodes == baseline.expandedNodes);
+        const auto replay = simulateDay(s, ms, completed.plan);
+        assert(replay.valid && replay.state == completed.finalState);
+    }
+}
+
 void testDialAgainstHeap() {
     CreateConfig cfg;
     cfg.width = cfg.height = 8;
@@ -590,11 +657,32 @@ void testTrialsAndTuning() {
     const auto shorterDirect = runTrial(longMatch, {AgentKind::Patrol}, traffic, cfg, 2);
     assert(shorter.success && prefix.reusedDays == 0 && prefix.laterDays.size() == 1);
     assert(trialScore(shorter.score) == trialScore(shorterDirect.score));
+    const std::map<std::uint64_t, TrialScore> groups{{0, {5, 10, 20}}, {1, {5, 10, 20}}};
+    auto compensated = groups;
+    compensated[0] = {5, 9, 100};
+    compensated[1] = {5, 12, 20};
+    assert(sumWeightScores(compensated) > sumWeightScores(groups));
+    assert(!weightGroupsNotWorse(groups, compensated));
+    assert(weightGroupsNotWorse(groups, groups));
+    compensated[0] = {5, 10, 21};
+    assert(weightGroupsNotWorse(groups, compensated));
+    compensated.erase(0);
+    assert(!weightGroupsNotWorse(groups, compensated));
     WeightTuningCase train{1, s, {AgentKind::Patrol}, {}};
     WeightTuningCase valid{2, s, {AgentKind::Patrol}, {}};
     WeightTuningConfig tuning;
     tuning.candidates = 2;
     tuning.beam = cfg;
+    auto invalidTimed = tuning;
+    invalidTimed.fixedWork = false;
+    invalidTimed.beam.timeLimitMs = 0;
+    bool invalidBudget = false;
+    try {
+        (void)evaluateWeights({train}, {}, invalidTimed);
+    } catch (const std::invalid_argument&) {
+        invalidBudget = true;
+    }
+    assert(invalidBudget);
     const auto first = tuneWeights({train}, {valid}, {}, tuning);
     const auto second = tuneWeights({train}, {valid}, {}, tuning);
     assert(first.evaluatedCandidates == 2);
@@ -770,6 +858,8 @@ void testConsoleReport() {
 } // namespace
 
 int main() {
+    testCompleteIncumbentRoutes();
+    testCompletionPreservesIncumbentScore();
     testDialAgainstHeap();
     testFlowAgainstEnumeration();
     testSearchEquivalence();
