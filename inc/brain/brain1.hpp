@@ -1354,6 +1354,10 @@ private:
     struct AssignmentCache {
         std::mutex mutex;
         std::unordered_map<GameState, Assignments, GameStateHash, GameStateEqual> entries;
+        // ParallelExecutor が複数の探索ノードを同時評価するときだけ
+        // entries の同期が必要。単一スレッド探索では、非常に高頻度な
+        // キャッシュ参照ごとの mutex 取得を避ける。
+        bool synchronized = true;
         std::atomic<std::size_t> hits{0};
         std::atomic<std::size_t> computations{0};
         std::atomic<std::size_t> repairs{0};
@@ -1366,11 +1370,19 @@ private:
         const auto key = canonicalSearchState(state);
         auto& cache = *dist.assignments;
         if (dist.planning.assignmentCacheLimit > 0) {
-            std::lock_guard<std::mutex> lock(cache.mutex);
-            const auto found = cache.entries.find(key);
-            if (found != cache.entries.end()) {
-                ++cache.hits;
-                return found->second;
+            if (cache.synchronized) {
+                std::lock_guard<std::mutex> lock(cache.mutex);
+                const auto found = cache.entries.find(key);
+                if (found != cache.entries.end()) {
+                    ++cache.hits;
+                    return found->second;
+                }
+            } else {
+                const auto found = cache.entries.find(key);
+                if (found != cache.entries.end()) {
+                    ++cache.hits;
+                    return found->second;
+                }
             }
         }
         ++cache.computations;
@@ -1409,10 +1421,17 @@ private:
         for (const auto& meet : result.meets)
             if (meet.detourPrefix) ++cache.detours;
         if (dist.planning.assignmentCacheLimit > 0) {
-            std::lock_guard<std::mutex> lock(cache.mutex);
-            if (cache.entries.size() >= dist.planning.assignmentCacheLimit)
-                cache.entries.clear();
-            cache.entries.emplace(key, result);
+            auto store = [&]() {
+                if (cache.entries.size() >= dist.planning.assignmentCacheLimit)
+                    cache.entries.clear();
+                cache.entries.emplace(key, result);
+            };
+            if (cache.synchronized) {
+                std::lock_guard<std::mutex> lock(cache.mutex);
+                store();
+            } else {
+                store();
+            }
         }
         return result;
     }
@@ -2016,6 +2035,7 @@ public:
             cfg.threadCount == 0 ? hardwareThreads : cfg.threadCount;
         const std::size_t threadCount = std::clamp<std::size_t>(
             requestedThreads, 1, hardwareThreads);
+        cache->synchronized = threadCount > 1;
 
         std::atomic<std::size_t> work{0};
         const std::size_t checkEvery =
