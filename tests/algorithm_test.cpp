@@ -568,6 +568,10 @@ void testDetourRendezvousAndTwoSpots() {
     s.daySteps = {8};
     cfg.beamWidth = cfg.jointBeamWidth = cfg.maxActionsPerAgent = 1;
     cfg.adaptiveBeamWidth = false;
+    cfg.exhaustFeasibleDetours = false;
+    const auto limited = brain1(s, ms, {}, cfg);
+    assert(limited.success && validateDailyPlan(s, ms, limited.plan).valid);
+    cfg.exhaustFeasibleDetours = true;
     const auto faster = brain1(s, ms, {}, cfg);
     assert(faster.success && faster.finalState.dayUdon == 1);
     assert(validateDailyPlan(s, ms, faster.plan).valid);

@@ -67,14 +67,20 @@ struct BeamSearchConfig {
     std::size_t macroTargetLimit = 3;
     // マクロ継続を残しつつ、定期的に別経路も探索する。0なら再検討しない。
     std::size_t macroReplanInterval = 0;
+    // 共同割当の変化で旧巡回先の在庫が他車に予約済み、またはより重要な
+    // 系列が割り当てられた場合、マクロ継続と再計画を併せて探索する。
+    bool reassignStalePatrolRoutes = true;
     bool coordinatedAssignments = true;
     bool detourRendezvous = true;
     bool twoSpotLookahead = true;
+    // 翌日の配置では、全巡回車から遠いスポットを先に担当させる。
+    bool prioritizeHardNextDayTargets = true;
     std::size_t assignmentCacheLimit = 4096;
     // 同一地形・交通条件の距離前計算を呼び出しスレッド内で再利用する。
     // 0なら無効。状態や締切・割当キャッシュは保存しない。
     std::size_t distanceCacheEntries = 8;
     std::size_t detourCandidateLimit = 6;
+    bool exhaustFeasibleDetours = true;
     std::size_t lookaheadCandidateLimit = 6;
     bool profilePlanning = false;
     bool dominancePruning = true;
@@ -150,6 +156,7 @@ private:
         DistanceMatrix fuel;
         std::vector<std::vector<std::vector<PathLabel>>> pareto;
         BeamSearchConfig planning{};
+        bool lightTraffic = true;
         std::shared_ptr<AssignmentCache> assignments;
         std::shared_ptr<PlanningTimings> timings;
         std::function<bool()> stop;
@@ -334,7 +341,8 @@ private:
 
         template <class Function>
         void run(std::size_t workers, Function&& function) {
-            workers = std::clamp<std::size_t>(workers, 1, count_);
+            workers = std::min(
+                count_, std::max<std::size_t>(workers, 1));
             if (workers == 1) {
                 function(0);
                 return;
@@ -871,6 +879,8 @@ private:
         for (int i = 0; i < spots; ++i) flow.reserveEdges(spotBase + i, n + 1);
         std::array<std::array<int, kMaxSpots>, kMaxAgents> edges{};
         std::array<std::array<std::int32_t, kMaxSpots>, kMaxAgents> times{};
+        std::array<std::int32_t, kMaxSpots> futureDifficulty{};
+        futureDifficulty.fill(0);
         for (auto& row : edges) row.fill(-1);
         const std::int64_t timeBound = std::max<std::int64_t>(
             state.dayStepLimit, 4LL * setting.field.cellCount());
@@ -879,6 +889,37 @@ private:
             (currentDay && dist.planning.twoSpotLookahead ? 2 * n + 1 : n + 1) + 1;
         const std::int64_t daily = pickup * (n + 1);
         const std::int64_t fresh = daily * (n + 1);
+        const bool prioritizeHardFuture =
+            !currentDay && dist.planning.prioritizeHardNextDayTargets &&
+            setting.field.cellCount() >= 32U * 32U && dist.lightTraffic &&
+            static_cast<std::size_t>(state.day + 1) < setting.daySteps.size() &&
+            static_cast<std::size_t>(state.day + 2) >= setting.dayCount() &&
+            5LL * setting.fuelLimit <=
+                6LL * setting.daySteps[static_cast<std::size_t>(state.day + 1)];
+        if (prioritizeHardFuture) {
+            std::array<std::int32_t, kMaxBrands> spotsPerBrand{};
+            for (const Spot& spot : setting.field.spots) {
+                ++spotsPerBrand[static_cast<std::size_t>(spot.brandIndex)];
+            }
+            for (int i = 0; i < spots; ++i) {
+                const auto brand = static_cast<std::size_t>(
+                    setting.field.spots[static_cast<std::size_t>(i)].brandIndex);
+                if (spotsPerBrand[brand] != 1) continue;
+                std::int32_t nearest = kImpassableCost;
+                for (int a = 0; a < n; ++a) {
+                    if (!state.agents[a].isPatrol()) continue;
+                    nearest = std::min(
+                        nearest,
+                        dist.steps[i][projectedPosition(state, a)]);
+                }
+                const auto nextDay = static_cast<std::size_t>(state.day + 1);
+                if (nearest < kImpassableCost &&
+                    nextDay < setting.daySteps.size() &&
+                    4LL * nearest >= setting.daySteps[nextDay]) {
+                    futureDifficulty[i] = nearest;
+                }
+            }
+        }
         for (int a = 0; a < n; ++a) {
             if (!state.agents[a].isPatrol()) continue;
             flow.addEdge(0, a + 1, 1, 0);
@@ -942,8 +983,12 @@ private:
                     }
                 }
                 times[a][i] = travel;
+                const std::int64_t preparation =
+                    prioritizeHardFuture
+                        ? 4LL * futureDifficulty[i] : 0;
                 edges[a][i] = flow.addEdge(
-                    a + 1, spotBase + i, 1, travel - pickup - continuation);
+                    a + 1, spotBase + i, 1,
+                    travel - pickup - continuation - preparation);
             }
         }
         for (int i = 0; i < spots; ++i) {
@@ -1145,14 +1190,30 @@ private:
                     candidates.emplace_back(lower, supply, q, cell);
                 }
             }
-            const auto retained = std::min(
-                candidates.size(), dist.planning.detourCandidateLimit);
-            std::partial_sort(candidates.begin(), candidates.begin() +
-                static_cast<std::ptrdiff_t>(retained), candidates.end());
+            const bool exhaustFeasible =
+                dist.planning.exhaustFeasibleDetours &&
+                !setting.daySteps.empty() &&
+                setting.fuelLimit <= setting.daySteps.front();
+            if (!exhaustFeasible) {
+                const auto retained = std::min(
+                    candidates.size(), dist.planning.detourCandidateLimit);
+                std::partial_sort(candidates.begin(), candidates.begin() +
+                    static_cast<std::ptrdiff_t>(retained), candidates.end());
+                candidates.resize(retained);
+            }
+            // 燃料制約が厳しい場合は下界の小さい順に必要な分だけ取り出し、
+            // 合流点へ届かない候補を実経路の確認数へ含めない。
+            std::make_heap(
+                candidates.begin(), candidates.end(), std::greater<Candidate>{});
             std::size_t checked = 0;
-            for (const auto& entry : candidates) {
-                if (checked++ >= dist.planning.detourCandidateLimit ||
-                    (dist.stop && dist.stop())) break;
+            while (!candidates.empty() &&
+                   checked < dist.planning.detourCandidateLimit) {
+                if (dist.stop && dist.stop()) break;
+                std::pop_heap(
+                    candidates.begin(), candidates.end(), std::greater<Candidate>{});
+                const Candidate entry = candidates.back();
+                candidates.pop_back();
+                if (!exhaustFeasible) ++checked;
                 const int lower = std::get<0>(entry);
                 if (best.valid && (lower > best.goalArrival ||
                     (lower == best.goalArrival && !best.needsRefuelAgain))) break;
@@ -1180,6 +1241,7 @@ private:
                     for (const auto direction : prefix.directions)
                         actions.push_back(static_cast<int>(direction));
                 }
+                if (exhaustFeasible) ++checked;
                 const int arrival = delay + prefixSteps;
                 const int supply = std::get<1>(entry);
                 const int supplyArrival = projectedDelay(state, q) + supply;
@@ -1693,8 +1755,8 @@ private:
             static_cast<std::size_t>(state.day)];
         const double fuelRatio = static_cast<double>(setting.fuelLimit) /
                                  std::max(1, steps);
-        const double fuelPressure = std::clamp(
-            (1.5 - fuelRatio) / 1.5, 0.0, 1.0);
+        const double fuelPressure = std::min(
+            1.0, std::max(0.0, (1.5 - fuelRatio) / 1.5));
         const double mapScale = std::sqrt(
             static_cast<double>(setting.field.cellCount()) / 256.0);
         const double patrolScale = std::max(
@@ -2033,8 +2095,9 @@ public:
             std::max(1U, std::thread::hardware_concurrency()));
         const std::size_t requestedThreads =
             cfg.threadCount == 0 ? hardwareThreads : cfg.threadCount;
-        const std::size_t threadCount = std::clamp<std::size_t>(
-            requestedThreads, 1, hardwareThreads);
+        const std::size_t threadCount = std::min(
+            hardwareThreads,
+            std::max<std::size_t>(requestedThreads, 1));
         cache->synchronized = threadCount > 1;
 
         std::atomic<std::size_t> work{0};
@@ -2133,6 +2196,16 @@ public:
             cfg.distanceCacheEntries,
             res.reusedDistanceTables);
         spotDist.planning = cfg;
+        {
+            std::size_t roads = 0, affected = 0;
+            for (std::size_t pos = 0;
+                 pos < s.field.cellCount() && pos < ms.trafficByPos.size(); ++pos) {
+                if (s.field.cells[pos].type != CellType::Road) continue;
+                ++roads;
+                if (ms.trafficByPos[pos] != TrafficStatus::Smooth) ++affected;
+            }
+            spotDist.lightTraffic = roads == 0 || affected * 10 <= roads;
+        }
         spotDist.assignments = cache;
         spotDist.timings = timings;
         spotDist.stop = [&]() { return expired(); };
@@ -2320,8 +2393,36 @@ public:
                             const bool periodicReplan =
                                 cfg.macroReplanInterval != 0 &&
                                 eventStep % cfg.macroReplanInterval == 0;
+                            bool stalePatrolRoute = false;
                             bool staleSupplyRoute = false;
-                            if (!node.state.agents[a].isPatrol()) {
+                            if (node.state.agents[a].isPatrol() &&
+                                cfg.reassignStalePatrolRoutes &&
+                                s.field.contains(aim) &&
+                                s.field.at(aim).hasSpot()) {
+                                const auto current = coordinatedAssignments(
+                                    node.state, s, ms, spotDist);
+                                const auto target = current.targets[a];
+                                const std::size_t oldSpot = static_cast<std::size_t>(
+                                    s.field.at(aim).spotIndex);
+                                if (target.valid &&
+                                    s.field.spots[target.spotIndex].pos != aim) {
+                                    const auto oldBit = brandBit(
+                                        s.field.spots[oldSpot].brandIndex);
+                                    const int oldPriority =
+                                        (node.state.score.matchBrands & oldBit) == 0 ? 0 :
+                                        ((node.state.dayBrands & oldBit) == 0 ? 1 : 2);
+                                    std::int32_t reservations = 0;
+                                    for (AgentIndex p = 0;
+                                         p < node.state.agentCount; ++p) {
+                                        reservations += current.targets[p].valid &&
+                                            current.targets[p].spotIndex == oldSpot;
+                                    }
+                                    stalePatrolRoute =
+                                        target.priority < oldPriority ||
+                                        reservations >=
+                                            node.state.remainingStocks[oldSpot];
+                                }
+                            } else if (!node.state.agents[a].isPatrol()) {
                                 const auto current = coordinatedAssignments(
                                     node.state, s, ms, spotDist);
                                 const auto replacement = std::find_if(
@@ -2334,6 +2435,7 @@ public:
                                     replacement->pos != aim;
                             }
                             if (!depletedTarget && !periodicReplan &&
+                                !stalePatrolRoute &&
                                 !staleSupplyRoute)
                                 continue;
                         }

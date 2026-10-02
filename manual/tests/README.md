@@ -13,6 +13,7 @@
 | [`sample_maps_test.cpp`](sample_maps_test.md) | `sample_maps/`を使うスモークテスト |
 | [`solver_benchmark.cpp`](solver_benchmark.md) | 複数シード・全日程・交通変化・機能別の得点と速度比較 |
 | [`agent_selection_benchmark.cpp`](agent_selection_benchmark.md) | ランダム生成マップでの種別選択と全日試走の比較 |
+| [`arena_benchmark.cpp`](arena_benchmark.md) | 公開アリーナ問題JSONを使った全日程・混合交通の再現比較 |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
 | [`recovery_test.py`](recovery_test.md) | 永続復旧・同日回答更新・同一候補再送・送信時間確保の回帰テスト |
@@ -48,3 +49,5 @@ make test-python
 混雑・渋滞下での古い合流先の再計画と、エージェント選択の再評価は[混合交通での再計画・種別選択記録](mixed-traffic-reroute-results-2026-09-30.md)を参照。
 
 評価重み、状態コピー、短時間探索、および共同割当キャッシュの直列実行高速化は[2026-10-01の探索改善記録](search-improvements-2026-10-01.md)を参照。
+
+混雑・渋滞下の巡回先再割当と、燃料制約時の有効な迂回合流候補の探索は[探索・合流改善記録](mixed-traffic-search-rendezvous-2026-10-01.md)を参照。

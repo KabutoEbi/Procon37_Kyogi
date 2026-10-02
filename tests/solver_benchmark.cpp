@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("seed range overflow");
         if (sizeOnly != 0 && sizeOnly != 8 && sizeOnly != 16 && sizeOnly != 24 && sizeOnly != 32)
             throw std::invalid_argument("invalid size");
-        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros"};
+        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "limited-detour-scan", "no-hard-nextday"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -80,9 +80,14 @@ int main(int argc, char** argv) {
                         auto& beam = config.beam;
                         beam.coordinatedAssignments = name != "baseline" && name != "no-coordination";
                         beam.detourRendezvous = name != "baseline" && name != "no-detour";
+                        beam.exhaustFeasibleDetours = name != "limited-detour-scan";
                         beam.twoSpotLookahead = name != "baseline" && name != "no-lookahead";
+                        beam.prioritizeHardNextDayTargets =
+                            name != "baseline" && name != "no-hard-nextday";
                         beam.assignmentCacheLimit = name == "baseline" || name == "no-cache" ? 0 : 4096;
                         beam.useMacroActions = name != "no-macros";
+                        beam.reassignStalePatrolRoutes =
+                            name != "baseline" && name != "no-patrol-replan";
                         beam.completeIncumbentRoutes = !noCompletion;
                         if (legacyWeights) {
                             beam.fuelAwareWeights = false;
