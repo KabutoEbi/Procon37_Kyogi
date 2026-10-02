@@ -102,9 +102,7 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
         }
     }
 
-    if (!reportWrite(writeAgentKindsJson(kinds, kAgentsPath), kAgentsPath)) {
-        return 1;
-    }
+    if (!reportWrite(writeAgentKindsJson(kinds, kAgentsPath), kAgentsPath)) return 1;
 
     ScoreState score;
     const char* checkpointPath = argc > firstArg + 2 ? argv[firstArg + 2] : nullptr;
