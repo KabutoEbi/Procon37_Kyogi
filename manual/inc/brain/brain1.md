@@ -32,6 +32,8 @@ if (result.success) {
 - `maxActionsPerAgent`: 各台で残す合法行動数。0で全候補
 - `useMacroActions`: スポットや合流点への経路をまとめて生成
 - `macroReplanInterval`: マクロ継続と別経路を併せて検討する間隔。既定0は定期再検討なし。在庫切れの目的スポットは間隔によらず再検討する
+- `comparePeriodicReplanPlans`: 32×32以上・7台以上・十分な探索時間がある最終日では、既定経路と4イベントごとの定期再計画経路を比較し、公式得点と終端評価が高い方を採用。既定true
+- `routePortfolioMinTimeMs`: 経路方式を比較する最小相対時間。既定5000ms
 - `reassignStalePatrolRoutes`: 共同割当の変化で旧巡回先の在庫が予約済みになった場合や、より重要な系列が割り当てられた場合に再計画候補も生成。既定true
 - `coordinatedAssignments`: 補給車の競合で合流できない巡回車の目的地を再割当。既定true
 - `detourRendezvous`: 通常の経路上で合流できない場合、迂回合流も検討。既定true
@@ -53,6 +55,10 @@ if (result.success) {
 `distanceCacheEntries`（既定8、上限8、0で無効）は同一地形・交通条件の距離表を呼び出しスレッド内で再利用する。寸法、地形、各セルの移動時間、順序を含むスポット位置を完全比較し、最も長く使っていない条件から破棄する。中断した前計算、割当状態、得点、締切のコールバックは保存しない。`reusedDistanceTables`で再利用の有無を確認できる。時間制限なしではキャッシュ有無で回答は変わらない。
 
 `assignmentCacheHits`と`assignmentComputations`は割当の再利用・計算回数、`repairedAssignments`は競合で除外した巡回先の数、`detourPlans`は計算した割当結果に含まれる迂回合流の数を表す。実際に最終回答へ採用された回数ではない。
+
+`comparePeriodicReplanPlans`による経路方式比較は公開入口`brain1()`で行う。32×32以上、7台以上、最終日、マクロ有効、`macroReplanInterval == 0`で、相対上限が`routePortfolioMinTimeMs`以上または締切のない無制限探索の場合だけ有効になる。有限時間では通常経路へ実効予算のおよそ半分を割り当て、残時間で4イベント周期再計画経路を探索する。周期再計画経路は、通常経路より公式得点が高く終端評価を落とさない場合、または公式得点が同じで終端評価が高い場合だけ採用する。
+
+方式比較時の`elapsedMs`は両探索を含む壁時計時間で、展開数、評価回数、マクロ候補、割当・合流統計は両探索の合計になる。`Brain1::search()`を直接呼ぶと方式比較は行われないため、通常の呼び出し側は`brain1()`、`application.hpp::solveDay()`、`match_runner.hpp::runMatch()`を使用する。中間日の位置を変えて後日の系列数を下げることを避けるため、方式比較は最終日に限定している。
 
 `profilePlanning=true`の場合、`assignmentTimeNs`、`flowTimeNs`、`rendezvousTimeNs`を返す。割当時間はキャッシュミス後の共同割当計算時間、最小費用流は最短増加路の実行時間（翌日目的地評価分も含む）、合流は実計算時間を表す。計測範囲が重複するため、3つを加算して総時間としてはならない。並列時は各スレッドの時間を合計し、壁時計時間とは区別する。
 

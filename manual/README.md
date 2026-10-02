@@ -2,9 +2,11 @@
 
 このディレクトリは、ソルバー本体、GUI、テスト、回答システム用クライアントの使い方を実装ファイル単位でまとめる。初めて使う場合は[ルートREADME](../README.md)から読む。
 
+現行仕様の最終照合日は2026-10-02。32×32向けの種別・経路選択、ビジュアライザのランダム生成既定値、日別探索時間、JSON表示を反映している。日付を含む`tests/*-results-YYYY-MM-DD.md`は、その日時点の条件と結果を残す計測記録であり、後日のテスト件数や既定値へ遡って書き換えない。
+
 ## ディレクトリ
 
-- [`../IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md): 実装済み機能、残る改善候補、直近の検証結果
+- `../IMPLEMENTATION_STATUS.md`: Git管理外のローカル実装状況、残る改善候補、直近の検証結果
 - [`build.md`](build.md): Makefileによるビルド・一括テスト
 - [`inc/`](inc/): C++ヘッダーのAPIと利用例
 - [`tests/`](tests/): テスト・ベンチマーク・重み調整ツールのビルド方法
@@ -37,3 +39,4 @@ make test-core
 - `.env`には本物のトークンが入るため、Gitへ追加しない。
 - 回答の送信はGUI、`send_answer.py`、`auto_submit.py`から行える。`main`単体は送信しない。
 - 内部処理を共通化した場合も、公開API、生成ファイル、CLI引数に影響する内容は対応するファイル別マニュアルと`IMPLEMENTATION_STATUS.md`へ同時に反映する。
+- 競技ルールが変わらない実装改善では`PROBLEM_OVERVIEW.md`を変更せず、アルゴリズム、GUI、テストの対応文書だけを更新する。

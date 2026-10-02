@@ -188,7 +188,7 @@ public:
             record.startState = st;
 
             const BeamSearchResult search =
-                Brain1::search(s, st, score, cfg.beam);
+                brain1(s, st, score, cfg.beam);
             record.expandedNodes = search.expandedNodes;
             record.elapsedMs = search.elapsedMs;
             record.assignmentCacheHits = search.assignmentCacheHits;

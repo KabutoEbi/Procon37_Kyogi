@@ -52,7 +52,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 `--fixed-work`は時間制限と幅の自動調整を無効にし、ビーム幅32・同時行動幅128で最後まで探索する。高速化前後の実行ファイルを同じ引数で実行し、`plan_hash`・得点・展開数が一致した行の`ms`を比較する。時間制限付きの比較は探索量が変わるため、これと分けて評価する。
 
-各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を無効にする。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
+各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
 
 標準エラーへ試合単位の得点合計、時間の中央値・最大値、展開数、辞書順（試合系列→日別系列累計→玉数）での勝ち・同点・負けを出力する。性能値はCPU負荷などに左右されるため、同じ環境・同じビルド設定で比較する。固定シードでも時間打切りの結果は変動し、生成問題での改善が本番問題での改善を保証するものではない。
 
@@ -64,6 +64,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 - `--current-only`: `--variant`の構成だけを実行する。異なるバイナリの同条件比較用。
 - `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
+- `--agents N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、スポット数、系列数、日数を上書きする。
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。
 - `--no-completion`: 途中解の未実行マクロ経路の完了を無効にする。
 - `--tight-fuel`: 燃料上限を初日ステップ数の半分にする。
@@ -81,3 +82,5 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 混合交通での巡回マクロ再計画と燃料制約付き合流候補の比較は
 [探索・合流改善記録](mixed-traffic-search-rendezvous-2026-10-01.md)を参照。
+
+32×32・8台・32スポット・20系列・10日での`no-route-portfolio`との比較、適用条件、探索時間と展開数は[経路選択改善記録](route-selection-results-2026-10-02.md)を参照する。

@@ -215,6 +215,10 @@ result
                 self.assertEqual(gui.setting_var.get(), str((Path(directory) / "setting.json").resolve()))
                 self.assertEqual(gui._selected_kinds, [0, 0, 0, 0])
                 self.assertEqual(gui.day_var.get(), 0)
+                self.assertEqual(
+                    gui.parameter_vars["time_limit_ms"].get(),
+                    str(setting["daySeconds"][0] * 1000),
+                )
                 self.assertEqual(int(gui.day_spinbox.cget("to")), 3)
                 self.assertIn("day=未取得", gui.map_info_var.get())
                 self.assertIn("days=4", gui.map_info_var.get())

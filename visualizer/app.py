@@ -17,7 +17,6 @@ if __name__ == "__main__":
         print(describe_runtime())
         raise SystemExit(0)
 
-import json
 import math
 import queue
 import threading
@@ -45,8 +44,10 @@ from backend import (
     DEFAULT_SIMPLE_CONFIG,
     Paused,
     connection_from_env,
+    day_time_limit_ms,
     load_snapshot,
     file_hash,
+    format_json_for_display,
     map_acquisition_totals,
     parse_solver_result,
     read_json,
@@ -147,10 +148,10 @@ class SolverGUI(tk.Tk):
         self._build_ui()
         self._reload_simple_teams(show_dialog=False)
         self._reload_env(show_dialog=False)
-        self.day_var.trace_add("write", lambda *_: self._sync_day_button())
+        self.day_var.trace_add("write", lambda *_: self._day_changed())
         for variable in (self.url_var, self.token_var, self.work_var, self.setting_var):
             variable.trace_add("write", lambda *_: self._reset_daily_inputs())
-        self._sync_day_button()
+        self._day_changed()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(100, self._poll_messages)
 
@@ -394,7 +395,7 @@ class SolverGUI(tk.Tk):
             ("beam_width", "ビーム幅", "各展開で保持する状態数"),
             ("joint_beam_width", "同時行動ビーム幅", "複数台への行動割当の幅"),
             ("threads", "スレッド数", "0: 自動 / 1: 直列"),
-            ("time_limit_ms", "探索時間上限 (ms)", "0: 自動。各日の試合時間とサーバー締切は常に有効"),
+            ("time_limit_ms", "探索時間上限 (ms)", "初期値: 対象日の試合時間。短い値へ変更可能"),
             ("safety_margin_ms", "締切余裕 (ms)", "探索・種別選択を締切より早く終了"),
             ("max_actions", "各車の行動候補数", "0: 全候補"),
             ("macro_actions", "マクロ行動", "1: 有効 / 0: 無効"),
@@ -1033,6 +1034,7 @@ class SolverGUI(tk.Tk):
         self._day_count = 0
         self.day_spinbox.configure(to=9)
         self.day_var.set(0)
+        self._sync_day_time_limit()
         self._refresh_views()
         self._log_match_schedule(path)
 
@@ -1137,6 +1139,24 @@ class SolverGUI(tk.Tk):
             text="全日程終了" if finished else ("2  探索" if cached else "2  当日状態を取得・探索"),
             state=tk.DISABLED if self._busy or finished else tk.NORMAL,
         )
+
+    def _day_changed(self) -> None:
+        self._sync_day_button()
+        self._sync_day_time_limit()
+
+    def _sync_day_time_limit(self) -> None:
+        """設定済みの対象日の試合時間を探索上限の初期値にする。"""
+        try:
+            setting = read_json(Path(self.setting_var.get()).expanduser())
+            day = self.day_var.get()
+            if not isinstance(setting, dict):
+                return
+            self.parameter_vars["time_limit_ms"].set(
+                str(day_time_limit_ms(setting, day))
+            )
+        except (OSError, WorkflowError, tk.TclError, ValueError):
+            # 設定未取得時はSearchParametersの既定値を維持する。
+            return
 
     def _fetch_and_solve_day(self) -> None:
         workflow = self._workflow_or_dialog()
@@ -1554,7 +1574,7 @@ class SolverGUI(tk.Tk):
     def _show_json(self, path: Path) -> None:
         try:
             value = read_json(path)
-            text = json.dumps(value, ensure_ascii=False, indent=2)
+            text = format_json_for_display(value)
         except WorkflowError as error:
             messagebox.showerror("JSON表示", str(error), parent=self)
             return

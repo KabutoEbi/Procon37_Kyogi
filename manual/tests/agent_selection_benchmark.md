@@ -13,13 +13,18 @@ make .build/tools/agent_selection_benchmark
 .build/tools/agent_selection_benchmark --size 24 --seeds 8 --selection-ms 5000 --constrained
 .build/tools/agent_selection_benchmark --size 32 --agents 8 --seeds 8 \
   --min-supply 2 --max-supply 3 --trial-candidates 12
+.build/tools/agent_selection_benchmark --size 32 --agents 7 \
+  --spots 32 --brands 20 --seeds 8 --selection-ms 5000 \
+  --constrained --mixed-traffic
 ```
 
-`--constrained`は各日ステップ数と燃料上限をマップ幅に固定する。生成直後のパラメータを使う場合は外す。`--seed-start`で開始シード、`--seeds`で件数を指定する。`--size`を省略すると3サイズを試す。`--agents`は生成するエージェント数を上書きする。`--min-supply`と`--max-supply`で比較する補給車台数を限定できる。`--trial-candidates`は試走候補数を上書きする。`--selection-ms 0`は相対時間制限なし。
+`--constrained`は各日ステップ数と燃料上限をマップ幅に固定する。生成直後のパラメータを使う場合は外す。`--mixed-traffic`は初日を順調、2日目以降の道路を順調・混雑・渋滞へ固定的に振り分け、`holdout_`列だけをその未使用交通条件で検証する。`--seed-start`で開始シード、`--seeds`で件数を指定する。`--size`を省略すると3サイズを試す。`--agents`、`--spots`、`--brands`は生成するエージェント数、スポット数、系列数を上書きする。`--min-supply`と`--max-supply`で比較する補給車台数を限定できる。`--trial-candidates`は試走候補数を上書きする。`--selection-ms 0`は相対時間制限なし。
 
 CSV末尾の`completed_scenarios`は選択した候補の試走が完了し、比較に使ったシナリオ数、`timed_out`は時間による比較の打ち切りを示す。短時間の比較では、着手候補数だけでなく、この完了数と選択後の再探索得点を確認する。
 
 CSVの`kinds`は各車の巡回車`P`・補給車`S`を示す。`brands`、`daily_brands`、`udon`は固定幅8／同時行動幅32、全日順調、時間制限なしで再探索した得点である。`holdout_`列は予測交通シナリオの高位条件で再探索した得点である。種別選択中の試走も同じ幅を使い、チーム数・エージェント数から作った低位・中央・高位の予測条件を評価する。`trial_assignments`と`trial_simulations`は締切までに着手した件数で、得点とは区別する。
+
+種別選択中の試走は候補間の探索量を揃えるため、最終日の経路方式比較を無効にする。選択後の全日再探索では通常どおり`brain1()`を使用する。
 
 2026-09-28に`--constrained --selection-ms 5000`で変更前後を比較した。16×16のseed 1～3と32×32のseed 1～3は同点。24×24のseed 1～8では辞書順の得点（系列数、日別系列数、玉数）が3件改善、5件同点、悪化0件だった。改善例はseed 3が`(17, 37, 39)`から`(18, 39, 40)`、seed 4が`(18, 26, 28)`から`(18, 33, 36)`、seed 5が`(17, 35, 36)`から`(17, 36, 37)`である。時間打切りの結果は実行環境やCPU負荷で変わり得る。
 
@@ -30,3 +35,5 @@ CSVの`kinds`は各車の巡回車`P`・補給車`S`を示す。`brands`、`dail
 2026-09-30の共通日程再利用・行動候補軽量化の比較は[高速化記録](algorithm-speed-results-2026-09-30.md)を参照。
 
 同日の8台構成における補給車台数と候補配分の比較は[8台時の種別選択記録](agent-selection-8-results-2026-09-30.md)を参照。
+
+2026-10-02の32×32・7台・32スポット・20系列における、時間切れ時の過少補給対策と混雑・渋滞での比較は[32×32・20系列の種別選択改善](agent-selection-traffic-results-2026-10-02.md)を参照。

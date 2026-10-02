@@ -11,16 +11,21 @@
 
 int main(int argc, char** argv) {
     using namespace benzen;
-    int sizeOnly = 0, agentOnly = 0, seedStart = 1, seeds = 3;
+    int sizeOnly = 0, agentOnly = 0, spotOnly = 0, brandOnly = 0;
+    int seedStart = 1, seeds = 3;
     int minSupply = -1, maxSupply = -1;
     int trialCandidates = -1;
     int selectionMs = 5000;
-    bool constrained = false;
+    bool constrained = false, mixedTraffic = false;
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string option = argv[i];
             if (option == "--constrained") {
                 constrained = true;
+                continue;
+            }
+            if (option == "--mixed-traffic") {
+                mixedTraffic = true;
                 continue;
             }
             if (++i == argc) throw std::invalid_argument("missing option value");
@@ -31,6 +36,8 @@ int main(int argc, char** argv) {
                 throw std::invalid_argument("invalid option value: " + argument);
             if (option == "--size") sizeOnly = value;
             else if (option == "--agents") agentOnly = value;
+            else if (option == "--spots") spotOnly = value;
+            else if (option == "--brands") brandOnly = value;
             else if (option == "--seed-start") seedStart = value;
             else if (option == "--seeds") seeds = value;
             else if (option == "--selection-ms") selectionMs = value;
@@ -43,6 +50,7 @@ int main(int argc, char** argv) {
             seedStart <= 0 || seeds <= 0 || selectionMs < 0 ||
             (agentOnly != 0 &&
              (agentOnly < 2 || agentOnly > static_cast<int>(kMaxAgents))) ||
+            spotOnly < 0 || brandOnly < 0 ||
             minSupply < -1 || maxSupply < -1 ||
             trialCandidates < -1 ||
             (minSupply >= 0 && maxSupply >= 0 && minSupply > maxSupply) ||
@@ -59,8 +67,9 @@ int main(int argc, char** argv) {
                 create.width = create.height = size;
                 create.agentCount = agentOnly > 0
                     ? agentOnly : (size == 16 ? 4 : size == 24 ? 5 : 7);
-                create.spotCount = size;
-                create.brandCount = size == 16 ? 12 : size == 24 ? 18 : 24;
+                create.spotCount = spotOnly > 0 ? spotOnly : size;
+                create.brandCount = brandOnly > 0
+                    ? brandOnly : (size == 16 ? 12 : size == 24 ? 18 : 24);
                 create.seed = static_cast<std::uint64_t>(seed);
                 auto setting = ProblemCreator::generate(create).setting;
                 if (constrained) {
@@ -93,7 +102,21 @@ int main(int argc, char** argv) {
                 if (!validation.success)
                     throw std::runtime_error("validation trial failed");
                 const auto score = trialScore(validation.score);
-                const auto holdoutTraffic = makeTrialScenarios(setting, 4).back();
+                auto holdoutTraffic = makeTrialScenarios(setting, 4).back();
+                if (mixedTraffic) {
+                    holdoutTraffic.assign(setting.dayCount(),
+                        std::vector<TrafficStatus>(
+                            setting.field.cellCount(), TrafficStatus::Smooth));
+                    for (std::size_t day = 1; day < holdoutTraffic.size(); ++day) {
+                        for (std::size_t pos = 0;
+                             pos < holdoutTraffic[day].size(); ++pos) {
+                            if (setting.field.cells[pos].type != CellType::Road)
+                                continue;
+                            holdoutTraffic[day][pos] = static_cast<TrafficStatus>(
+                                (pos + static_cast<std::size_t>(seed) + day) % 3);
+                        }
+                    }
+                }
                 const auto holdout = runTrial(
                     setting, chosen.kinds, holdoutTraffic, beam);
                 if (!holdout.success)

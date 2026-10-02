@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
 
 - `makeInitialState()`: 種別列または補給車台数から初日状態を作る
 - `makeWaitPlan()`: 当日の全ステップを待機する計画
-- `solveDay()`: `brain1`失敗時に待機計画へフォールバック
+- `solveDay()`: `brain1()`の経路方式比較を含めて探索し、失敗時に待機計画へフォールバック
 - `printPlan()`: APIへ送れる二次元整数配列を標準出力
 - `writePlanJson()`: `POST /`の本文と同じ二次元配列をJSONファイルへ保存
 - `writeAgentKindsJson()`: `POST /agent`の本文と同じ種別配列をJSONファイルへ保存

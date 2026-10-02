@@ -581,6 +581,31 @@ void testSelectorKeepsAtLeastHalfPatrolsByDefault() {
     assert(explicitlyAllowed.evaluatedAssignments == 6);
 }
 
+void testSelectorTrialsPreferredSupplyCountFirst() {
+    MatchSetting s;
+    s.daySteps = {2};
+    s.daySeconds = {60};
+    s.fuelLimit = 2;
+    s.playerCount = 2;
+    s.field.width = 8;
+    s.field.height = 1;
+    s.field.cells.assign(8, Cell{CellType::Plain, -1});
+    s.field.spots = {{0, 7, 1, -1}};
+    s.agentStarts = {0, 1, 2, 3, 4, 5, 6};
+    assert(s.field.rebuildSpotIndex());
+
+    AgentSelectorConfig cfg;
+    cfg.trialCandidateLimit = 1;
+    cfg.trialBeamWidth = 4;
+    cfg.trialJointBeamWidth = 16;
+    cfg.trialScenarioCount = 1;
+    const auto selected = selectAgentKinds(s, cfg);
+    assert(selected.success);
+    assert(selected.trialAssignments == 1);
+    // 7台では補給2台・巡回5台を最初に試す。
+    assert(selected.supplyCount == 2);
+}
+
 void testPersistentJsonAndFallback() {
     std::ostringstream kinds;
     printAgentKinds(kinds, {AgentKind::Patrol, AgentKind::Supply});
@@ -825,6 +850,7 @@ int main() {
     testAgentSelector();
     testSelectorValuesParallelPatrols();
     testSelectorKeepsAtLeastHalfPatrolsByDefault();
+    testSelectorTrialsPreferredSupplyCountFirst();
     testPersistentJsonAndFallback();
     testMatchRunner();
     testProblemCreator();

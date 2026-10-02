@@ -30,8 +30,10 @@ from backend import (  # noqa: E402
     Paused,
     ApiError,
     file_hash,
+    format_json_for_display,
     read_json,
     connection_from_env,
+    day_time_limit_ms,
     load_snapshot,
     map_acquisition_totals,
     parse_solver_result,
@@ -41,7 +43,39 @@ from backend import (  # noqa: E402
 
 
 class BackendTest(unittest.TestCase):
+    def test_format_json_for_display_groups_simple_arrays(self) -> None:
+        value = {
+            "day": 0,
+            "routes": [[2, -31, 2], [-32]],
+            "agents": [
+                {"kind": 0, "pos": 3, "fuel": 40},
+                {"kind": 1, "pos": 7, "fuel": 20},
+            ],
+        }
+        self.assertEqual(
+            format_json_for_display(value),
+            """{
+  \"day\": 0,
+  \"routes\": [
+    [2, -31, 2],
+    [-32]
+  ],
+  \"agents\": [
+    {\"kind\": 0, \"pos\": 3, \"fuel\": 40},
+    {\"kind\": 1, \"pos\": 7, \"fuel\": 20}
+  ]
+}""",
+        )
+        self.assertEqual(format_json_for_display([1, 2, 3]), "[1, 2, 3]")
+        self.assertEqual(json.loads(format_json_for_display(value)), value)
+
     def test_random_setting_parameters(self) -> None:
+        defaults = RandomSettingParameters()
+        self.assertEqual(
+            (defaults.width, defaults.height, defaults.agents,
+             defaults.spots, defaults.brands, defaults.days),
+            (32, 32, 8, 32, 20, 10),
+        )
         parameters = RandomSettingParameters(
             width=8, height=12, agents=3, spots=8, brands=5,
             days=4, seconds=30, teams=2, seed=99,
@@ -57,6 +91,15 @@ class BackendTest(unittest.TestCase):
             "--include_congestion",
             RandomSettingParameters(include_congestion=1).arguments(),
         )
+
+    def test_day_time_limit_ms(self) -> None:
+        self.assertEqual(SearchParameters().time_limit_ms, 60000)
+        setting = {"daySeconds": [60, 12.5, 3_000_000]}
+        self.assertEqual(day_time_limit_ms(setting, 0), 60000)
+        self.assertEqual(day_time_limit_ms(setting, 1), 12500)
+        self.assertEqual(day_time_limit_ms(setting, 2), 2147483647)
+        with self.assertRaisesRegex(WorkflowError, "当日の試合時間"):
+            day_time_limit_ms(setting, 3)
 
     def test_map_acquisition_totals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -67,6 +67,10 @@ struct BeamSearchConfig {
     std::size_t macroTargetLimit = 3;
     // マクロ継続を残しつつ、定期的に別経路も探索する。0なら再検討しない。
     std::size_t macroReplanInterval = 0;
+    // 大規模盤面で十分な時間がある場合、既定経路と定期再計画経路を
+    // 両方探索し、公式得点が高い方を採用する。
+    bool comparePeriodicReplanPlans = true;
+    std::int64_t routePortfolioMinTimeMs = 5000;
     // 共同割当の変化で旧巡回先の在庫が他車に予約済み、またはより重要な
     // 系列が割り当てられた場合、マクロ継続と再計画を併せて探索する。
     bool reassignStalePatrolRoutes = true;
@@ -2059,6 +2063,7 @@ public:
 
         if (cfg.beamWidth == 0 || cfg.jointBeamWidth == 0 ||
             cfg.timeLimitMs < 0 || cfg.safetyMarginMs < 0 ||
+            cfg.routePortfolioMinTimeMs < 0 ||
             cfg.incumbentInterval == 0 || !std::isfinite(cfg.diversityFraction) ||
             cfg.diversityFraction < 0 || cfg.diversityFraction > 1) {
             return finish(SearchStopReason::NoValidPlan);
@@ -2780,7 +2785,107 @@ inline BeamSearchResult brain1(
     const MatchState& matchState,
     ScoreState previousScore = {},
     const BeamSearchConfig& config = {}) {
-    return Brain1::search(setting, matchState, previousScore, config);
+    const bool unlimited = config.timeLimitMs == 0 &&
+        (!config.useStateDeadline || matchState.endsAt <= 0);
+    const bool compareRoutes = config.comparePeriodicReplanPlans &&
+        config.useMacroActions && config.macroReplanInterval == 0 &&
+        setting.field.cellCount() >= 32U * 32U &&
+        setting.agentCount() >= 7 &&
+        matchState.day >= 0 &&
+        static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount() &&
+        (unlimited || config.timeLimitMs >= config.routePortfolioMinTimeMs);
+    if (!compareRoutes) {
+        return Brain1::search(setting, matchState, previousScore, config);
+    }
+
+    using Clock = std::chrono::steady_clock;
+    const auto started = Clock::now();
+    BeamSearchConfig primaryConfig = config;
+    if (!unlimited) {
+        const std::int64_t effective = std::max<std::int64_t>(
+            0, config.timeLimitMs - config.safetyMarginMs);
+        primaryConfig.timeLimitMs = config.safetyMarginMs + effective / 2;
+    }
+    BeamSearchResult primary = Brain1::search(
+        setting, matchState, previousScore, primaryConfig);
+
+    BeamSearchConfig periodicConfig = config;
+    periodicConfig.comparePeriodicReplanPlans = false;
+    periodicConfig.macroReplanInterval = 4;
+    if (!unlimited) {
+        const auto used = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - started).count();
+        periodicConfig.timeLimitMs = std::max<std::int64_t>(
+            0, config.timeLimitMs - used);
+        if (periodicConfig.timeLimitMs <= config.safetyMarginMs) {
+            primary.elapsedMs = used;
+            return primary;
+        }
+    }
+    BeamSearchResult periodic = Brain1::search(
+        setting, matchState, previousScore, periodicConfig);
+
+    auto officialScore = [](const BeamSearchResult& result)
+        -> std::tuple<std::int64_t, std::int64_t, std::int64_t> {
+        if (!result.success) {
+            return {-1, -1, -1};
+        }
+        return {
+            static_cast<std::int64_t>(countBits(
+                result.finalState.score.matchBrands)),
+            result.finalState.score.sumOfDailyBrandCounts,
+            result.finalState.score.totalUdon};
+    };
+    const bool usePeriodic = periodic.success &&
+        (!primary.success ||
+         (officialScore(periodic) > officialScore(primary) &&
+          periodic.evaluation.total >= primary.evaluation.total) ||
+         (officialScore(periodic) == officialScore(primary) &&
+          periodic.evaluation.total > primary.evaluation.total));
+    const std::size_t expandedNodes =
+        primary.expandedNodes + periodic.expandedNodes;
+    const std::size_t fullEvaluations =
+        primary.fullEvaluations + periodic.fullEvaluations;
+    const std::size_t reusedEvaluations =
+        primary.reusedEvaluations + periodic.reusedEvaluations;
+    const std::size_t macroCandidates =
+        primary.macroCandidates + periodic.macroCandidates;
+    const std::size_t macroContinuations =
+        primary.macroContinuations + periodic.macroContinuations;
+    const std::size_t assignmentCacheHits =
+        primary.assignmentCacheHits + periodic.assignmentCacheHits;
+    const std::size_t assignmentComputations =
+        primary.assignmentComputations + periodic.assignmentComputations;
+    const std::size_t repairedAssignments =
+        primary.repairedAssignments + periodic.repairedAssignments;
+    const std::size_t detourPlans =
+        primary.detourPlans + periodic.detourPlans;
+    const std::int64_t assignmentTimeNs =
+        primary.assignmentTimeNs + periodic.assignmentTimeNs;
+    const std::int64_t flowTimeNs =
+        primary.flowTimeNs + periodic.flowTimeNs;
+    const std::int64_t rendezvousTimeNs =
+        primary.rendezvousTimeNs + periodic.rendezvousTimeNs;
+    const bool reusedDistanceTables =
+        primary.reusedDistanceTables || periodic.reusedDistanceTables;
+    BeamSearchResult selected = usePeriodic
+        ? std::move(periodic) : std::move(primary);
+    selected.expandedNodes = expandedNodes;
+    selected.fullEvaluations = fullEvaluations;
+    selected.reusedEvaluations = reusedEvaluations;
+    selected.macroCandidates = macroCandidates;
+    selected.macroContinuations = macroContinuations;
+    selected.assignmentCacheHits = assignmentCacheHits;
+    selected.assignmentComputations = assignmentComputations;
+    selected.repairedAssignments = repairedAssignments;
+    selected.detourPlans = detourPlans;
+    selected.assignmentTimeNs = assignmentTimeNs;
+    selected.flowTimeNs = flowTimeNs;
+    selected.rendezvousTimeNs = rendezvousTimeNs;
+    selected.reusedDistanceTables = reusedDistanceTables;
+    selected.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::now() - started).count();
+    return selected;
 }
 
 }  // namespace benzen

@@ -26,6 +26,8 @@ python3 visualizer/app.py
 
 接続先とTOKENは「実行設定・使用ファイル」で指定する。実サーバーへ接続せず試す場合は、同梱の簡易サーバーをGUIから起動できる。マップにはエージェントごとの経路を色分けして表示する。詳細は[ビジュアライザーの説明](visualizer/README.md)を参照する。
 
+ローカルのランダム設定は32×32、8エージェント、32スポット、20系列、10日が初期値で、混雑・渋滞も選択できる。探索時間上限は読み込んだ設定の当日試合時間を初期値とし、実行前に短縮できる。JSONタブでは単純な配列を1行、経路のような入れ子配列を配列単位で表示する。
+
 ## CLIで探索する
 
 ```sh
@@ -37,3 +39,5 @@ python3 visualizer/app.py
 `select`は`POST /agent`用の種別配列を、`solve`は`POST /`用の`answer.json`と次日用の`score-next.json`を生成する。`main`自体は送信しない。day 1以降の探索には、前日の回答が受理された後に確定した得点チェックポイントが必要である。通信CLIの使い方は[クライアントの説明](manual/server_client/README.md)を参照する。
 
 `.env`、実行ファイル、生成JSON、`runtime/`はGit管理対象外である。接続用TOKENはGitへ追加しない。
+
+32×32・混雑／渋滞条件では、種別選択を中心補給台数から比較し、最終日に通常経路と周期再計画経路を比較する。計測結果は[種別選択改善](manual/tests/agent-selection-traffic-results-2026-10-02.md)と[経路選択改善](manual/tests/route-selection-results-2026-10-02.md)を参照する。

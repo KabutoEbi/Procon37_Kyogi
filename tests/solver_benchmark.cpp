@@ -13,6 +13,7 @@
 int main(int argc, char** argv) {
     using namespace benzen;
     int seeds = 8, repeats = 3, timeMs = 300, sizeOnly = 0, seedStart = 1;
+    int agentOnly = 0, spotOnly = 0, brandOnly = 0, dayOnly = 0;
     bool currentOnly = false, noCompletion = false, legacyWeights = false, tightFuel = false;
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
     std::string variant = "improved";
@@ -39,13 +40,22 @@ int main(int argc, char** argv) {
             else if (option == "--repeats") repeats = number;
             else if (option == "--time-ms") timeMs = number;
             else if (option == "--size") sizeOnly = number;
+            else if (option == "--agents") agentOnly = number;
+            else if (option == "--spots") spotOnly = number;
+            else if (option == "--brands") brandOnly = number;
+            else if (option == "--days") dayOnly = number;
             else throw std::invalid_argument("unknown option");
         }
         if (seedStart > std::numeric_limits<int>::max() - seeds)
             throw std::invalid_argument("seed range overflow");
         if (sizeOnly != 0 && sizeOnly != 8 && sizeOnly != 16 && sizeOnly != 24 && sizeOnly != 32)
             throw std::invalid_argument("invalid size");
-        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "limited-detour-scan", "no-hard-nextday"};
+        if ((agentOnly != 0 && (agentOnly < 3 || agentOnly > 8)) ||
+            (dayOnly != 0 && (dayOnly < 4 || dayOnly > 10)) ||
+            spotOnly < 0 || brandOnly < 0 ||
+            (spotOnly > 0 && brandOnly > spotOnly))
+            throw std::invalid_argument("invalid generated setting override");
+        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -61,9 +71,12 @@ int main(int argc, char** argv) {
             for (int seed = seedStart; seed - seedStart < seeds; ++seed) {
                 CreateConfig create;
                 create.width = create.height = size;
-                create.agentCount = size <= 16 ? 4 : 8;
-                create.spotCount = size;
-                create.brandCount = size * 3 / 4;
+                create.agentCount = agentOnly > 0
+                    ? agentOnly : (size <= 16 ? 4 : 8);
+                create.spotCount = spotOnly > 0 ? spotOnly : size;
+                create.brandCount = brandOnly > 0
+                    ? brandOnly : size * 3 / 4;
+                if (dayOnly > 0) create.dayCount = dayOnly;
                 create.seed = seed;
                 auto setting = ProblemCreator::generate(create).setting;
                 if (tightFuel) setting.fuelLimit = std::max(1, setting.daySteps.front() / 2);
@@ -88,6 +101,11 @@ int main(int argc, char** argv) {
                         beam.useMacroActions = name != "no-macros";
                         beam.reassignStalePatrolRoutes =
                             name != "baseline" && name != "no-patrol-replan";
+                        beam.comparePeriodicReplanPlans =
+                            name != "baseline" && name != "no-route-portfolio";
+                        if (name == "replan-2") beam.macroReplanInterval = 2;
+                        if (name == "replan-4") beam.macroReplanInterval = 4;
+                        if (name == "replan-8") beam.macroReplanInterval = 8;
                         beam.completeIncumbentRoutes = !noCompletion;
                         if (legacyWeights) {
                             beam.fuelAwareWeights = false;

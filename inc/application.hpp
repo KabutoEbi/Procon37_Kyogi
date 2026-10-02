@@ -220,7 +220,7 @@ inline BeamSearchResult solveDay(
     ScoreState previousScore,
     const BeamSearchConfig& config) {
     BeamSearchResult result =
-        Brain1::search(setting, state, previousScore, config);
+        brain1(setting, state, previousScore, config);
     if (result.success) {
         return result;
     }

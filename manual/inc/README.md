@@ -24,8 +24,8 @@
 ## 探索
 
 - [`brain/brain0.hpp`](brain/brain0.md): ダイクストラ法と燃料制約付き最短路
-- [`brain/brain1.hpp`](brain/brain1.md): ビームサーチ
-- [`agent_selector.hpp`](agent_selector.md): エージェント種別の自動選択
+- [`brain/brain1.hpp`](brain/brain1.md): ビームサーチと最終日の経路方式比較
+- [`agent_selector.hpp`](agent_selector.md): 中心補給台数・交通シナリオを使うエージェント種別の自動選択
 - [`evaluation.hpp`](evaluation.md): 状態評価
 - [`search_state.hpp`](search_state.md): 探索状態の正規化と優越判定
 - [`action_routes.hpp`](action_routes.md): マクロ行動列の共有

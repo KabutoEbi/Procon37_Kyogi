@@ -63,6 +63,7 @@ private:
         double heuristicScore = 0.0;
         std::uint32_t supplyMask = 0;
         std::int64_t supplySpread = 0;
+        std::int32_t reachableBrandCount = 0;
     };
 
     static std::int32_t maximumSupplyCount(
@@ -71,6 +72,36 @@ private:
         return cfg.maxSupplyCount < 0
                    ? static_cast<std::int32_t>(agentCount / 2)
                    : cfg.maxSupplyCount;
+    }
+
+    // 補給車1台で巡回車およそ2台を受け持つ構成を中心に比較する。
+    // std::clampを使わず、C++標準設定が古い補完環境でも解析できる形にする。
+    static std::int32_t preferredSupplyCount(
+        std::size_t agentCount, const AgentSelectorConfig& cfg,
+        std::int32_t maxSupply) noexcept {
+        const std::int32_t center =
+            static_cast<std::int32_t>((agentCount + 1) / 3);
+        return std::max(cfg.minSupplyCount, std::min(center, maxSupply));
+    }
+
+    static std::vector<std::int32_t> supplyCountOrder(
+        std::size_t agentCount, const AgentSelectorConfig& cfg,
+        std::int32_t maxSupply) {
+        std::vector<std::int32_t> order;
+        const std::int32_t preferred =
+            preferredSupplyCount(agentCount, cfg, maxSupply);
+        const std::size_t count = static_cast<std::size_t>(
+            maxSupply - cfg.minSupplyCount + 1);
+        order.reserve(count);
+        order.push_back(preferred);
+        for (std::int32_t offset = 1;
+             order.size() < count; ++offset) {
+            const std::int32_t lower = preferred - offset;
+            const std::int32_t upper = preferred + offset;
+            if (lower >= cfg.minSupplyCount) order.push_back(lower);
+            if (upper <= maxSupply) order.push_back(upper);
+        }
+        return order;
     }
 
     static void validate(
@@ -281,6 +312,7 @@ public:
 
             const auto brandN = static_cast<std::int32_t>(
                 std::count(brands.begin(), brands.end(), true));
+            c.reachableBrandCount = brandN;
 
             // 到達可能なスポットの和集合だけでは、巡回車1台で全地点に
             // 届く配置と、複数台で並行して回れる配置を区別できない。
@@ -348,23 +380,28 @@ public:
         }
 
         std::vector<std::size_t> trials;
+        std::size_t preferredSpread = cs.size();
+        std::int32_t preferredSupply = cfg.minSupplyCount;
+        bool supplyPressure = false;
         if (cfg.trialCandidateLimit > 0) {
-            // まず補給車台数ごとの最良候補を比較する。
-            for (std::int32_t count = cfg.minSupplyCount;
-                 count <= maxSupply && trials.size() < cfg.trialCandidateLimit;
-                 ++count) {
+            const std::int32_t maxDaySteps = *std::max_element(
+                s.daySteps.begin(), s.daySteps.end());
+            supplyPressure = s.fuelLimit <= maxDaySteps;
+            // 短い締切で最低台数の候補だけを評価して終わらないよう、
+            // 巡回車との比率がよい中心台数から近い順に比較する。
+            const auto countOrder = supplyCountOrder(n, cfg, maxSupply);
+            preferredSupply = countOrder.front();
+            auto appendBest = [&](std::int32_t count) {
+                if (trials.size() >= cfg.trialCandidateLimit) return;
                 const auto found = std::find_if(cs.begin(), cs.end(),
                     [count](const Candidate& c) {
                         return c.supplyCount == count;
                     });
                 if (found != cs.end())
                     trials.push_back(static_cast<std::size_t>(found - cs.begin()));
-            }
-            // 各台数について、距離評価とは性質の異なる広域配置も試す。
-            // 特定の台数の位置違いだけで候補枠を消費しない。
-            for (std::int32_t count = cfg.minSupplyCount;
-                 count <= maxSupply && trials.size() < cfg.trialCandidateLimit;
-                 ++count) {
+            };
+            auto appendSpread = [&](std::int32_t count) {
+                if (trials.size() >= cfg.trialCandidateLimit) return;
                 std::size_t spread = cs.size();
                 for (std::size_t i = 0; i < cs.size(); ++i) {
                     if (cs[i].supplyCount != count ||
@@ -374,15 +411,28 @@ public:
                         cs[i].supplySpread > cs[spread].supplySpread)
                         spread = i;
                 }
-                if (spread != cs.size()) trials.push_back(spread);
+                if (spread != cs.size()) {
+                    trials.push_back(spread);
+                    if (count == preferredSupply) preferredSpread = spread;
+                }
+            };
+
+            // まず各台数の最良候補を比較し、実時間打切りで特定台数の
+            // 位置違いだけに評価が偏らないようにする。
+            for (const std::int32_t count : countOrder) {
+                if (trials.size() >= cfg.trialCandidateLimit) break;
+                appendBest(count);
+            }
+            // 各台数について、距離評価とは性質の異なる広域配置も試す。
+            // 特定の台数の位置違いだけで候補枠を消費しない。
+            for (const std::int32_t count : countOrder) {
+                if (trials.size() >= cfg.trialCandidateLimit) break;
+                appendSpread(count);
             }
             // 残りは「補給車1台で巡回車およそ2台」を中心に配分する。
             // 8台時は補給2台・3台の位置違いを交互に追加し、1台・4台の
             // 位置違いで候補枠を使い切らない。各台数の最良・広域配置は
             // 上で既に1件ずつ確保している。
-            const std::int32_t preferredSupply = std::clamp(
-                static_cast<std::int32_t>((n + 1) / 3),
-                cfg.minSupplyCount, maxSupply);
             std::array<std::int32_t, 2> focusedCounts{
                 preferredSupply,
                 std::max(cfg.minSupplyCount, preferredSupply - 1),
@@ -411,7 +461,22 @@ public:
             }
         }
 
-        const Candidate* best = &cs.front();
+        // 候補枠が小さくても、時間切れ後の過少補給判定に使う中心台数の
+        // 広域配置は取得しておく（試走件数には加えない）。
+        if (cfg.trialCandidateLimit > 0 && preferredSpread == cs.size()) {
+            for (std::size_t i = 0; i < cs.size(); ++i) {
+                if (cs[i].supplyCount != preferredSupply) continue;
+                if (!trials.empty() && i == trials.front()) continue;
+                if (preferredSpread == cs.size() ||
+                    cs[i].supplySpread > cs[preferredSpread].supplySpread) {
+                    preferredSpread = i;
+                }
+            }
+        }
+
+        // 試走候補がある場合、完走前に締切となっても最少補給車へ偏る
+        // 距離評価先頭ではなく、中心台数の最良候補を返す。
+        const Candidate* best = trials.empty() ? &cs.front() : &cs[trials.front()];
         EvaluationBreakdown bestEval{};
         TrialScore bestWorst{}, bestTotal{};
         bool tried = false;
@@ -421,6 +486,8 @@ public:
         beam.weights = cfg.trialWeights;
         beam.threadCount = 1;
         beam.useStateDeadline = false;
+        // 種別候補の比較では経路方式を増やさず、配置間へ同じ探索量を使う。
+        beam.comparePeriodicReplanPlans = false;
         auto scenarios = cfg.trialScenarios.empty()
             ? makeTrialScenarios(s, cfg.trialScenarioCount)
             : cfg.trialScenarios;
@@ -468,6 +535,20 @@ public:
 
         res.success = true;
         res.timedOut = res.timedOut || expired();
+        // 燃料制約下で比較が時間切れし、最低台数の構成へ偏った場合は、
+        // 同じ系列到達性を保つ中心台数の広域配置を安全側として使う。
+        // 全候補を時間内に比較できた結果は上書きしない。
+        if (res.timedOut && supplyPressure && preferredSpread < cs.size() &&
+            best->supplyCount < preferredSupply &&
+            cs[preferredSpread].reachableBrandCount >=
+                best->reachableBrandCount) {
+            best = &cs[preferredSpread];
+            tried = false;
+            bestEval = {};
+            bestWorst = {};
+            bestTotal = {};
+            res.completedTrialScenarios = 0;
+        }
         res.kinds = best->kinds;
         res.supplyCount = best->supplyCount;
         res.heuristicScore = best->heuristicScore;

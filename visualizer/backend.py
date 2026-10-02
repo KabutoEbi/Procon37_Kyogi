@@ -49,7 +49,8 @@ class SearchParameters:
     beam_width: int = 128
     joint_beam_width: int = 512
     threads: int = 0
-    time_limit_ms: int = 5000
+    # GUIでは設定読込時に対象日のdaySecondsで上書きする。
+    time_limit_ms: int = 60000
     safety_margin_ms: int = 1000
     max_actions: int = 4
     macro_actions: int = 1
@@ -75,12 +76,12 @@ class SearchParameters:
 
 @dataclass(frozen=True)
 class RandomSettingParameters:
-    width: int = 16
-    height: int = 16
-    agents: int = 4
-    spots: int = 16
-    brands: int = 12
-    days: int = 4
+    width: int = 32
+    height: int = 32
+    agents: int = 8
+    spots: int = 32
+    brands: int = 20
+    days: int = 10
     seconds: int = 60
     teams: int = 2
     seed: int = 1
@@ -479,6 +480,40 @@ def read_json(path: Path) -> Any:
         raise WorkflowError(f"JSONが不正です: {path}: {error}") from error
 
 
+def format_json_for_display(value: Any, indent: int = 2) -> str:
+    """単純な配列やオブジェクトを1行に保ち、入れ子の単位で改行する。"""
+    def compact(item: Any) -> str:
+        return json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
+
+    def format_value(item: Any, level: int) -> str:
+        if not isinstance(item, (dict, list)):
+            return compact(item)
+        if not item or all(
+            not isinstance(child, (dict, list))
+            for child in (item.values() if isinstance(item, dict) else item)
+        ):
+            return compact(item)
+
+        prefix = " " * (indent * (level + 1))
+        closing = " " * (indent * level)
+        lines: list[str] = []
+        if isinstance(item, dict):
+            for key, child in item.items():
+                rendered = format_value(child, level + 1).splitlines()
+                head = f"{prefix}{compact(str(key))}: {rendered[0]}"
+                lines.append("\n".join([head, *rendered[1:]]))
+            return "{\n" + ",\n".join(lines) + f"\n{closing}}}"
+
+        for child in item:
+            rendered = format_value(child, level + 1).splitlines()
+            lines.append("\n".join([prefix + rendered[0], *rendered[1:]]))
+        return "[\n" + ",\n".join(lines) + f"\n{closing}]"
+
+    if indent < 0:
+        raise ValueError("indentは0以上で指定してください")
+    return format_value(value, 0)
+
+
 def load_snapshot(setting_path: Path, state_path: Path | None = None) -> MapSnapshot:
     setting = read_json(setting_path)
     if not isinstance(setting, dict) or not isinstance(setting.get("map"), dict):
@@ -574,6 +609,15 @@ def _day_duration(setting: dict[str, Any], day: int) -> float:
     if type(duration) not in (int, float):
         raise WorkflowError("設定のdaySecondsが不正です")
     return float(duration)
+
+
+def day_time_limit_ms(setting: dict[str, Any], day: int) -> int:
+    """対象日の試合時間をGUIの探索時間上限（ms）へ変換する。"""
+    duration = _day_duration(setting, day)
+    milliseconds = math.floor(duration * 1000)
+    if milliseconds <= 0:
+        raise WorkflowError("当日の試合時間が短すぎます")
+    return min(2147483647, milliseconds)
 
 
 class Workflow:
