@@ -109,7 +109,7 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
     if (!loadScore(checkpointPath, setting, state, score)) return 1;
 
     auto config = options.beam;
-    if (state.endsAt == 0 && !options.hasTimeLimit) {
+    if (state.endsAt == 0 && !options.hasTimeLimit && !config.exactBrands) {
         // sample_maps等のオフライン実行も無制限にしない。
         config.timeLimitMs = std::min<std::int64_t>(
             5000,

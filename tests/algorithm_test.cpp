@@ -37,6 +37,7 @@ MatchState stateFor(const MatchSetting& s, std::vector<AgentKind> kinds) {
 
 BeamSearchConfig smallBeam() {
     BeamSearchConfig cfg;
+    cfg.refineBrands = false; // ビーム単体の比較テスト。系列補完は別途検証。
     cfg.beamWidth = 64;
     cfg.jointBeamWidth = 128;
     cfg.threadCount = 1;

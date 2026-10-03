@@ -41,7 +41,8 @@ private:
             throw std::invalid_argument(
                 "width must be positive: " + std::string(name));
         }
-        if ((name == "--macro-actions" || name == "--adaptive-beam") &&
+        if ((name == "--macro-actions" || name == "--adaptive-beam" ||
+             name == "--exact-brands") &&
             value > 1) {
             throw std::invalid_argument(
                 "expected 0 or 1: " + std::string(name));
@@ -59,6 +60,7 @@ private:
         } else if (name == "--max-actions") beam.maxActionsPerAgent = value;
         else if (name == "--macro-actions") beam.useMacroActions = value != 0;
         else if (name == "--adaptive-beam") beam.adaptiveBeamWidth = value != 0;
+        else if (name == "--exact-brands") beam.exactBrands = value != 0;
         else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
         else if (name == "--trial-beam-width") selection.trialBeamWidth = value;
         else if (name == "--trial-joint-beam-width") {

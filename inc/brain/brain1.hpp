@@ -2,6 +2,7 @@
 
 #include "brain0.hpp"
 #include "../action_routes.hpp"
+#include "../brand_search.hpp"
 #include "../evaluation.hpp"
 #include "../game_state_hash.hpp"
 #include "../min_cost_flow.hpp"
@@ -31,6 +32,11 @@
 namespace benzen {
 
 struct BeamSearchConfig {
+    // 系列上限未達のとき、枝刈り付き全行動探索で補完する。
+    bool refineBrands = true;
+    std::size_t brandSearchNodeLimit = 10000;
+    // trueなら系列探索のノード上限を解除する。締切は引き続き守る。
+    bool exactBrands = false;
     std::size_t beamWidth = 128;
 
     // 同じステップで複数の待機中でないエージェントへ行動を割り当てる際の幅。
@@ -108,6 +114,11 @@ enum class SearchStopReason : std::uint8_t {
 };
 
 struct BeamSearchResult {
+    // 指定種別・当日の交通に対する (試合系列数, 当日系列数) の証明。
+    bool brandOptimal = false;
+    std::uint32_t matchBrandUpperBound = 0;
+    std::uint32_t dailyBrandUpperBound = 0;
+    std::size_t brandSearchExpanded = 0;
     bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
@@ -3070,7 +3081,7 @@ inline BeamSearchResult brain1Pass(
 // 固定幅の探索が締切より早く完了した場合は、幅を段階的に広げて
 // 同じ日の探索をやり直す。重い問題では最初の pass 自体が締切まで走り、
 // 軽い問題では余った時間をより広い探索へ自動的に振り向ける。
-inline BeamSearchResult brain1(
+inline BeamSearchResult brain1Beam(
     const MatchSetting& setting,
     const MatchState& matchState,
     ScoreState previousScore = {},
@@ -3244,6 +3255,61 @@ inline BeamSearchResult brain1(
         Clock::now() - started).count();
     if (Clock::now() >= deadline) best.stopReason = SearchStopReason::TimeLimit;
     return best;
+}
+
+inline BeamSearchResult brain1(
+    const MatchSetting& setting,
+    const MatchState& matchState,
+    ScoreState previousScore = {},
+    const BeamSearchConfig& config = {}) {
+    using Clock = std::chrono::steady_clock;
+    if ((!config.refineBrands && !config.exactBrands) ||
+        config.timeLimitMs < 0 || config.safetyMarginMs < 0)
+        return brain1Beam(setting, matchState, previousScore, config);
+    const auto started = Clock::now();
+    std::int64_t budget = std::numeric_limits<std::int64_t>::max();
+    if (config.timeLimitMs > 0) budget = config.timeLimitMs;
+    if (config.useStateDeadline && matchState.endsAt > 0) {
+        const auto end = std::chrono::system_clock::time_point{
+            std::chrono::seconds(matchState.endsAt)};
+        budget = std::min(budget,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                end - std::chrono::system_clock::now()).count());
+    }
+    const bool limited = budget != std::numeric_limits<std::int64_t>::max();
+    if (limited) budget = std::max<std::int64_t>(0, budget - config.safetyMarginMs);
+    const auto deadline = limited ? started + std::chrono::milliseconds(budget)
+                                  : Clock::time_point::max();
+    auto beamConfig = config;
+    if (limited && budget > 1) {
+        // 完了計画の確保に80%、系列補完に残りを確保する。
+        beamConfig.timeLimitMs = std::max<std::int64_t>(1, budget - budget / 5);
+        beamConfig.safetyMarginMs = 0;
+        beamConfig.useStateDeadline = false;
+    }
+    auto result = brain1Beam(setting, matchState, previousScore, beamConfig);
+    if (!result.success) return result;
+    const auto refined = maximizeDayBrands(setting, matchState, previousScore,
+        result.plan, config.exactBrands ? 0 : config.brandSearchNodeLimit, deadline);
+    result.brandOptimal = refined.optimal;
+    result.matchBrandUpperBound = refined.matchUpperBound;
+    result.dailyBrandUpperBound = refined.dailyUpperBound;
+    result.brandSearchExpanded = refined.expanded;
+    const auto brandScore = [](const GameState& state) {
+        return std::make_pair(countBits(state.score.matchBrands), countBits(state.dayBrands));
+    };
+    if (brandScore(refined.finalState) > brandScore(result.finalState)) {
+        result.plan = refined.plan;
+        result.finalState = refined.finalState;
+        EvaluationContext context;
+        context.scoreAtDayStart = previousScore;
+        result.evaluation = evaluateGameState(result.finalState, context, config.weights);
+    }
+    result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::now() - started).count();
+    if (limited && Clock::now() >= deadline && !result.brandOptimal)
+        result.stopReason = SearchStopReason::TimeLimit;
+    return result;
 }
 
 }  // namespace benzen
