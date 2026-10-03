@@ -34,7 +34,7 @@ make -j3 test
 
 `solver_benchmark`と`tune_weights`は結果を比較・調整するためのツールなので、通常の回帰テストとは分けて実行する。
 
-2026-10-03時点では、32×32向け種別選択、最終日の経路方式比較、理論値表示・評価、補給車経路安定化を含めて`make test`と`make test-sanitize`が成功し、`make test-python`相当のPython 34件もすべて成功している。
+2026-10-03時点では、32×32向け種別選択、最終日の経路方式比較、理論値表示・評価、補給車経路安定化を含めて`make test`と`make test-sanitize`が成功し、`make test-python`相当のPython 35件もすべて成功している。
 
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 

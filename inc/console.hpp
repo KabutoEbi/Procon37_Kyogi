@@ -322,6 +322,8 @@ inline void printConsoleReport(
         << "  daily-brands=" << countBits(result.finalState.dayBrands) << '\n'
         << "  match-brands=" << countBits(result.finalState.score.matchBrands)
         << '\n'
+        << "  total-daily-brands="
+        << result.finalState.score.sumOfDailyBrandCounts << '\n'
         << "  total-udon=" << result.finalState.score.totalUdon << '\n';
     out << '\n';
     printConsoleAgents(out, setting, finalAgents);

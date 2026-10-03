@@ -17,7 +17,12 @@ if __name__ == "__main__":
     ensure_runtime()
 
 from app import SolverGUI
-from backend import ConnectionConfig, CommandResult, SimpleServerInfo
+from backend import (
+    ConnectionConfig,
+    CommandResult,
+    SimpleServerInfo,
+    match_acquisition_theoretical,
+)
 
 
 class GUITest(unittest.TestCase):
@@ -133,6 +138,7 @@ result
   udon=12
   daily-brands=3
   match-brands=4
+    total-daily-brands=6
   total-udon=25
 """
                 return CommandResult((), report, "")
@@ -245,17 +251,20 @@ result
                 self.assertEqual(gui.search_result_vars["expanded"].get(), "56,789")
                 total_udon = sum(spot["stocks"] for spot in setting["spots"])
                 total_brands = len({spot["brand"] for spot in setting["spots"]})
+                match_udon, match_brands = match_acquisition_theoretical(
+                    Path(directory) / "setting.json", len(setting["agents"])
+                )
                 self.assertEqual(
                     gui.search_result_vars["daily_count"].get(), f"12/{total_udon}玉"
                 )
                 self.assertEqual(
-                    gui.search_result_vars["total_count"].get(), f"25/{total_udon}玉"
+                    gui.search_result_vars["total_count"].get(), f"25/{match_udon}玉"
                 )
                 self.assertEqual(
                     gui.search_result_vars["daily_brands"].get(), f"3/{total_brands}系列"
                 )
                 self.assertEqual(
-                    gui.search_result_vars["total_brands"].get(), f"4/{total_brands}系列"
+                    gui.search_result_vars["total_brands"].get(), f"6/{match_brands}系列"
                 )
                 self.assertEqual(
                     gui.log_text.get("1.0", "end").count("試合開始予定"),

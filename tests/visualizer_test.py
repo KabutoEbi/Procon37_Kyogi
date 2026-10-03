@@ -36,6 +36,7 @@ from backend import (  # noqa: E402
     day_time_limit_ms,
     daily_acquisition_theoretical,
     load_snapshot,
+    match_acquisition_theoretical,
     map_acquisition_totals,
     parse_solver_result,
     trace_answer_routes,
@@ -132,6 +133,22 @@ class BackendTest(unittest.TestCase):
             with self.assertRaisesRegex(WorkflowError, "ステップ数"):
                 daily_acquisition_theoretical(setting, 2, 2)
 
+    def test_match_acquisition_theoretical_sums_days(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            setting = Path(directory) / "setting.json"
+            setting.write_text(json.dumps({
+                "map": {"width": 3, "height": 1, "cells": [[0, 0, 0]]},
+                "spots": [
+                    {"pos": 0, "brand": 7, "stocks": 3},
+                    {"pos": 1, "brand": 7, "stocks": 1},
+                    {"pos": 2, "brand": 9, "stocks": 2},
+                ],
+                "daySteps": [1, 4],
+            }), encoding="utf-8")
+            self.assertEqual(
+                match_acquisition_theoretical(setting, 2), (7, 4)
+            )
+
     def test_solver_result_report(self) -> None:
         report = """parameters beam-width=19
 === procon37 solver report ===
@@ -147,6 +164,7 @@ result
   udon=17
   daily-brands=4
   match-brands=7
+    total-daily-brands=9
   total-udon=42
 """
         summary = parse_solver_result(report)
@@ -157,6 +175,7 @@ result
         self.assertEqual(summary.expanded, 123456)
         self.assertEqual((summary.daily_udon, summary.daily_brands), (17, 4))
         self.assertEqual((summary.total_udon, summary.match_brands), (42, 7))
+        self.assertEqual(summary.total_daily_brands, 9)
         self.assertIsNone(parse_solver_result("solver output without report"))
 
     def test_simple_server_client_work_clear(self) -> None:

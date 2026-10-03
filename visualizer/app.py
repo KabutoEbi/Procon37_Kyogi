@@ -49,6 +49,7 @@ from backend import (
     load_snapshot,
     file_hash,
     format_json_for_display,
+    match_acquisition_theoretical,
     map_acquisition_totals,
     parse_solver_result,
     read_json,
@@ -1462,23 +1463,34 @@ class SolverGUI(tk.Tk):
         self.search_result_vars["expanded"].set(f"{summary.expanded:,}")
         try:
             setting_path = Path(self.setting_var.get()).expanduser()
-            total_udon, total_brands = map_acquisition_totals(setting_path)
-            udon_denominator = f"{total_udon:,}"
-            brand_denominator = f"{total_brands:,}"
+            daily_udon, daily_brands = map_acquisition_totals(setting_path)
+            patrol_count = sum(
+                agent.kind == 0
+                for agent in (self._current_snapshot.agents if self._current_snapshot else ())
+            )
+            total_udon, total_brands = match_acquisition_theoretical(
+                setting_path, patrol_count
+            )
+            daily_udon_denominator = f"{daily_udon:,}"
+            daily_brand_denominator = f"{daily_brands:,}"
+            total_udon_denominator = f"{total_udon:,}"
+            total_brand_denominator = f"{total_brands:,}"
         except (WorkflowError, OSError, ValueError, KeyError, TypeError):
-            udon_denominator = "-"
-            brand_denominator = "-"
+            daily_udon_denominator = "-"
+            daily_brand_denominator = "-"
+            total_udon_denominator = "-"
+            total_brand_denominator = "-"
         self.search_result_vars["daily_count"].set(
-            f"{summary.daily_udon:,}/{udon_denominator}玉"
+            f"{summary.daily_udon:,}/{daily_udon_denominator}玉"
         )
         self.search_result_vars["total_count"].set(
-            f"{summary.total_udon:,}/{udon_denominator}玉"
+            f"{summary.total_udon:,}/{total_udon_denominator}玉"
         )
         self.search_result_vars["daily_brands"].set(
-            f"{summary.daily_brands:,}/{brand_denominator}系列"
+            f"{summary.daily_brands:,}/{daily_brand_denominator}系列"
         )
         self.search_result_vars["total_brands"].set(
-            f"{summary.match_brands:,}/{brand_denominator}系列"
+            f"{summary.total_daily_brands:,}/{total_brand_denominator}系列"
         )
 
     def _show_answer_route(

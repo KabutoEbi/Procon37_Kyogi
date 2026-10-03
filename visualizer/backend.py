@@ -147,6 +147,7 @@ class SolverResultSummary:
     daily_brands: int
     total_udon: int
     match_brands: int
+    total_daily_brands: int
 
 
 def parse_solver_result(output: str) -> SolverResultSummary | None:
@@ -165,7 +166,7 @@ def parse_solver_result(output: str) -> SolverResultSummary | None:
 
     required = (
         "day", "stop", "elapsed-ms", "expanded", "udon",
-        "daily-brands", "total-udon", "match-brands",
+        "daily-brands", "total-udon", "match-brands", "total-daily-brands",
     )
     if any(key not in values for key in required):
         return None
@@ -179,6 +180,7 @@ def parse_solver_result(output: str) -> SolverResultSummary | None:
             daily_brands=int(values["daily-brands"]),
             total_udon=int(values["total-udon"]),
             match_brands=int(values["match-brands"]),
+            total_daily_brands=int(values["total-daily-brands"]),
         )
     except ValueError:
         return None
@@ -622,6 +624,21 @@ def daily_acquisition_theoretical(
     })
     theoretical_brands = min(available_brands, theoretical_udon)
     return theoretical_udon, theoretical_brands
+
+
+def match_acquisition_theoretical(
+    setting_path: Path, patrol_count: int
+) -> tuple[int, int]:
+    """全日程の日別理論上限を合算して返す。"""
+    snapshot = load_snapshot(setting_path)
+    if type(patrol_count) is not int or patrol_count < 0:
+        raise WorkflowError("巡回車数が不正です")
+    totals = [0, 0]
+    for day in range(len(snapshot.day_steps)):
+        daily = daily_acquisition_theoretical(setting_path, day, patrol_count)
+        totals[0] += daily[0]
+        totals[1] += daily[1]
+    return totals[0], totals[1]
 
 
 def _day_duration(setting: dict[str, Any], day: int) -> float:
