@@ -34,6 +34,7 @@ from backend import (  # noqa: E402
     read_json,
     connection_from_env,
     day_time_limit_ms,
+    daily_acquisition_theoretical,
     load_snapshot,
     map_acquisition_totals,
     parse_solver_result,
@@ -112,6 +113,24 @@ class BackendTest(unittest.TestCase):
                 ],
             }), encoding="utf-8")
             self.assertEqual(map_acquisition_totals(setting), (5, 1))
+
+    def test_daily_acquisition_theoretical(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            setting = Path(directory) / "setting.json"
+            setting.write_text(json.dumps({
+                "map": {"width": 3, "height": 1, "cells": [[0, 0, 0]]},
+                "spots": [
+                    {"pos": 0, "brand": 7, "stocks": 3},
+                    {"pos": 1, "brand": 7, "stocks": 1},
+                    {"pos": 2, "brand": 9, "stocks": 2},
+                ],
+                "daySteps": [1, 4],
+            }), encoding="utf-8")
+            self.assertEqual(daily_acquisition_theoretical(setting, 0, 2), (2, 2))
+            self.assertEqual(daily_acquisition_theoretical(setting, 1, 2), (5, 2))
+            self.assertEqual(daily_acquisition_theoretical(setting, 1, 0), (0, 0))
+            with self.assertRaisesRegex(WorkflowError, "ステップ数"):
+                daily_acquisition_theoretical(setting, 2, 2)
 
     def test_solver_result_report(self) -> None:
         report = """parameters beam-width=19

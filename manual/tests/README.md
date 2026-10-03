@@ -34,7 +34,7 @@ make -j3 test
 
 `solver_benchmark`と`tune_weights`は結果を比較・調整するためのツールなので、通常の回帰テストとは分けて実行する。
 
-2026-10-02時点では、32×32向け種別選択、最終日の経路方式比較、ビジュアライザの既定値・時間・JSON整形を含めて`make test`と`make test-sanitize`が成功し、JSON整形追加後の`make test-python`は33件すべて成功している。
+2026-10-03時点では、32×32向け種別選択、最終日の経路方式比較、理論値表示・評価、補給車経路安定化を含めて`make test`と`make test-sanitize`が成功し、`make test-python`相当のPython 34件もすべて成功している。
 
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 
@@ -51,6 +51,10 @@ make test-python
 32×32・7台・32スポット・20系列での過少補給対策と混雑・渋滞の比較は[種別選択改善記録](agent-selection-traffic-results-2026-10-02.md)を参照。
 
 32×32・8台・32スポット・20系列・10日で、最終日に複数の経路方式を比較して獲得量を改善した結果は[経路選択改善記録](route-selection-results-2026-10-02.md)を参照。
+
+理論上限を使った種別候補評価、最終日の公式得点優先、迂回合流候補拡張の比較は[理論値差分の改善記録](theoretical-gap-improvements-2026-10-02.md)を参照。
+
+補給車の不要な周回を得点・終端状態を変えず除去した比較は[補給車経路安定化の記録](supply-route-stabilization-2026-10-03.md)を参照。
 
 混雑・渋滞下での古い合流先の再計画と、エージェント選択の再評価は[混合交通での再計画・種別選択記録](mixed-traffic-reroute-results-2026-09-30.md)を参照。
 

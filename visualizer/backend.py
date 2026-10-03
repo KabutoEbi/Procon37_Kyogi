@@ -600,6 +600,30 @@ def map_acquisition_totals(setting_path: Path) -> tuple[int, int]:
     return total_udon, total_brands
 
 
+def daily_acquisition_theoretical(
+    setting_path: Path, day: int, patrol_count: int
+) -> tuple[int, int]:
+    """移動距離を無視した当日の獲得数・系列数の理論上限を返す。"""
+    snapshot = load_snapshot(setting_path)
+    if type(day) is not int or not 0 <= day < len(snapshot.day_steps):
+        raise WorkflowError("設定から当日のステップ数を取得できません")
+    if type(patrol_count) is not int or patrol_count < 0:
+        raise WorkflowError("巡回車数が不正です")
+
+    # 同じ巡回車は同じスポットから1日に一度だけ取得できる。
+    stock_capacity = sum(
+        min(stocks, patrol_count) for _, stocks in snapshot.spots.values()
+    )
+    # 1ステップで各巡回車が取得できるのは最大1玉。
+    action_capacity = patrol_count * snapshot.day_steps[day]
+    theoretical_udon = min(stock_capacity, action_capacity)
+    available_brands = len({
+        brand for brand, stocks in snapshot.spots.values() if stocks > 0
+    })
+    theoretical_brands = min(available_brands, theoretical_udon)
+    return theoretical_udon, theoretical_brands
+
+
 def _day_duration(setting: dict[str, Any], day: int) -> float:
     """設定から指定日の制限時間を検証して返す。"""
     durations = setting.get("daySeconds")

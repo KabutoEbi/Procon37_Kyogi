@@ -287,8 +287,10 @@ public:
 
             std::vector<bool> brands(s.field.brands.size(), false);
             std::int32_t spots = 0;
-            std::int32_t stock = 0;
+            std::int32_t theoreticalUdon = 0;
             std::int64_t distSum = 0;
+            const std::int32_t patrolN =
+                static_cast<std::int32_t>(n) - supplyN;
             for (const Spot& spot : s.field.spots) {
                 std::int32_t near = kImpassableCost;
                 for (std::size_t i = 0; i < n; ++i) {
@@ -301,7 +303,9 @@ public:
                     continue;
                 }
                 ++spots;
-                stock += spot.maxStock;
+                // 同じ巡回車は同じスポットから1日に一度だけ取得できる。
+                // 補給車を増やした候補へ、利用不能な在庫分まで加点しない。
+                theoreticalUdon += std::min(spot.maxStock, patrolN);
                 distSum += near;
                 if (spot.brandIndex >= 0 &&
                     static_cast<std::size_t>(spot.brandIndex) <
@@ -312,6 +316,8 @@ public:
 
             const auto brandN = static_cast<std::int32_t>(
                 std::count(brands.begin(), brands.end(), true));
+            theoreticalUdon = std::min(
+                theoreticalUdon, patrolN * steps);
             c.reachableBrandCount = brandN;
 
             // 到達可能なスポットの和集合だけでは、巡回車1台で全地点に
@@ -359,7 +365,8 @@ public:
                 0.0,
                 (maxFuel - s.fuelLimit) / maxFuel);
             c.heuristicScore =
-                1.0e9 * brandN + 1.0e6 * spots + 1.0e4 * stock -
+                1.0e9 * brandN + 1.0e6 * spots +
+                1.0e4 * theoreticalUdon -
                 100.0 * static_cast<double>(distSum) -
                 10.0 * fuelPressure * static_cast<double>(supplyDist) +
                 1.0e5 * patrolCapacity;

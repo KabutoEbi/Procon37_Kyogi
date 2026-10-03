@@ -242,14 +242,27 @@ result
                 self.assertEqual(gui.search_result_vars["expanded"].get(), "56,789")
                 total_udon = sum(spot["stocks"] for spot in setting["spots"])
                 total_brands = len({spot["brand"] for spot in setting["spots"]})
+                patrol_count = 4
+                theoretical_udon = min(
+                    sum(min(spot["stocks"], patrol_count) for spot in setting["spots"]),
+                    patrol_count * setting["daySteps"][0],
+                )
                 self.assertEqual(
                     gui.search_result_vars["daily_count"].get(), f"12/{total_udon}玉"
+                )
+                self.assertEqual(
+                    gui.search_result_vars["theoretical_daily_count"].get(),
+                    f"{theoretical_udon}玉",
                 )
                 self.assertEqual(
                     gui.search_result_vars["total_count"].get(), f"25/{total_udon}玉"
                 )
                 self.assertEqual(
                     gui.search_result_vars["daily_brands"].get(), f"3/{total_brands}系列"
+                )
+                self.assertEqual(
+                    gui.search_result_vars["theoretical_daily_brands"].get(),
+                    f"{min(total_brands, theoretical_udon)}系列",
                 )
                 self.assertEqual(
                     gui.search_result_vars["total_brands"].get(), f"4/{total_brands}系列"

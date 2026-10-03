@@ -74,6 +74,11 @@ struct BeamSearchConfig {
     // 共同割当の変化で旧巡回先の在庫が他車に予約済み、またはより重要な
     // 系列が割り当てられた場合、マクロ継続と再計画を併せて探索する。
     bool reassignStalePatrolRoutes = true;
+    // 探索後、最終状態を変えない補給車の周回を待機へ置換する。
+    bool simplifySupplyRoutes = true;
+    // 24x24以上で合流割当がない補給車の自由移動を許す検証用フラグ。
+    // 既定では低燃料の巡回車へ近づく移動だけを優先する。
+    bool allowUnassignedSupplyMoves = false;
     bool coordinatedAssignments = true;
     bool detourRendezvous = true;
     bool twoSpotLookahead = true;
@@ -84,6 +89,8 @@ struct BeamSearchConfig {
     // 0なら無効。状態や締切・割当キャッシュは保存しない。
     std::size_t distanceCacheEntries = 8;
     std::size_t detourCandidateLimit = 6;
+    // 翌日配置とのトレードオフがない最終日は迂回合流を広く比較する。
+    std::size_t finalDayDetourCandidateLimit = 8;
     bool exhaustFeasibleDetours = true;
     std::size_t lookaheadCandidateLimit = 6;
     bool profilePlanning = false;
@@ -113,6 +120,7 @@ struct BeamSearchResult {
     std::size_t assignmentComputations = 0;
     std::size_t repairedAssignments = 0;
     std::size_t detourPlans = 0;
+    std::size_t removedSupplyLoops = 0;
     std::int64_t assignmentTimeNs = 0;
     std::int64_t flowTimeNs = 0;
     std::int64_t rendezvousTimeNs = 0;
@@ -459,6 +467,92 @@ private:
         const auto left = initialWait(lhs), right = initialWait(rhs);
         return left != right ? left < right : lhs < rhs;
     }
+
+public:
+    // 補給車が同じ地点へ戻る区間を待機へ置換する。全体を再シミュレーションし、
+    // 巡回車の燃料・取得・終端位置を含む最終状態が一致する場合だけ採用する。
+    static std::size_t simplifySupplyPlan(
+        const MatchSetting& setting, const MatchState& matchState,
+        ScoreState previousScore, const GameState& expected,
+        DailyPlan& plan) {
+        struct Loop {
+            std::size_t begin = 0;
+            std::size_t end = 0;
+            std::int32_t duration = 0;
+        };
+        std::size_t removed = 0;
+        std::size_t checks = 0;
+        constexpr std::size_t maxChecks = 128;
+        for (AgentIndex agent = 0;
+             agent < plan.size() && agent < matchState.agents.size(); ++agent) {
+            if (!matchState.agents[agent].isSupply()) continue;
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                const AgentPlan& actions = plan[agent];
+                std::vector<CellPos> positions(actions.size() + 1);
+                std::vector<std::int32_t> elapsed(actions.size() + 1);
+                std::vector<std::size_t> moves(actions.size() + 1);
+                positions[0] = matchState.agents[agent].pos;
+                for (std::size_t i = 0; i < actions.size(); ++i) {
+                    positions[i + 1] = positions[i];
+                    elapsed[i + 1] = elapsed[i];
+                    moves[i + 1] = moves[i];
+                    if (isMoveAction(actions[i])) {
+                        elapsed[i + 1] += moveStepCost(
+                            setting, matchState, positions[i]);
+                        positions[i + 1] = setting.field.neighbor(
+                            positions[i], static_cast<Direction>(actions[i]));
+                        ++moves[i + 1];
+                    } else {
+                        elapsed[i + 1] -= actions[i];
+                    }
+                }
+                std::vector<Loop> loops;
+                for (std::size_t begin = 0; begin < actions.size(); ++begin) {
+                    for (std::size_t end = begin + 1;
+                         end <= actions.size(); ++end) {
+                        if (positions[begin] != positions[end] ||
+                            moves[end] - moves[begin] < 2) {
+                            continue;
+                        }
+                        loops.push_back({
+                            begin, end, elapsed[end] - elapsed[begin]});
+                    }
+                }
+                std::sort(loops.begin(), loops.end(),
+                    [](const Loop& lhs, const Loop& rhs) {
+                        const auto left = lhs.end - lhs.begin;
+                        const auto right = rhs.end - rhs.begin;
+                        return left != right ? left > right
+                                             : lhs.begin < rhs.begin;
+                    });
+                for (const Loop& loop : loops) {
+                    if (checks++ >= maxChecks) return removed;
+                    AgentPlan candidate;
+                    candidate.reserve(
+                        actions.size() - (loop.end - loop.begin) + 1);
+                    candidate.insert(candidate.end(), actions.begin(),
+                                     actions.begin() + loop.begin);
+                    appendPlanAction(candidate, -loop.duration);
+                    candidate.insert(candidate.end(), actions.begin() + loop.end,
+                                     actions.end());
+                    DailyPlan trialPlan = plan;
+                    trialPlan[agent] = std::move(candidate);
+                    const SimulationResult trial = simulateDay(
+                        setting, matchState, trialPlan, previousScore);
+                    if (!trial.valid || trial.state != expected) continue;
+                    plan = std::move(trialPlan);
+                    ++removed;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        return removed;
+    }
+
+private:
 
     static void sortAndLimit(
         std::vector<BeamNode>& nodes,
@@ -1964,6 +2058,42 @@ private:
             }
             if (std::isfinite(bestGuidance)) {
                 bonus += bestGuidance;
+            } else if (!spotDistances.planning.allowUnassignedSupplyMoves &&
+                       setting.field.cellCount() >= 24U * 24U) {
+                // 合流相手がいないときに全方向の移動を候補上位へ置くと、
+                // 割当が生じるまで補給車が無目的に周回する。一方、完全に
+                // 停止すると次の補給への先回りを失うため、目的地を持つ巡回車
+                // のうち燃料が最も少ない1台へ近づく移動だけを優遇する。
+                AgentIndex follow = state.agentCount;
+                std::int32_t leastFuel = std::numeric_limits<std::int32_t>::max();
+                for (AgentIndex patrolIndex = 0;
+                     patrolIndex < state.agentCount; ++patrolIndex) {
+                    if (!state.agents[patrolIndex].isPatrol() ||
+                        !targets[patrolIndex].valid) {
+                        continue;
+                    }
+                    const std::int32_t fuel = projectedFuel(
+                        state, patrolIndex);
+                    if (fuel < leastFuel) {
+                        leastFuel = fuel;
+                        follow = patrolIndex;
+                    }
+                }
+                bonus = 0.0;
+                if (!pending.isWait() && follow < state.agentCount) {
+                    const CellPos patrolPos = projectedPosition(state, follow);
+                    const std::int32_t before =
+                        spotDistances.travel[agent.pos][patrolPos];
+                    const std::int32_t after = spotDistances.travel[
+                        projectedPosition(state, agentIndex)][patrolPos];
+                    if (before < kImpassableCost && after < before) {
+                        bonus = -weights.supplyDistance *
+                                    static_cast<double>(before - after) -
+                                0.01 * pending.remainingSteps;
+                    } else {
+                        bonus = -1.0 - 0.01 * pending.remainingSteps;
+                    }
+                }
             }
             return bonus;
         }
@@ -2022,6 +2152,8 @@ public:
         const auto started = Clock::now();
         BeamSearchResult res;
         BeamSearchResult routeBest;
+        const bool finalDay = ms.day >= 0 &&
+            static_cast<std::size_t>(ms.day + 1) >= s.dayCount();
         const auto officialScore = [](const GameState& state) {
             return std::make_tuple(countBits(state.score.matchBrands),
                 state.score.sumOfDailyBrandCounts, state.score.totalUdon);
@@ -2032,16 +2164,21 @@ public:
         std::atomic<std::size_t> reusedEvals{0};
         auto finish = [&](SearchStopReason reason) {
             // 経路完了案は従来の途中解を上書きせず別に保持する。
-            // 最後に当日の確定得点と翌日を含む評価の両方で改善を確認する。
+            // 中間日は翌日評価も守り、最終日は確定した公式得点を優先する。
             if (routeBest.success && (!res.success ||
                 (officialScore(routeBest.finalState) > officialScore(res.finalState) &&
-                 routeBest.evaluation.total >= res.evaluation.total))) {
+                 (finalDay ||
+                  routeBest.evaluation.total >= res.evaluation.total)))) {
                 res.success = true;
                 res.plan = std::move(routeBest.plan);
                 res.finalState = routeBest.finalState;
                 res.evaluation = routeBest.evaluation;
             }
             if (res.success) {
+                if (cfg.simplifySupplyRoutes) {
+                    res.removedSupplyLoops += simplifySupplyPlan(
+                        s, ms, prev, res.finalState, res.plan);
+                }
                 res.plan = compressWaitActions(res.plan);
             }
             res.stopReason = reason;
@@ -2201,6 +2338,11 @@ public:
             cfg.distanceCacheEntries,
             res.reusedDistanceTables);
         spotDist.planning = cfg;
+        if (finalDay) {
+            spotDist.planning.detourCandidateLimit = std::max(
+                spotDist.planning.detourCandidateLimit,
+                cfg.finalDayDetourCandidateLimit);
+        }
         {
             std::size_t roads = 0, affected = 0;
             for (std::size_t pos = 0;
@@ -2260,11 +2402,16 @@ public:
                 }
                 return;
             }
-            if (hasBest &&
-                (eval.total < res.evaluation.total ||
-                 (eval.total == res.evaluation.total &&
-                  !preferPlan(plan, res.plan)))) {
-                return;
+            if (hasBest) {
+                const auto score = officialScore(sim.state);
+                const auto bestScore = officialScore(res.finalState);
+                if ((finalDay && score < bestScore) ||
+                    ((!finalDay || score == bestScore) &&
+                     (eval.total < res.evaluation.total ||
+                      (eval.total == res.evaluation.total &&
+                       !preferPlan(plan, res.plan))))) {
+                    return;
+                }
             }
             hasBest = true;
             res.success = true;
@@ -2747,13 +2894,26 @@ public:
             }
             const auto evaluation = evaluate(node.state, s, ms, prev, spotDist, weights);
             node.orderingScore = evaluation.total;
-            if (finalBest == nullptr || betterNode(node, *finalBest)) {
+            if (finalBest == nullptr ||
+                (finalDay &&
+                 officialScore(node.state) > officialScore(finalBest->state)) ||
+                ((!finalDay ||
+                  officialScore(node.state) == officialScore(finalBest->state)) &&
+                 betterNode(node, *finalBest))) {
                 finalBest = &node;
                 finalEvaluation = evaluation;
             }
             fullEvals.fetch_add(1, std::memory_order_relaxed);
         }
-        sortAndLimit(beam, 1);
+        if (finalDay && finalBest != nullptr) {
+            if (finalBest != &beam.front()) {
+                std::iter_swap(beam.begin(),
+                    beam.begin() + (finalBest - beam.data()));
+            }
+            beam.resize(1);
+        } else {
+            sortAndLimit(beam, 1);
+        }
         if (beam.empty() ||
             !std::isfinite(beam.front().orderingScore)) {
             return finish(
@@ -2765,9 +2925,14 @@ public:
             beam.front().planTails, beam.front().state.agentCount);
         if (validateDailyPlan(s, ms, finalPlan, prev).valid) {
             const BeamNode& best = beam.front();
-            if (!hasBest || best.orderingScore > res.evaluation.total ||
-                (best.orderingScore == res.evaluation.total &&
-                 preferPlan(finalPlan, res.plan))) {
+            const auto score = officialScore(best.state);
+            const auto bestScore = officialScore(res.finalState);
+            if (!hasBest ||
+                (finalDay && score > bestScore) ||
+                ((!finalDay || score == bestScore) &&
+                 (best.orderingScore > res.evaluation.total ||
+                  (best.orderingScore == res.evaluation.total &&
+                   preferPlan(finalPlan, res.plan))))) {
                 res.success = true;
                 res.plan = finalPlan;
                 res.finalState = best.state;
@@ -2838,8 +3003,7 @@ inline BeamSearchResult brain1(
     };
     const bool usePeriodic = periodic.success &&
         (!primary.success ||
-         (officialScore(periodic) > officialScore(primary) &&
-          periodic.evaluation.total >= primary.evaluation.total) ||
+         officialScore(periodic) > officialScore(primary) ||
          (officialScore(periodic) == officialScore(primary) &&
           periodic.evaluation.total > primary.evaluation.total));
     const std::size_t expandedNodes =

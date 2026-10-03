@@ -298,7 +298,8 @@ inline void printConsoleReport(
         << "  evaluations=" << result.fullEvaluations << '\n'
         << "  skipped-evaluations=" << result.reusedEvaluations << '\n'
         << "  macro-candidates=" << result.macroCandidates << '\n'
-        << "  macro-continuations=" << result.macroContinuations << '\n';
+        << "  macro-continuations=" << result.macroContinuations << '\n'
+        << "  removed-supply-loops=" << result.removedSupplyLoops << '\n';
     if (!result.success) {
         return;
     }

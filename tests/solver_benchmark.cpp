@@ -55,17 +55,20 @@ int main(int argc, char** argv) {
             spotOnly < 0 || brandOnly < 0 ||
             (spotOnly > 0 && brandOnly > spotOnly))
             throw std::invalid_argument("invalid generated setting override");
-        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8"};
+        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
             std::int64_t brands = 0, daily = 0, udon = 0, nodes = 0;
+            std::int64_t supplyBacktracks = 0;
+            std::int64_t supplyMoves = 0;
+            std::int64_t removedSupplyLoops = 0;
             std::vector<std::int64_t> times;
         };
         std::map<std::string, Summary> summaries;
         using Score = std::tuple<int, int, int>;
         int wins = 0, ties = 0, losses = 0;
-        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns\n";
+        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns\n";
         for (const int size : {8, 16, 24, 32}) {
             if (sizeOnly != 0 && size != sizeOnly) continue;
             for (int seed = seedStart; seed - seedStart < seeds; ++seed) {
@@ -101,11 +104,18 @@ int main(int argc, char** argv) {
                         beam.useMacroActions = name != "no-macros";
                         beam.reassignStalePatrolRoutes =
                             name != "baseline" && name != "no-patrol-replan";
+                        beam.simplifySupplyRoutes = name != "no-supply-cleanup";
+                        beam.allowUnassignedSupplyMoves = name == "wandering-supply";
                         beam.comparePeriodicReplanPlans =
                             name != "baseline" && name != "no-route-portfolio";
                         if (name == "replan-2") beam.macroReplanInterval = 2;
                         if (name == "replan-4") beam.macroReplanInterval = 4;
                         if (name == "replan-8") beam.macroReplanInterval = 8;
+                        if (name == "detour-8") beam.detourCandidateLimit = 8;
+                        if (name == "final-detour-6")
+                            beam.finalDayDetourCandidateLimit = 6;
+                        if (name == "lookahead-8") beam.lookaheadCandidateLimit = 8;
+                        if (name == "full-actions") beam.adaptiveActionLimit = false;
                         beam.completeIncumbentRoutes = !noCompletion;
                         if (legacyWeights) {
                             beam.fuelAwareWeights = false;
@@ -132,10 +142,28 @@ int main(int argc, char** argv) {
                         if (!match.success) return 1;
                         ScoreState previous;
                         std::int64_t elapsed = 0, nodes = 0;
+                        std::int64_t matchSupplyMoves = 0;
+                        std::int64_t matchSupplyBacktracks = 0;
                         for (const auto& day : match.days) {
                             const auto check = simulateDay(setting, day.startState, day.plan, previous);
                             const bool valid = check.valid && !day.usedFallback && check.state == day.endState;
                             std::uint64_t fingerprint = UINT64_C(1469598103934665603);
+                            std::size_t supplyMoves = 0;
+                            std::size_t supplyBacktracks = 0;
+                            for (AgentIndex agent = 0;
+                                 agent < day.plan.size(); ++agent) {
+                                if (!day.startState.agents[agent].isSupply()) continue;
+                                int previous = -1;
+                                for (const int action : day.plan[agent]) {
+                                    if (!isMoveAction(action)) continue;
+                                    ++supplyMoves;
+                                    if (previous >= 0 &&
+                                        action == (previous + 3) % 6) {
+                                        ++supplyBacktracks;
+                                    }
+                                    previous = action;
+                                }
+                            }
                             for (const auto& agent : day.plan) {
                                 fingerprint = (fingerprint ^ agent.size()) * UINT64_C(1099511628211);
                                 for (const auto action : agent)
@@ -144,13 +172,18 @@ int main(int argc, char** argv) {
                             std::cout << size << ',' << seed << ',' << repeat << ',' << name << ',' << day.day << ','
                                 << countBits(day.endState.score.matchBrands) << ',' << day.endState.score.sumOfDailyBrandCounts << ','
                                 << day.endState.score.totalUdon << ',' << day.elapsedMs << ',' << day.expandedNodes << ','
-                                << day.assignmentCacheHits << ',' << day.assignmentComputations << ',' << valid << ','
+                                << day.assignmentCacheHits << ',' << day.assignmentComputations << ','
+                                << supplyMoves << ',' << supplyBacktracks << ','
+                                << day.removedSupplyLoops << ','
+                                << valid << ','
                                 << fingerprint << ',' << day.assignmentTimeNs << ',' << day.flowTimeNs << ','
                                 << day.rendezvousTimeNs << '\n';
                             if (!valid) return 1;
                             previous = day.endState.score;
                             elapsed += day.elapsedMs;
                             nodes += day.expandedNodes;
+                            matchSupplyMoves += supplyMoves;
+                            matchSupplyBacktracks += supplyBacktracks;
                         }
                         auto& summary = summaries[name];
                         const int brands = countBits(match.score.matchBrands);
@@ -158,6 +191,10 @@ int main(int argc, char** argv) {
                         summary.daily += match.score.sumOfDailyBrandCounts;
                         summary.udon += match.score.totalUdon;
                         summary.nodes += nodes;
+                        summary.supplyMoves += matchSupplyMoves;
+                        summary.supplyBacktracks += matchSupplyBacktracks;
+                        for (const auto& day : match.days)
+                            summary.removedSupplyLoops += day.removedSupplyLoops;
                         summary.times.push_back(elapsed);
                         scores[name] = {brands, match.score.sumOfDailyBrandCounts, match.score.totalUdon};
                     }
@@ -174,7 +211,10 @@ int main(int argc, char** argv) {
             std::cerr << entry.first << ": matches=" << summary.times.size()
                 << " brands/daily/udon=" << summary.brands << '/' << summary.daily << '/' << summary.udon
                 << " median_ms=" << summary.times[summary.times.size() / 2]
-                << " max_ms=" << summary.times.back() << " nodes=" << summary.nodes << '\n';
+                << " max_ms=" << summary.times.back() << " nodes=" << summary.nodes
+                << " supply_moves=" << summary.supplyMoves
+                << " supply_backtracks=" << summary.supplyBacktracks
+                << " removed_supply_loops=" << summary.removedSupplyLoops << '\n';
         }
         if (!currentOnly)
             std::cerr << variant << " vs baseline wins/ties/losses=" << wins << '/' << ties << '/' << losses << '\n';

@@ -44,6 +44,7 @@ from backend import (
     DEFAULT_SIMPLE_CONFIG,
     Paused,
     connection_from_env,
+    daily_acquisition_theoretical,
     day_time_limit_ms,
     load_snapshot,
     file_hash,
@@ -133,8 +134,10 @@ class SolverGUI(tk.Tk):
             "elapsed": tk.StringVar(value="-"),
             "expanded": tk.StringVar(value="-"),
             "daily_count": tk.StringVar(value="-"),
+            "theoretical_daily_count": tk.StringVar(value="-"),
             "total_count": tk.StringVar(value="-"),
             "daily_brands": tk.StringVar(value="-"),
+            "theoretical_daily_brands": tk.StringVar(value="-"),
             "total_brands": tk.StringVar(value="-"),
         }
         self.simple_config_var = tk.StringVar(value=str(DEFAULT_SIMPLE_CONFIG))
@@ -506,8 +509,10 @@ class SolverGUI(tk.Tk):
             ("elapsed", "探索時間"),
             ("expanded", "展開ノード"),
             ("daily_count", "当日総獲得数"),
+            ("theoretical_daily_count", "当日理論獲得数"),
             ("total_count", "全日程合計獲得数"),
             ("daily_brands", "当日獲得系列"),
+            ("theoretical_daily_brands", "当日理論系列数"),
             ("total_brands", "全日程獲得系列"),
         ]):
             ttk.Label(result, text=label).grid(
@@ -1355,8 +1360,10 @@ class SolverGUI(tk.Tk):
             "elapsed": "-",
             "expanded": "-",
             "daily_count": "-",
+            "theoretical_daily_count": "-",
             "total_count": "-",
             "daily_brands": "-",
+            "theoretical_daily_brands": "-",
             "total_brands": "-",
         }.items():
             self.search_result_vars[key].set(value)
@@ -1389,22 +1396,38 @@ class SolverGUI(tk.Tk):
         self.search_result_vars["elapsed"].set(f"{summary.elapsed_ms:,} ms")
         self.search_result_vars["expanded"].set(f"{summary.expanded:,}")
         try:
-            total_udon, total_brands = map_acquisition_totals(
-                Path(self.setting_var.get()).expanduser()
-            )
+            setting_path = Path(self.setting_var.get()).expanduser()
+            total_udon, total_brands = map_acquisition_totals(setting_path)
             udon_denominator = f"{total_udon:,}"
             brand_denominator = f"{total_brands:,}"
+            patrol_count = sum(
+                agent.kind == 0 for agent in (self._current_snapshot.agents
+                                              if self._current_snapshot else ())
+            )
+            theoretical_udon, theoretical_brands = daily_acquisition_theoretical(
+                setting_path, summary.day, patrol_count
+            )
+            theoretical_udon_text = f"{theoretical_udon:,}玉"
+            theoretical_brands_text = f"{theoretical_brands:,}系列"
         except (WorkflowError, OSError, ValueError, KeyError, TypeError):
             udon_denominator = "-"
             brand_denominator = "-"
+            theoretical_udon_text = "-"
+            theoretical_brands_text = "-"
         self.search_result_vars["daily_count"].set(
             f"{summary.daily_udon:,}/{udon_denominator}玉"
+        )
+        self.search_result_vars["theoretical_daily_count"].set(
+            theoretical_udon_text
         )
         self.search_result_vars["total_count"].set(
             f"{summary.total_udon:,}/{udon_denominator}玉"
         )
         self.search_result_vars["daily_brands"].set(
             f"{summary.daily_brands:,}/{brand_denominator}系列"
+        )
+        self.search_result_vars["theoretical_daily_brands"].set(
+            theoretical_brands_text
         )
         self.search_result_vars["total_brands"].set(
             f"{summary.match_brands:,}/{brand_denominator}系列"

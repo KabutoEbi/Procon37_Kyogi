@@ -453,6 +453,19 @@ void testSupplyMovesOnlyForRendezvous() {
     assert(validateDailyPlan(s, ms, idle.plan).valid);
     assert(std::none_of(idle.plan[1].begin(), idle.plan[1].end(),
                         [](std::int32_t action) { return isMoveAction(action); }));
+
+    // 同じ地点へ戻るだけの補給車の周回は、終端状態を変えず待機へ置換する。
+    s = line(3, {4}, 6, {0, 1}, {});
+    ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    DailyPlan wandering{{-4}, {2, 5}};
+    const auto before = simulateDay(s, ms, wandering);
+    assert(before.valid);
+    assert(Brain1::simplifySupplyPlan(
+               s, ms, {}, before.state, wandering) == 1);
+    assert(std::none_of(wandering[1].begin(), wandering[1].end(),
+                        [](std::int32_t action) { return isMoveAction(action); }));
+    const auto after = simulateDay(s, ms, wandering);
+    assert(after.valid && after.state == before.state);
 }
 
 void testCoordinatedPlanningAndCache() {
