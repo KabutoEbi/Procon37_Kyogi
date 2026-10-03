@@ -27,6 +27,7 @@ int main() {
     setting.startsAt = 1800000000;
     assert(options.selectorFor(setting).deadlineUnixSeconds == setting.startsAt);
     assert(options.selectorFor(setting).timeLimitMs == 100);
+    assert(options.selectorFor(setting).extendTrialsToDeadline);
     for (const auto& invalid : std::vector<std::vector<std::string>>{
         {"main", "--beam-width", "0"}, {"main", "--threads", "-1"},
         {"main", "--time-limit-ms", "3ms"}, {"main", "--unknown", "1"},

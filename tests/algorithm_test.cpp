@@ -111,6 +111,51 @@ void testCompletionPreservesIncumbentScore() {
     }
 }
 
+void testFinalDayRoutePortfolio() {
+    // 小中盤面でも定期再計画は、通常経路だけで逃した取得を回収する。
+    // 最終日以外は同じ経路を使い、翌日開始位置への影響を避ける。
+    for (const int size : {16, 24}) {
+        CreateConfig create;
+        create.width = create.height = size;
+        create.agentCount = size == 16 ? 4 : 8;
+        create.spotCount = size;
+        create.brandCount = size * 3 / 4;
+        create.seed = size == 16 ? 2 : 23;
+        auto setting = ProblemCreator::generate(create).setting;
+        if (size == 24) setting.fuelLimit = setting.daySteps.front() / 2;
+        MatchRunnerConfig config;
+        config.beam = smallBeam();
+        config.beam.beamWidth = 32;
+        config.beam.adaptiveBeamWidth = false;
+        config.beam.comparePeriodicReplanPlans = false;
+        config.trafficByDay.assign(setting.dayCount(),
+            std::vector<TrafficStatus>(setting.field.cellCount()));
+        for (std::size_t day = 0; day < setting.dayCount(); ++day)
+            for (std::size_t pos = 0; pos < setting.field.cellCount(); ++pos)
+                config.trafficByDay[day][pos] = static_cast<TrafficStatus>(
+                    (pos + create.seed + day) % 3);
+        std::vector<AgentKind> kinds(create.agentCount, AgentKind::Patrol);
+        kinds.back() = AgentKind::Supply;
+        const auto ordinary = runMatch(setting, kinds, config);
+        assert(ordinary.success);
+        const auto& last = ordinary.days.back();
+        const auto previous = ordinary.days[ordinary.days.size() - 2].endState.score;
+        config.beam.comparePeriodicReplanPlans = true;
+        const auto portfolio = brain1(setting, last.startState, previous, config.beam);
+        config.beam.macroReplanInterval = 4;
+        const auto periodic = brain1(setting, last.startState, previous, config.beam);
+        assert(portfolio.success && periodic.success);
+        assert(trialScore(portfolio.finalState.score) > trialScore(ordinary.score));
+        assert(trialScore(portfolio.finalState.score) >= trialScore(periodic.finalState.score));
+        const auto replay = simulateDay(setting, last.startState, portfolio.plan, previous);
+        assert(replay.valid && replay.state == portfolio.finalState);
+        config.beam.macroReplanInterval = 0;
+        const auto intermediate = brain1(setting, ordinary.days.front().startState,
+                                         {}, config.beam);
+        assert(intermediate.plan == ordinary.days.front().plan);
+    }
+}
+
 void testDialAgainstHeap() {
     CreateConfig cfg;
     cfg.width = cfg.height = 8;
@@ -466,6 +511,38 @@ void testSupplyMovesOnlyForRendezvous() {
                         [](std::int32_t action) { return isMoveAction(action); }));
     const auto after = simulateDay(s, ms, wandering);
     assert(after.valid && after.state == before.state);
+}
+
+void testSupplyReplansInsteadOfWaitingAllDay() {
+    // 32x32・seed 1では、巡回車がマクロ経路へ入った後に通常の巡回先割当が
+    // 一時的に消える。補給車が残り全時間を待機せず、移動中の巡回車を
+    // 追跡して次の合流を再計画することを確認する。
+    CreateConfig create;
+    create.width = create.height = 32;
+    create.agentCount = 8;
+    create.spotCount = 32;
+    create.brandCount = 20;
+    create.dayCount = 10;
+    create.seed = 1;
+    const auto s = ProblemCreator::generate(create).setting;
+    const auto ms = stateFor(s, {
+        AgentKind::Patrol, AgentKind::Patrol, AgentKind::Patrol,
+        AgentKind::Patrol, AgentKind::Patrol,
+        AgentKind::Supply, AgentKind::Supply, AgentKind::Supply,
+    });
+    auto cfg = smallBeam();
+    cfg.beamWidth = 128;
+    cfg.jointBeamWidth = 512;
+    const auto result = brain1(s, ms, {}, cfg);
+    assert(result.success);
+    assert(validateDailyPlan(s, ms, result.plan).valid);
+    const auto moveCount = [&](AgentIndex agent) {
+        return std::count_if(result.plan[agent].begin(), result.plan[agent].end(),
+            [](std::int32_t action) { return isMoveAction(action); });
+    };
+    // 修正前は両方とも3回移動後、残り140/138ステップを待機していた。
+    assert(moveCount(5) > 3);
+    assert(moveCount(6) > 3);
 }
 
 void testCoordinatedPlanningAndCache() {
@@ -877,6 +954,7 @@ void testConsoleReport() {
 int main() {
     testCompleteIncumbentRoutes();
     testCompletionPreservesIncumbentScore();
+    testFinalDayRoutePortfolio();
     testDialAgainstHeap();
     testFlowAgainstEnumeration();
     testSearchEquivalence();
@@ -887,6 +965,7 @@ int main() {
     testRendezvousObstaclesAndMultipleSupplies();
     testMultipleRefuelsInOneDay();
     testSupplyMovesOnlyForRendezvous();
+    testSupplyReplansInsteadOfWaitingAllDay();
     testCoordinatedPlanningAndCache();
     testDistanceCache();
     testDetourRendezvousAndTwoSpots();

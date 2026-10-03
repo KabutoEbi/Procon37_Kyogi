@@ -92,6 +92,7 @@ public:
 
     AgentSelectorConfig selectorFor(const MatchSetting& setting) const {
         auto config = selection;
+        config.extendTrialsToDeadline = true;
         if (!hasSelectionTimeLimit) {
             const auto size = std::max(setting.field.width, setting.field.height);
             config.timeLimitMs = size <= 16 ? 60000 : (size <= 24 ? 90000 : 120000);

@@ -256,6 +256,23 @@ void testBeamSearch() {
     assert(validateDailyPlan(s, st, res.plan).valid);
     assert(res.stopReason == SearchStopReason::Completed);
 
+    // 時間制限付きで固定幅を早く完走した場合は、残り時間で幅と候補を
+    // 広げて再探索し、最初の1 pass だけで終了しない。
+    BeamSearchConfig iterativeCfg;
+    iterativeCfg.beamWidth = 1;
+    iterativeCfg.jointBeamWidth = 1;
+    iterativeCfg.minimumBeamWidth = 1;
+    iterativeCfg.minimumJointBeamWidth = 1;
+    iterativeCfg.adaptiveBeamWidth = false;
+    iterativeCfg.comparePeriodicReplanPlans = false;
+    const auto onePass = brain1Pass(s, st, {}, iterativeCfg);
+    iterativeCfg.timeLimitMs = 100;
+    iterativeCfg.safetyMarginMs = 0;
+    const auto iterative = brain1(s, st, {}, iterativeCfg);
+    assert(iterative.success);
+    assert(iterative.expandedNodes > onePass.expandedNodes);
+    assert(validateDailyPlan(s, st, iterative.plan).valid);
+
     cfg.timeLimitMs = 1;
     cfg.safetyMarginMs = 1;
     const auto timed = brain1(s, st, {}, cfg);
@@ -604,6 +621,15 @@ void testSelectorTrialsPreferredSupplyCountFirst() {
     assert(selected.trialAssignments == 1);
     // 7台では補給2台・巡回5台を最初に試す。
     assert(selected.supplyCount == 2);
+
+    // 実時間の上限がある場合は候補数を初期枠として扱い、余った時間で
+    // 未試走の配置も比較する。
+    cfg.timeLimitMs = 1000;
+    cfg.safetyMarginMs = 0;
+    cfg.extendTrialsToDeadline = true;
+    const auto budgeted = selectAgentKinds(s, cfg);
+    assert(budgeted.success);
+    assert(budgeted.trialAssignments > cfg.trialCandidateLimit);
 }
 
 void testPersistentJsonAndFallback() {

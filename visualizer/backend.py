@@ -1247,7 +1247,9 @@ class AutomaticMatch:
                 self.emit("state", self.state)
             elif phase == "solve":
                 self.emit("solve_start", self.day)
-                self.emit("log", w.solve_day(self.setting, self.state, self.checkpoint).output)
+                result = w.solve_day(self.setting, self.state, self.checkpoint)
+                self.emit("log", result.output)
+                self.emit("solved", result)
                 self.phase = "send_answer"
                 self.emit("answer", w.work_dir / "answer.json")
             elif phase == "send_answer":

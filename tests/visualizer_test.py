@@ -317,6 +317,7 @@ result
             work = Path(directory)
             workflow = Workflow(ConnectionConfig("http://example", "test"), ROOT / "main", work)
             calls = []
+            events = []
             states = iter([0, 0, 1])  # 前日が返る間は待つ。
 
             def fake_fetch(_url, _token, kind, path, **_kwargs):
@@ -330,6 +331,7 @@ result
                 return 2, work / "answer.json", work / f"score-day{day + 1}.json"
 
             def emit(kind, value):
+                events.append((kind, value))
                 if kind == "answer" and runner.day == 0:
                     workflow.stop.set()
 
@@ -348,6 +350,7 @@ result
                 self.assertEqual(runner.phase, "done")
                 self.assertEqual([c for c in calls if c.startswith("send")], ["send0", "send1"])
                 self.assertEqual(calls.count("state"), 3)
+                self.assertEqual(sum(kind == "solved" for kind, _ in events), 2)
                 send_agents.assert_called_once()
 
             runner.phase = "send_answer"
@@ -556,6 +559,7 @@ result
             self.assertEqual(read_json(work / "score-day4.json")["nextDay"], 4)
             self.assertEqual(sum(method == "POST" for method, _ in requests), 5)
             self.assertEqual(sum(kind == "state" for kind, _ in events), 4)
+            self.assertEqual(sum(kind == "solved" for kind, _ in events), 4)
             logs = "\n".join(value for kind, value in events if kind == "log")
             self.assertIn(
                 "beam-width=16 joint-beam-width=64 threads=1 "

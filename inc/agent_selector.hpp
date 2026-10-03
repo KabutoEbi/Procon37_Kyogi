@@ -37,6 +37,8 @@ struct AgentSelectorConfig {
     std::int64_t timeLimitMs = 0;
     std::int64_t deadlineUnixSeconds = 0;
     std::int64_t safetyMarginMs = 1000;
+    // trueならtrialCandidateLimitを初期枠とし、締切まで未試走候補を追加する。
+    bool extendTrialsToDeadline = false;
 };
 
 struct AgentSelectionResult {
@@ -386,11 +388,19 @@ public:
             return res;
         }
 
+        // 時間制限がある実運用では、trialCandidateLimit 件を最低限の
+        // 比較対象とし、余った時間は未試走の配置へ使う。候補数だけで
+        // 先に終了せず、deadline が実際の上限になるようにする。
+        const std::size_t trialLimit =
+            cfg.trialCandidateLimit > 0 && limited &&
+                    cfg.extendTrialsToDeadline
+                ? cs.size()
+                : std::min(cfg.trialCandidateLimit, cs.size());
         std::vector<std::size_t> trials;
         std::size_t preferredSpread = cs.size();
         std::int32_t preferredSupply = cfg.minSupplyCount;
         bool supplyPressure = false;
-        if (cfg.trialCandidateLimit > 0) {
+        if (trialLimit > 0) {
             const std::int32_t maxDaySteps = *std::max_element(
                 s.daySteps.begin(), s.daySteps.end());
             supplyPressure = s.fuelLimit <= maxDaySteps;
@@ -399,7 +409,7 @@ public:
             const auto countOrder = supplyCountOrder(n, cfg, maxSupply);
             preferredSupply = countOrder.front();
             auto appendBest = [&](std::int32_t count) {
-                if (trials.size() >= cfg.trialCandidateLimit) return;
+                if (trials.size() >= trialLimit) return;
                 const auto found = std::find_if(cs.begin(), cs.end(),
                     [count](const Candidate& c) {
                         return c.supplyCount == count;
@@ -408,7 +418,7 @@ public:
                     trials.push_back(static_cast<std::size_t>(found - cs.begin()));
             };
             auto appendSpread = [&](std::int32_t count) {
-                if (trials.size() >= cfg.trialCandidateLimit) return;
+                if (trials.size() >= trialLimit) return;
                 std::size_t spread = cs.size();
                 for (std::size_t i = 0; i < cs.size(); ++i) {
                     if (cs[i].supplyCount != count ||
@@ -427,13 +437,13 @@ public:
             // まず各台数の最良候補を比較し、実時間打切りで特定台数の
             // 位置違いだけに評価が偏らないようにする。
             for (const std::int32_t count : countOrder) {
-                if (trials.size() >= cfg.trialCandidateLimit) break;
+                if (trials.size() >= trialLimit) break;
                 appendBest(count);
             }
             // 各台数について、距離評価とは性質の異なる広域配置も試す。
             // 特定の台数の位置違いだけで候補枠を消費しない。
             for (const std::int32_t count : countOrder) {
-                if (trials.size() >= cfg.trialCandidateLimit) break;
+                if (trials.size() >= trialLimit) break;
                 appendSpread(count);
             }
             // 残りは「補給車1台で巡回車およそ2台」を中心に配分する。
@@ -445,10 +455,10 @@ public:
                 std::max(cfg.minSupplyCount, preferredSupply - 1),
             };
             bool added = true;
-            while (added && trials.size() < cfg.trialCandidateLimit) {
+            while (added && trials.size() < trialLimit) {
                 added = false;
                 for (const std::int32_t count : focusedCounts) {
-                    if (trials.size() >= cfg.trialCandidateLimit) break;
+                    if (trials.size() >= trialLimit) break;
                     for (std::size_t i = 0; i < cs.size(); ++i) {
                         if (cs[i].supplyCount != count ||
                             std::find(trials.begin(), trials.end(), i) !=
@@ -462,7 +472,7 @@ public:
                 }
             }
             for (std::size_t i = 0;
-                 i < cs.size() && trials.size() < cfg.trialCandidateLimit; ++i) {
+                 i < cs.size() && trials.size() < trialLimit; ++i) {
                 if (std::find(trials.begin(), trials.end(), i) == trials.end())
                     trials.push_back(i);
             }
@@ -493,6 +503,7 @@ public:
         beam.weights = cfg.trialWeights;
         beam.threadCount = 1;
         beam.useStateDeadline = false;
+        beam.iterativeDeepening = false;
         // 種別候補の比較では経路方式を増やさず、配置間へ同じ探索量を使う。
         beam.comparePeriodicReplanPlans = false;
         auto scenarios = cfg.trialScenarios.empty()

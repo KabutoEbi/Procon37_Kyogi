@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 from backend import (
     PROJECT_ROOT,
+    AutomaticMatch,
     CommandResult,
     ConnectionConfig,
     MapSnapshot,
@@ -44,7 +45,6 @@ from backend import (
     DEFAULT_SIMPLE_CONFIG,
     Paused,
     connection_from_env,
-    daily_acquisition_theoretical,
     day_time_limit_ms,
     load_snapshot,
     file_hash,
@@ -134,10 +134,8 @@ class SolverGUI(tk.Tk):
             "elapsed": tk.StringVar(value="-"),
             "expanded": tk.StringVar(value="-"),
             "daily_count": tk.StringVar(value="-"),
-            "theoretical_daily_count": tk.StringVar(value="-"),
             "total_count": tk.StringVar(value="-"),
             "daily_brands": tk.StringVar(value="-"),
-            "theoretical_daily_brands": tk.StringVar(value="-"),
             "total_brands": tk.StringVar(value="-"),
         }
         self.simple_config_var = tk.StringVar(value=str(DEFAULT_SIMPLE_CONFIG))
@@ -179,12 +177,19 @@ class SolverGUI(tk.Tk):
             command=self._toggle_simple_server,
         )
         self.simple_toggle_check.grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        self.simple_clear_button = ttk.Button(
+            simple_row,
+            text="作業フォルダをクリア",
+            command=self._clear_simple_server_work,
+        )
+        self.simple_clear_button.grid(row=0, column=2, sticky=tk.E, padx=(8, 0))
+        self._action_buttons.append(self.simple_clear_button)
         self.settings_button = ttk.Button(
             simple_row,
             text="実行設定・使用ファイル",
             command=self._show_settings_window,
         )
-        self.settings_button.grid(row=0, column=2, sticky=tk.E, padx=(8, 0))
+        self.settings_button.grid(row=0, column=3, sticky=tk.E, padx=(8, 0))
 
         simple = ttk.Frame(simple_row)
         self.simple_frame = simple
@@ -195,7 +200,7 @@ class SolverGUI(tk.Tk):
         ttk.Entry(simple, textvariable=self.simple_config_var).grid(
             row=0, column=1, sticky=tk.EW
         )
-        ttk.Button(simple, text="選択", command=self._choose_simple_config).grid(
+        ttk.Button(simple, text="選択", width=4, command=self._choose_simple_config).grid(
             row=0, column=2, padx=(5, 12)
         )
         ttk.Label(simple, text="チーム").grid(row=0, column=3, sticky=tk.E)
@@ -224,12 +229,6 @@ class SolverGUI(tk.Tk):
             simple, text="停止", command=self._stop_simple_server, state=tk.DISABLED
         )
         self.simple_stop_button.grid(row=0, column=12, padx=(0, 5))
-        self.simple_clear_button = ttk.Button(
-            simple,
-            text="作業フォルダをクリア",
-            command=self._clear_simple_server_work,
-        )
-        self.simple_clear_button.grid(row=0, column=13)
         self._action_buttons.append(self.simple_start_button)
 
         mode = ttk.Frame(self, padding=(12, 0, 12, 8))
@@ -499,6 +498,16 @@ class SolverGUI(tk.Tk):
                 self.send_answer_button = button
             row += 1
 
+        self.automatic_match_button = ttk.Button(
+            parent,
+            text="試合終了まで全自動",
+            command=self._run_automatic_match,
+            style="Primary.TButton",
+        )
+        self.automatic_match_button.grid(row=row, column=0, sticky=tk.EW, pady=(9, 3))
+        self._action_buttons.append(self.automatic_match_button)
+        row += 1
+
         result = ttk.LabelFrame(parent, text="探索結果", padding=7)
         self.search_result_frame = result
         result.grid(row=row, column=0, sticky=tk.EW, pady=(14, 0))
@@ -509,10 +518,8 @@ class SolverGUI(tk.Tk):
             ("elapsed", "探索時間"),
             ("expanded", "展開ノード"),
             ("daily_count", "当日総獲得数"),
-            ("theoretical_daily_count", "当日理論獲得数"),
             ("total_count", "全日程合計獲得数"),
             ("daily_brands", "当日獲得系列"),
-            ("theoretical_daily_brands", "当日理論系列数"),
             ("total_brands", "全日程獲得系列"),
         ]):
             ttk.Label(result, text=label).grid(
@@ -999,6 +1006,35 @@ class SolverGUI(tk.Tk):
 
         self._run_task("設定取得・種別選択・送信", prepare)
 
+    def _run_automatic_match(self) -> None:
+        workflow = self._workflow_or_dialog()
+        if workflow is None:
+            return
+
+        def emit(kind: str, value: Any) -> None:
+            self._messages.put(("event", kind, value))
+
+        try:
+            progress = workflow.work_dir / "automatic-progress.json"
+            if progress.is_file():
+                runner = AutomaticMatch.restore(workflow, emit)
+                if runner.setting.is_file():
+                    self._setting_loaded(runner.setting)
+                if runner.agents.is_file():
+                    self._agents_loaded(runner.agents)
+                state = getattr(runner, "state", None)
+                if state is not None and state.is_file():
+                    self.state_var.set(str(state))
+                    self._state_loaded(state)
+                if runner.checkpoint is not None:
+                    self.score_var.set(str(runner.checkpoint))
+            else:
+                runner = AutomaticMatch(workflow, emit)
+        except (WorkflowError, OSError, ValueError) as error:
+            messagebox.showerror("試合終了まで全自動", str(error), parent=self)
+            return
+        self._run_task("試合終了まで全自動", runner.run)
+
     def _auto_event(self, key: str, data: Any) -> None:
         if key == "setting":
             self._setting_loaded(data)
@@ -1012,6 +1048,34 @@ class SolverGUI(tk.Tk):
             self._sync_day_button()
         elif key == "solve_start":
             self._clear_answer_route()
+            self._begin_search_result(f"day={data}")
+        elif key == "phase":
+            self.status_var.set(str(data))
+            self._log(str(data))
+        elif key == "log":
+            if data:
+                self._log(str(data))
+        elif key == "state":
+            state = Path(data)
+            try:
+                day = read_json(state).get("day")
+                if type(day) is int:
+                    context = self._day_context(day)
+                    self._daily_inputs[context] = (state, None, file_hash(state))
+            except (WorkflowError, OSError, ValueError, AttributeError):
+                pass
+            self.state_var.set(str(state))
+            self._state_loaded(state)
+        elif key == "solved":
+            self._show_search_result(data)
+        elif key == "answer":
+            self._show_answer_route(Path(data))
+            self._show_json(Path(data))
+        elif key == "accepted":
+            revision, checkpoint, next_day = data
+            self.score_var.set(str(checkpoint))
+            self.day_var.set(next_day)
+            self._log(f"revision={revision}\n次日チェックポイント: {checkpoint}")
 
     def _day(self) -> int:
         day = self.day_var.get()
@@ -1360,10 +1424,8 @@ class SolverGUI(tk.Tk):
             "elapsed": "-",
             "expanded": "-",
             "daily_count": "-",
-            "theoretical_daily_count": "-",
             "total_count": "-",
             "daily_brands": "-",
-            "theoretical_daily_brands": "-",
             "total_brands": "-",
         }.items():
             self.search_result_vars[key].set(value)
@@ -1400,34 +1462,17 @@ class SolverGUI(tk.Tk):
             total_udon, total_brands = map_acquisition_totals(setting_path)
             udon_denominator = f"{total_udon:,}"
             brand_denominator = f"{total_brands:,}"
-            patrol_count = sum(
-                agent.kind == 0 for agent in (self._current_snapshot.agents
-                                              if self._current_snapshot else ())
-            )
-            theoretical_udon, theoretical_brands = daily_acquisition_theoretical(
-                setting_path, summary.day, patrol_count
-            )
-            theoretical_udon_text = f"{theoretical_udon:,}玉"
-            theoretical_brands_text = f"{theoretical_brands:,}系列"
         except (WorkflowError, OSError, ValueError, KeyError, TypeError):
             udon_denominator = "-"
             brand_denominator = "-"
-            theoretical_udon_text = "-"
-            theoretical_brands_text = "-"
         self.search_result_vars["daily_count"].set(
             f"{summary.daily_udon:,}/{udon_denominator}玉"
-        )
-        self.search_result_vars["theoretical_daily_count"].set(
-            theoretical_udon_text
         )
         self.search_result_vars["total_count"].set(
             f"{summary.total_udon:,}/{udon_denominator}玉"
         )
         self.search_result_vars["daily_brands"].set(
             f"{summary.daily_brands:,}/{brand_denominator}系列"
-        )
-        self.search_result_vars["theoretical_daily_brands"].set(
-            theoretical_brands_text
         )
         self.search_result_vars["total_brands"].set(
             f"{summary.match_brands:,}/{brand_denominator}系列"

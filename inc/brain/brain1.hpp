@@ -51,6 +51,8 @@ struct BeamSearchConfig {
     bool adaptiveBeamWidth = true;
     std::size_t minimumBeamWidth = 16;
     std::size_t minimumJointBeamWidth = 64;
+    // 固定幅を早く完走した場合、締切まで幅と候補数を広げて再探索する。
+    bool iterativeDeepening = true;
 
     // 有効な途中解を再シミュレーションして保存する間隔。
     std::size_t incumbentInterval = 4;
@@ -67,8 +69,8 @@ struct BeamSearchConfig {
     std::size_t macroTargetLimit = 3;
     // マクロ継続を残しつつ、定期的に別経路も探索する。0なら再検討しない。
     std::size_t macroReplanInterval = 0;
-    // 大規模盤面で十分な時間がある場合、既定経路と定期再計画経路を
-    // 両方探索し、公式得点が高い方を採用する。
+    // 最終日に十分な時間がある場合、盤面サイズ・台数によらず
+    // 既定経路と定期再計画経路を探索し、公式得点が高い方を採用する。
     bool comparePeriodicReplanPlans = true;
     std::int64_t routePortfolioMinTimeMs = 5000;
     // 共同割当の変化で旧巡回先の在庫が他車に予約済み、またはより重要な
@@ -2066,8 +2068,10 @@ private:
                 // のうち燃料が最も少ない1台へ近づく移動だけを優遇する。
                 AgentIndex follow = state.agentCount;
                 std::int32_t leastFuel = std::numeric_limits<std::int32_t>::max();
+                std::size_t supplyCount = 0;
                 for (AgentIndex patrolIndex = 0;
                      patrolIndex < state.agentCount; ++patrolIndex) {
+                    supplyCount += state.agents[patrolIndex].isSupply();
                     if (!state.agents[patrolIndex].isPatrol() ||
                         !targets[patrolIndex].valid) {
                         continue;
@@ -2080,7 +2084,15 @@ private:
                     }
                 }
                 bonus = 0.0;
-                if (!pending.isWait() && follow < state.agentCount) {
+                if (pending.isWait() && pending.remainingSteps > 1 &&
+                    supplyCount > 1 &&
+                    state.step * 32 < state.dayStepLimit) {
+                    // 複数補給車では一対一割当の競合により、日序盤だけ合流先が
+                    // 一時的に消えることがある。残り時間すべてを待つと次の移動
+                    // 完了時に再評価できないため、短い待機を残して長時間待機を
+                    // 候補上位から外す。終盤は役目を終えた車を無理に動かさない。
+                    bonus = -1.0 - 0.01 * pending.remainingSteps;
+                } else if (!pending.isWait() && follow < state.agentCount) {
                     const CellPos patrolPos = projectedPosition(state, follow);
                     const std::int32_t before =
                         spotDistances.travel[agent.pos][patrolPos];
@@ -2158,17 +2170,25 @@ public:
             return std::make_tuple(countBits(state.score.matchBrands),
                 state.score.sumOfDailyBrandCounts, state.score.totalUdon);
         };
+        const auto selectionScore = [&](const GameState& state) {
+            return std::make_tuple(countBits(state.score.matchBrands),
+                state.score.sumOfDailyBrandCounts,
+                finalDay ? state.score.totalUdon : 0);
+        };
         auto cache = std::make_shared<AssignmentCache>();
         auto timings = std::make_shared<PlanningTimings>();
         std::atomic<std::size_t> fullEvals{0};
         std::atomic<std::size_t> reusedEvals{0};
         auto finish = [&](SearchStopReason reason) {
             // 経路完了案は従来の途中解を上書きせず別に保持する。
-            // 中間日は翌日評価も守り、最終日は確定した公式得点を優先する。
+            // 全日で系列数を最優先する。中間日の獲得数は翌日配置との
+            // トレードオフがあるため、同じ系列数なら終端評価で比較する。
             if (routeBest.success && (!res.success ||
-                (officialScore(routeBest.finalState) > officialScore(res.finalState) &&
-                 (finalDay ||
-                  routeBest.evaluation.total >= res.evaluation.total)))) {
+                selectionScore(routeBest.finalState) >
+                    selectionScore(res.finalState) ||
+                (selectionScore(routeBest.finalState) ==
+                     selectionScore(res.finalState) &&
+                 routeBest.evaluation.total > res.evaluation.total))) {
                 res.success = true;
                 res.plan = std::move(routeBest.plan);
                 res.finalState = routeBest.finalState;
@@ -2403,10 +2423,10 @@ public:
                 return;
             }
             if (hasBest) {
-                const auto score = officialScore(sim.state);
-                const auto bestScore = officialScore(res.finalState);
-                if ((finalDay && score < bestScore) ||
-                    ((!finalDay || score == bestScore) &&
+                const auto score = selectionScore(sim.state);
+                const auto bestScore = selectionScore(res.finalState);
+                if (score < bestScore ||
+                    (score == bestScore &&
                      (eval.total < res.evaluation.total ||
                       (eval.total == res.evaluation.total &&
                        !preferPlan(plan, res.plan))))) {
@@ -2895,17 +2915,15 @@ public:
             const auto evaluation = evaluate(node.state, s, ms, prev, spotDist, weights);
             node.orderingScore = evaluation.total;
             if (finalBest == nullptr ||
-                (finalDay &&
-                 officialScore(node.state) > officialScore(finalBest->state)) ||
-                ((!finalDay ||
-                  officialScore(node.state) == officialScore(finalBest->state)) &&
+                selectionScore(node.state) > selectionScore(finalBest->state) ||
+                (selectionScore(node.state) == selectionScore(finalBest->state) &&
                  betterNode(node, *finalBest))) {
                 finalBest = &node;
                 finalEvaluation = evaluation;
             }
             fullEvals.fetch_add(1, std::memory_order_relaxed);
         }
-        if (finalDay && finalBest != nullptr) {
+        if (finalBest != nullptr) {
             if (finalBest != &beam.front()) {
                 std::iter_swap(beam.begin(),
                     beam.begin() + (finalBest - beam.data()));
@@ -2925,11 +2943,10 @@ public:
             beam.front().planTails, beam.front().state.agentCount);
         if (validateDailyPlan(s, ms, finalPlan, prev).valid) {
             const BeamNode& best = beam.front();
-            const auto score = officialScore(best.state);
-            const auto bestScore = officialScore(res.finalState);
-            if (!hasBest ||
-                (finalDay && score > bestScore) ||
-                ((!finalDay || score == bestScore) &&
+            const auto score = selectionScore(best.state);
+            const auto bestScore = selectionScore(res.finalState);
+            if (!hasBest || score > bestScore ||
+                (score == bestScore &&
                  (best.orderingScore > res.evaluation.total ||
                   (best.orderingScore == res.evaluation.total &&
                    preferPlan(finalPlan, res.plan))))) {
@@ -2945,7 +2962,7 @@ public:
     }
 };
 
-inline BeamSearchResult brain1(
+inline BeamSearchResult brain1Pass(
     const MatchSetting& setting,
     const MatchState& matchState,
     ScoreState previousScore = {},
@@ -2954,8 +2971,6 @@ inline BeamSearchResult brain1(
         (!config.useStateDeadline || matchState.endsAt <= 0);
     const bool compareRoutes = config.comparePeriodicReplanPlans &&
         config.useMacroActions && config.macroReplanInterval == 0 &&
-        setting.field.cellCount() >= 32U * 32U &&
-        setting.agentCount() >= 7 &&
         matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount() &&
         (unlimited || config.timeLimitMs >= config.routePortfolioMinTimeMs);
@@ -3050,6 +3065,185 @@ inline BeamSearchResult brain1(
     selected.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         Clock::now() - started).count();
     return selected;
+}
+
+// 固定幅の探索が締切より早く完了した場合は、幅を段階的に広げて
+// 同じ日の探索をやり直す。重い問題では最初の pass 自体が締切まで走り、
+// 軽い問題では余った時間をより広い探索へ自動的に振り向ける。
+inline BeamSearchResult brain1(
+    const MatchSetting& setting,
+    const MatchState& matchState,
+    ScoreState previousScore = {},
+    const BeamSearchConfig& config = {}) {
+    using Clock = std::chrono::steady_clock;
+    const auto started = Clock::now();
+
+    if (!config.iterativeDeepening) {
+        return brain1Pass(setting, matchState, previousScore, config);
+    }
+
+    std::int64_t effectiveMs = std::numeric_limits<std::int64_t>::max();
+    if (config.timeLimitMs > 0) {
+        effectiveMs = std::max<std::int64_t>(
+            0, config.timeLimitMs - config.safetyMarginMs);
+    }
+    if (config.useStateDeadline && matchState.endsAt > 0) {
+        const auto end = std::chrono::system_clock::time_point{
+            std::chrono::seconds(matchState.endsAt)};
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            end - std::chrono::system_clock::now()).count();
+        effectiveMs = std::min(
+            effectiveMs,
+            std::max<std::int64_t>(0, left - config.safetyMarginMs));
+    }
+    if (effectiveMs == std::numeric_limits<std::int64_t>::max()) {
+        return brain1Pass(setting, matchState, previousScore, config);
+    }
+    if (effectiveMs <= 0) {
+        return brain1Pass(setting, matchState, previousScore, config);
+    }
+
+    const auto deadline = started + std::chrono::milliseconds(effectiveMs);
+    BeamSearchResult best;
+    std::size_t totalExpanded = 0;
+    std::size_t totalFull = 0;
+    std::size_t totalReused = 0;
+    std::size_t totalMacroCandidates = 0;
+    std::size_t totalMacroContinuations = 0;
+    std::size_t totalCacheHits = 0;
+    std::size_t totalComputations = 0;
+    std::size_t totalRepairs = 0;
+    std::size_t totalDetours = 0;
+    std::size_t totalRemovedLoops = 0;
+    std::int64_t totalAssignmentNs = 0;
+    std::int64_t totalFlowNs = 0;
+    std::int64_t totalRendezvousNs = 0;
+    bool reusedTables = false;
+
+    const bool finalDay = matchState.day >= 0 &&
+        static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
+    auto resultScore = [&](const BeamSearchResult& result) {
+        return std::make_tuple(
+            countBits(result.finalState.score.matchBrands),
+            result.finalState.score.sumOfDailyBrandCounts,
+            finalDay ? result.finalState.score.totalUdon : 0);
+    };
+    auto better = [&](const BeamSearchResult& lhs,
+                      const BeamSearchResult& rhs) {
+        return lhs.success &&
+            (!rhs.success || resultScore(lhs) > resultScore(rhs) ||
+             (resultScore(lhs) == resultScore(rhs) &&
+              lhs.evaluation.total > rhs.evaluation.total));
+    };
+
+    BeamSearchConfig pass = config;
+    pass.useStateDeadline = false;
+    pass.safetyMarginMs = 0;
+    const std::size_t maxBeam = std::max<std::size_t>(
+        pass.beamWidth,
+        std::min<std::size_t>(8192, pass.beamWidth * 16));
+    const std::size_t maxJoint = std::max<std::size_t>(
+        pass.jointBeamWidth,
+        std::min<std::size_t>(32768, pass.jointBeamWidth * 16));
+
+    while (Clock::now() < deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - Clock::now()).count();
+        if (remaining <= 0) break;
+        pass.timeLimitMs = remaining;
+        BeamSearchResult current = brain1Pass(
+            setting, matchState, previousScore, pass);
+
+        totalExpanded += current.expandedNodes;
+        totalFull += current.fullEvaluations;
+        totalReused += current.reusedEvaluations;
+        totalMacroCandidates += current.macroCandidates;
+        totalMacroContinuations += current.macroContinuations;
+        totalCacheHits += current.assignmentCacheHits;
+        totalComputations += current.assignmentComputations;
+        totalRepairs += current.repairedAssignments;
+        totalDetours += current.detourPlans;
+        totalRemovedLoops += current.removedSupplyLoops;
+        totalAssignmentNs += current.assignmentTimeNs;
+        totalFlowNs += current.flowTimeNs;
+        totalRendezvousNs += current.rendezvousTimeNs;
+        reusedTables = reusedTables || current.reusedDistanceTables;
+
+        const bool timedOut = current.stopReason == SearchStopReason::TimeLimit;
+        if (better(current, best)) best = std::move(current);
+        if (timedOut) break;
+
+        const std::size_t nextBeam = std::min(
+            maxBeam, pass.beamWidth > maxBeam / 2
+                         ? maxBeam : pass.beamWidth * 2);
+        const std::size_t nextJoint = std::min(
+            maxJoint, pass.jointBeamWidth > maxJoint / 2
+                          ? maxJoint : pass.jointBeamWidth * 2);
+        const std::size_t spotLimit = std::max<std::size_t>(
+            1, setting.field.spots.size());
+        const std::size_t detourLimit = std::max<std::size_t>(
+            spotLimit, setting.field.cellCount());
+        const std::size_t nextMacro = std::min(
+            spotLimit, pass.macroTargetLimit >= spotLimit / 2
+                           ? spotLimit : pass.macroTargetLimit * 2);
+        const std::size_t nextLookahead = std::min(
+            spotLimit, pass.lookaheadCandidateLimit >= spotLimit / 2
+                           ? spotLimit : pass.lookaheadCandidateLimit * 2);
+        const std::size_t nextDetour = std::min(
+            detourLimit, pass.detourCandidateLimit >= detourLimit / 2
+                             ? detourLimit : pass.detourCandidateLimit * 2);
+        const std::size_t nextFinalDetour = std::min(
+            detourLimit,
+            pass.finalDayDetourCandidateLimit >= detourLimit / 2
+                ? detourLimit : pass.finalDayDetourCandidateLimit * 2);
+        const bool alreadyExhaustive =
+            nextBeam == pass.beamWidth &&
+            nextJoint == pass.jointBeamWidth &&
+            nextMacro == pass.macroTargetLimit &&
+            nextLookahead == pass.lookaheadCandidateLimit &&
+            nextDetour == pass.detourCandidateLimit &&
+            nextFinalDetour == pass.finalDayDetourCandidateLimit &&
+            pass.maxActionsPerAgent == 0;
+        if (alreadyExhaustive) break;
+        pass.beamWidth = nextBeam;
+        pass.jointBeamWidth = nextJoint;
+        pass.macroTargetLimit = nextMacro;
+        pass.lookaheadCandidateLimit = nextLookahead;
+        pass.detourCandidateLimit = nextDetour;
+        pass.finalDayDetourCandidateLimit = nextFinalDetour;
+        if (nextBeam == maxBeam && nextJoint == maxJoint) {
+            pass.maxActionsPerAgent = 0;
+            pass.adaptiveActionLimit = false;
+        }
+    }
+
+    // どの pass も解を作れなかった場合も、従来どおり最低限の待機案を
+    // 得るため元設定で一度だけ結果を構築する。
+    if (!best.success) {
+        BeamSearchConfig fallback = config;
+        fallback.timeLimitMs = 1;
+        fallback.safetyMarginMs = 1;
+        fallback.useStateDeadline = false;
+        best = brain1Pass(setting, matchState, previousScore, fallback);
+    }
+    best.expandedNodes = totalExpanded;
+    best.fullEvaluations = totalFull;
+    best.reusedEvaluations = totalReused;
+    best.macroCandidates = totalMacroCandidates;
+    best.macroContinuations = totalMacroContinuations;
+    best.assignmentCacheHits = totalCacheHits;
+    best.assignmentComputations = totalComputations;
+    best.repairedAssignments = totalRepairs;
+    best.detourPlans = totalDetours;
+    best.removedSupplyLoops = totalRemovedLoops;
+    best.assignmentTimeNs = totalAssignmentNs;
+    best.flowTimeNs = totalFlowNs;
+    best.rendezvousTimeNs = totalRendezvousNs;
+    best.reusedDistanceTables = reusedTables;
+    best.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::now() - started).count();
+    if (Clock::now() >= deadline) best.stopReason = SearchStopReason::TimeLimit;
+    return best;
 }
 
 }  // namespace benzen
