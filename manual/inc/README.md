@@ -25,6 +25,8 @@
 
 - [`brain/brain0.hpp`](brain/brain0.md): ダイクストラ法と燃料制約付き最短路
 - [`brain/brain1.hpp`](brain/brain1.md): ビームサーチと最終日の経路方式比較
+- [`brand_repair.hpp`](brand_repair.md): 未獲得系列を救済する連鎖再計画
+- [`brand_search.hpp`](brand_search.md): 全車の系列最大化と最適性証明
 - [`agent_selector.hpp`](agent_selector.md): 中心補給台数・交通シナリオを使うエージェント種別の自動選択
 - [`evaluation.hpp`](evaluation.md): 状態評価
 - [`search_state.hpp`](search_state.md): 探索状態の正規化と優越判定

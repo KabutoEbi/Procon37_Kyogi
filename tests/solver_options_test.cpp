@@ -29,11 +29,13 @@ int main() {
     assert(options.selectorFor(setting).timeLimitMs == 100);
     assert(options.selectorFor(setting).extendTrialsToDeadline);
     assert(parse({"main", "--exact-brands", "1"}).beam.exactBrands);
+    assert(!parse({"main", "--brand-repair", "0"}).beam.useBrandRepair);
+    assert(parse({"main", "--brand-repair", "1"}).beam.useBrandRepair);
     for (const auto& invalid : std::vector<std::vector<std::string>>{
         {"main", "--beam-width", "0"}, {"main", "--threads", "-1"},
         {"main", "--time-limit-ms", "3ms"}, {"main", "--unknown", "1"},
         {"main", "--beam-width"}, {"main", "--macro-actions", "2"},
-        {"main", "--exact-brands", "2"}}) {
+        {"main", "--exact-brands", "2"}, {"main", "--brand-repair", "2"}}) {
         bool rejected = false;
         try { (void)parse(invalid); }
         catch (const std::invalid_argument&) { rejected = true; }

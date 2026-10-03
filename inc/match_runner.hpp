@@ -34,6 +34,7 @@ struct MatchDayResult {
     std::size_t assignmentCacheHits = 0;
     std::size_t assignmentComputations = 0;
     std::size_t removedSupplyLoops = 0;
+    std::size_t brandRepairAttempts = 0, brandRepairExpanded = 0, brandRepairImprovements = 0;
     std::int64_t assignmentTimeNs = 0, flowTimeNs = 0, rendezvousTimeNs = 0;
     SearchStopReason stopReason = SearchStopReason::NoValidPlan;
 };
@@ -195,6 +196,9 @@ public:
             record.assignmentCacheHits = search.assignmentCacheHits;
             record.assignmentComputations = search.assignmentComputations;
             record.removedSupplyLoops = search.removedSupplyLoops;
+            record.brandRepairAttempts = search.brandRepairAttempts;
+            record.brandRepairExpanded = search.brandRepairExpanded;
+            record.brandRepairImprovements = search.brandRepairImprovements;
             record.assignmentTimeNs = search.assignmentTimeNs;
             record.flowTimeNs = search.flowTimeNs;
             record.rendezvousTimeNs = search.rendezvousTimeNs;

@@ -19,6 +19,7 @@
 | `--max-actions` | 各車の行動候補数。0は全候補 |
 | `--macro-actions`, `--adaptive-beam` | 有効1、無効0 |
 | `--exact-brands` | 1で系列補完の探索件数上限を解除。0は既定の上限付き補完 |
+| `--brand-repair` | 系列救済型の連鎖再計画。有効1（既定）、無効0 |
 | `--trial-candidates` | 種別選択で試走する候補数。0は距離評価のみ |
 | `--trial-beam-width`, `--trial-joint-beam-width` | 種別選択の試走幅 |
 | `--selection-time-ms` | 種別選択の相対時間上限 |

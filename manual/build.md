@@ -17,8 +17,9 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 | `make` / `make release` | ソルバーの最適化ビルド |
 | `make test` | C++モデル・探索・引数・3サイズサンプル、Pythonバックエンド・復旧・起動環境。実ソルバーとの4日間連携も実行 |
 | `make test-core` | サンプルJSONを必要としないC++・Pythonテスト |
-| `make test-cpp` | C++7テスト（系列最大化・公式Q&A・プロパティ・サンプルを含む） |
+| `make test-cpp` | C++8テスト（系列最大化・連鎖再計画・公式Q&A・プロパティ・サンプルを含む） |
 | `make test-brands` | 系列最大化を独立した全列挙と照合し、ビームの取りこぼし補完を検証 |
+| `make test-brand-repair` | 役割交換、補給、固定行動、巻き戻しの系列救済を検証 |
 | `make test-python` | Python 35テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |

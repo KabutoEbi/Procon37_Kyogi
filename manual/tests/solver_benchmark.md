@@ -34,7 +34,7 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 出力は次のCSV形式である。
 
 ```text
-size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns
+size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements
 ```
 
 - `variant`: 比較する機能構成
@@ -50,6 +50,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `valid`: 計画を前日得点込みで再シミュレーションし、終了状態の一致とフォールバック未使用を確認した結果。不一致時は終了コード1
 - `plan_hash`: エージェントごとの行動列・長さの64bit指紋。速度改善前後の同一設定で、得点・展開数と併せて比較する
 - `assignment_ns`, `flow_ns`, `rendezvous_ns`: `--profile`時の処理時間。未指定時は0。計測範囲が重複するため加算しない
+- `repair_attempts`, `repair_expanded`, `repair_improvements`: 系列救済の試行数、状態展開数、採用数。採用数は全車探索前のビーム計画に対する改善数であり、従来の全車探索より勝った試合数とは異なる
 
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 
@@ -66,6 +67,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 ## 重み・途中解・変更前後の比較（2026-10-01）
 
 - `--current-only`: `--variant`の構成だけを実行する。異なるバイナリの同条件比較用。
+- `--compare-brand-repair`: 連鎖再計画だけを切り替えた`no-brand-repair`と`brand-repair`を同じ時間予算・問題で交互に実行する。他の探索機能は両方で有効。`--current-only`との併用は不可。
 - `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
 - `--agents N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、スポット数、系列数、日数を上書きする。
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。
@@ -81,6 +83,17 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 ```
 
 `--current-only`では別バイナリ間の実行順を自動交替しない。比較側で順序を変えた反復も行う。
+
+系列救済型の連鎖再計画だけを比較する例:
+
+```sh
+.build/tools/solver_benchmark --compare-brand-repair \
+  --seeds 4 --repeats 2 --days 4 --mixed-traffic --tight-fuel --time-ms 300
+```
+
+`--fixed-work`で比較した場合も局所補完の追加計算量は異なるため、同じ総探索量や同じ実行時間の比較ではない。効果は時間制限付きの結果とも照合する。
+
+実装と2026-10-03の比較結果は[系列救済の検証記録](brand-repair-results-2026-10-03.md)を参照。
 結果は[改善記録](search-improvements-2026-10-01.md)を参照。
 
 混合交通での巡回マクロ再計画と燃料制約付き合流候補の比較は

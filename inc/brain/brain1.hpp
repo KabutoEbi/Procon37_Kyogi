@@ -3,6 +3,7 @@
 #include "brain0.hpp"
 #include "../action_routes.hpp"
 #include "../brand_search.hpp"
+#include "../brand_repair.hpp"
 #include "../evaluation.hpp"
 #include "../game_state_hash.hpp"
 #include "../min_cost_flow.hpp"
@@ -37,6 +38,8 @@ struct BeamSearchConfig {
     std::size_t brandSearchNodeLimit = 10000;
     // trueなら系列探索のノード上限を解除する。締切は引き続き守る。
     bool exactBrands = false;
+    bool useBrandRepair = true;
+    BrandRepairConfig brandRepair{};
     std::size_t beamWidth = 128;
 
     // 同じステップで複数の待機中でないエージェントへ行動を割り当てる際の幅。
@@ -119,6 +122,9 @@ struct BeamSearchResult {
     std::uint32_t matchBrandUpperBound = 0;
     std::uint32_t dailyBrandUpperBound = 0;
     std::size_t brandSearchExpanded = 0;
+    std::size_t brandRepairAttempts = 0;
+    std::size_t brandRepairExpanded = 0;
+    std::size_t brandRepairImprovements = 0;
     bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
@@ -3289,6 +3295,24 @@ inline BeamSearchResult brain1(
     }
     auto result = brain1Beam(setting, matchState, previousScore, beamConfig);
     if (!result.success) return result;
+    bool changed = false;
+    if (config.useBrandRepair && !config.exactBrands) {
+        auto repairDeadline = deadline;
+        if (limited) {
+            const auto now = Clock::now();
+            repairDeadline = now + std::max(Clock::duration::zero(), deadline - now) * 3 / 4;
+        }
+        const auto repair = repairDayBrands(setting, matchState, previousScore,
+            result.plan, config.brandRepair, repairDeadline);
+        result.brandRepairAttempts = repair.attempts;
+        result.brandRepairExpanded = repair.expanded;
+        result.brandRepairImprovements = repair.improvements;
+        if (repair.improvements) {
+            result.plan = repair.plan;
+            result.finalState = repair.finalState;
+            changed = true;
+        }
+    }
     const auto refined = maximizeDayBrands(setting, matchState, previousScore,
         result.plan, config.exactBrands ? 0 : config.brandSearchNodeLimit, deadline);
     result.brandOptimal = refined.optimal;
@@ -3301,6 +3325,9 @@ inline BeamSearchResult brain1(
     if (brandScore(refined.finalState) > brandScore(result.finalState)) {
         result.plan = refined.plan;
         result.finalState = refined.finalState;
+        changed = true;
+    }
+    if (changed) {
         EvaluationContext context;
         context.scoreAtDayStart = previousScore;
         result.evaluation = evaluateGameState(result.finalState, context, config.weights);
