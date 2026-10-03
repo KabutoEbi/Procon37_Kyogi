@@ -200,7 +200,10 @@ class SolverGUI(tk.Tk):
         ttk.Entry(simple, textvariable=self.simple_config_var).grid(
             row=0, column=1, sticky=tk.EW
         )
-        ttk.Button(simple, text="選択", width=4, command=self._choose_simple_config).grid(
+        ttk.Button(
+            simple, text="選択", width=3, padding=(2, 1),
+            command=self._choose_simple_config,
+        ).grid(
             row=0, column=2, padx=(5, 12)
         )
         ttk.Label(simple, text="チーム").grid(row=0, column=3, sticky=tk.E)
