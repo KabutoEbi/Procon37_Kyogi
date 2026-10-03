@@ -34,7 +34,7 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 出力は次のCSV形式である。
 
 ```text
-size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements
+size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements
 ```
 
 - `variant`: 比較する機能構成
@@ -51,6 +51,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `plan_hash`: エージェントごとの行動列・長さの64bit指紋。速度改善前後の同一設定で、得点・展開数と併せて比較する
 - `assignment_ns`, `flow_ns`, `rendezvous_ns`: `--profile`時の処理時間。未指定時は0。計測範囲が重複するため加算しない
 - `repair_attempts`, `repair_expanded`, `repair_improvements`: 系列救済の試行数、状態展開数、採用数。採用数は全車探索前のビーム計画に対する改善数であり、従来の全車探索より勝った試合数とは異なる
+- `alns_attempts`, `alns_expanded`, `alns_improvements`: 系列マスク固定ALNSの試行数、状態展開数、玉数改善の採用数
 
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 
@@ -68,6 +69,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 - `--current-only`: `--variant`の構成だけを実行する。異なるバイナリの同条件比較用。
 - `--compare-brand-repair`: 連鎖再計画だけを切り替えた`no-brand-repair`と`brand-repair`を同じ時間予算・問題で交互に実行する。他の探索機能は両方で有効。`--current-only`との併用は不可。
+- `--compare-udon-alns`: ALNSだけを切り替えた`no-udon-alns`と`udon-alns`を同じ条件で交互に実行する。`--compare-brand-repair`との併用は不可。
 - `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
 - `--agents N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、スポット数、系列数、日数を上書きする。
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。

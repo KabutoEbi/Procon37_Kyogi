@@ -12,6 +12,8 @@ macOSのシステムPythonが古いTk 8.5を使用する場合は、対応する
 
 詳しい操作順と生成物は[`visualizer/README.md`](../visualizer/README.md)を参照する。
 
+アプリアイコンは白背景・黒線のベンゼン環で、編集用SVGとTk表示用PNGを`visualizer/assets/`に置く。詳細は[`app.py`](visualizer/app.md)を参照する。
+
 ## ファイル別マニュアル
 
 - [`app.py`](visualizer/app.md): 画面構成、試合操作、簡易サーバー操作

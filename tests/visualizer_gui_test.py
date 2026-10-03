@@ -35,6 +35,7 @@ class GUITest(unittest.TestCase):
             gui = SolverGUI()
             # withdrawでは「部品は存在するが実画面は空白」を検出できない。
             gui.update()
+            self.assertIsNotNone(gui._app_icon)
             self.assertTrue(gui.winfo_viewable())
             self.assertTrue(gui.map_canvas.winfo_ismapped())
             self.assertGreater(gui.map_canvas.winfo_width(), 100)

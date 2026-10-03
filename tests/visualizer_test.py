@@ -45,6 +45,13 @@ from backend import (  # noqa: E402
 
 
 class BackendTest(unittest.TestCase):
+    def test_app_icon_assets(self) -> None:
+        svg = ROOT / "visualizer/assets/app_icon.svg"
+        png = ROOT / "visualizer/assets/app_icon.png"
+        self.assertTrue(svg.is_file())
+        self.assertTrue(png.is_file())
+        self.assertEqual(png.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
     def test_format_json_for_display_groups_simple_arrays(self) -> None:
         value = {
             "day": 0,

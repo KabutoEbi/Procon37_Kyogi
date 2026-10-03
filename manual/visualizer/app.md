@@ -3,6 +3,7 @@
 対象: [`visualizer/app.py`](../../visualizer/app.py)
 
 Tkで取得・探索・送信を操作するGUIの入口である。リポジトリ直下から起動する。
+アプリアイコンには白背景・黒線のベンゼン環を使用し、`visualizer/assets/app_icon.png`を起動時に読み込む。編集用のベクター原稿は同じ場所の`app_icon.svg`である。
 
 ```sh
 python3 visualizer/app.py

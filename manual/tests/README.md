@@ -22,6 +22,7 @@
 | [`visualizer_simple_server_test.py`](visualizer_simple_server_test.md) | 同梱簡易サーバーと実ソルバーの結合テスト |
 | [`solver_options_test.cpp`](solver_options_test.md) | 探索引数の反映と不正値拒否 |
 | `brand_repair_test.cpp` | 役割交換・補給・巻き戻し・固定行動の系列救済テスト。詳細は[系列救済](../inc/brand_repair.md) |
+| `udon_alns_test.cpp` | 系列マスク固定、玉数改善、ランダム問題の非退行・合法性テスト |
 
 ## 回帰テストをまとめて実行
 
@@ -29,13 +30,13 @@
 make -j3 test
 ```
 
-モデル・探索・系列最大化・連鎖再計画・引数・公式Q&A・プロパティ・サンプルのC++テストと、実ソルバー連携を含むPythonテストを実行する。どれかが失敗するとmakeも非ゼロで終了する。サンプルJSONが未配置ならエラーになるため、その環境では`make test-core`を使用する。
+モデル・探索・系列最大化・連鎖再計画・玉数ALNS・引数・公式Q&A・プロパティ・サンプルのC++テストと、実ソルバー連携を含むPythonテストを実行する。どれかが失敗するとmakeも非ゼロで終了する。サンプルJSONが未配置ならエラーになるため、その環境では`make test-core`を使用する。
 
 `make test-all`でGUI表示・同梱簡易サーバー・ASan/UBSanも含めて実行できる。環境要件と個別ターゲットは[`ビルド手順`](../build.md)を参照。
 
 `solver_benchmark`と`tune_weights`は結果を比較・調整するためのツールなので、通常の回帰テストとは分けて実行する。
 
-2026-10-03時点では、系列救済型の連鎖再計画、32×32向け種別選択、最終日の経路方式比較、理論値表示・評価、補給車経路安定化を含めて`make test`と`make test-sanitize`が成功し、Python 35件もすべて成功している。
+2026-10-04時点では、系列救済型の連鎖再計画、系列固定の玉数ALNS、32×32向け種別選択、最終日の経路方式比較、理論値表示・評価、補給車経路安定化を含めて`make test`と`make test-sanitize`が成功し、Python 36件もすべて成功している。アプリアイコン読込を含むGUI実画面1件も成功している。
 
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 
@@ -58,6 +59,8 @@ make test-python
 補給車の不要な周回を得点・終端状態を変えず除去した比較は[補給車経路安定化の記録](supply-route-stabilization-2026-10-03.md)を参照。
 
 未獲得系列に対する巻き戻し・役割交換・補給車連携の比較は[連鎖再計画の検証記録](brand-repair-results-2026-10-03.md)を参照。
+
+系列マスクを完全に固定したALNSの玉数改善は[玉数ALNSの検証記録](udon-alns-results-2026-10-04.md)を参照。
 
 ビーム幅を固定した32×32・8台の完走時間と、50秒前後の幅の選定は[50秒探索のビーム幅計測](beam-width-tuning-2026-10-03.md)を参照。
 

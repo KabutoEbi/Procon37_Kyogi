@@ -17,10 +17,11 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 | `make` / `make release` | ソルバーの最適化ビルド |
 | `make test` | C++モデル・探索・引数・3サイズサンプル、Pythonバックエンド・復旧・起動環境。実ソルバーとの4日間連携も実行 |
 | `make test-core` | サンプルJSONを必要としないC++・Pythonテスト |
-| `make test-cpp` | C++8テスト（系列最大化・連鎖再計画・公式Q&A・プロパティ・サンプルを含む） |
+| `make test-cpp` | C++9テスト（系列最大化・連鎖再計画・玉数ALNS・公式Q&A・プロパティ・サンプルを含む） |
 | `make test-brands` | 系列最大化を独立した全列挙と照合し、ビームの取りこぼし補完を検証 |
 | `make test-brand-repair` | 役割交換、補給、固定行動、巻き戻しの系列救済を検証 |
-| `make test-python` | Python 35テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
+| `make test-udon-alns` | 系列マスクを固定したALNSの玉数改善と非退行を検証 |
+| `make test-python` | Python 36テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |
 | `make test-sanitize` | モデル・探索・引数・公式Q&A・プロパティテストをASan/UBSanでビルド・実行 |
@@ -30,7 +31,7 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 
 通常テストはGUIを表示せず、ネットワーク接続も行わない。`make test`にはGit管理外の`sample_maps/sample_16.json`、`sample_24.json`、`sample_32.json`が必要。欠けている場合はエラーで終了し、黙ってスキップしない。サンプル未配置の環境では`make test-core`を使う。`make test-server`には同梱サーバーと設定JSON、localhostで待ち受けできる権限が必要。いずれかのテストが失敗するとmakeも非ゼロで終了する。
 
-2026-10-03時点で`make test`、`make test-sanitize`、`make test-python`の成功を確認している。`make test-python`はPython 35件を実行する。`make test-gui`はデスクトップと対応Tkを持つ環境で別途実行する。
+2026-10-04時点で`make test`、`make test-sanitize`、`make test-python`の成功を確認している。`make test-python`はPython 36件を実行する。`make test-gui`はデスクトップと対応Tkを持つ環境で別途実行し、同日時点で1件の成功を確認している。
 
 ## コンパイラ等の指定
 

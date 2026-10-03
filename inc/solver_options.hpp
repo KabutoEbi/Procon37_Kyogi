@@ -42,7 +42,8 @@ private:
                 "width must be positive: " + std::string(name));
         }
         if ((name == "--macro-actions" || name == "--adaptive-beam" ||
-             name == "--exact-brands" || name == "--brand-repair") &&
+             name == "--exact-brands" || name == "--brand-repair" ||
+             name == "--udon-alns") &&
             value > 1) {
             throw std::invalid_argument(
                 "expected 0 or 1: " + std::string(name));
@@ -62,6 +63,7 @@ private:
         else if (name == "--adaptive-beam") beam.adaptiveBeamWidth = value != 0;
         else if (name == "--exact-brands") beam.exactBrands = value != 0;
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
+        else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
         else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
         else if (name == "--trial-beam-width") selection.trialBeamWidth = value;
         else if (name == "--trial-joint-beam-width") {
