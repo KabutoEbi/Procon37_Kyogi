@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <functional>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -36,6 +37,12 @@ struct BrandNeighborhood {
     BrandMask target = 0;
     BrandMask preserve = 0;
     BrandMask fixedBrands = 0;
+    BrandMask requiredMatchBrands = 0;
+    BrandMask requiredDayBrands = 0;
+    SpotMask targetSpots = 0;
+    std::int32_t fixedFutureUdon = 0;
+    bool maximizeUdon = false;
+    bool exactBrandMasks = false;
     const std::vector<std::vector<int>>* actionsAtStep = nullptr;
     const std::vector<std::vector<int>>* actionStarts = nullptr;
 };
@@ -89,9 +96,10 @@ inline BrandSearchResult maximizeDayBrands(
     result.plan = incumbent;
     result.finalState = checked.state;
     if (neighborhood) initial = neighborhood->start;
-    const auto score = [](const GameState& state) {
-        return std::make_pair(countBits(state.score.matchBrands),
-                              countBits(state.dayBrands));
+    const bool maximizeUdon = neighborhood && neighborhood->maximizeUdon;
+    const auto score = [&](const GameState& state) {
+        return std::make_tuple(countBits(state.score.matchBrands),
+            countBits(state.dayBrands), maximizeUdon ? state.score.totalUdon : 0);
     };
     auto best = score(result.finalState);
     // Safe fallback bounds if precomputation runs out of time.
@@ -100,7 +108,8 @@ inline BrandSearchResult maximizeDayBrands(
         allBrands |= brandBit(spot.brandIndex);
     result.matchUpperBound = countBits(previousScore.matchBrands | allBrands);
     result.dailyUpperBound = countBits(allBrands);
-    if (best == std::make_pair(result.matchUpperBound, result.dailyUpperBound)) {
+    if (!maximizeUdon && std::make_pair(std::get<0>(best), std::get<1>(best)) ==
+        std::make_pair(result.matchUpperBound, result.dailyUpperBound)) {
         result.optimal = true;
         return result;
     }
@@ -141,7 +150,8 @@ inline BrandSearchResult maximizeDayBrands(
     const auto rootUpper = upper(initial);
     result.matchUpperBound = rootUpper.first;
     result.dailyUpperBound = rootUpper.second;
-    if (best == rootUpper) {
+    if (!maximizeUdon &&
+        std::make_pair(std::get<0>(best), std::get<1>(best)) == rootUpper) {
         result.optimal = true;
         return result;
     }
@@ -183,14 +193,30 @@ inline BrandSearchResult maximizeDayBrands(
             if (state.agents[agent].isPatrol()) {
                 for (std::size_t s = 0; s < state.spotCount; ++s) {
                     const auto bit = brandBit(setting.field.spots[s].brandIndex);
-                    if (state.remainingStocks[s] == 0 || state.hasAcquired(agent, s) ||
-                        (state.dayBrands & bit)) continue;
+                    if (state.remainingStocks[s] == 0 || state.hasAcquired(agent, s))
+                        continue;
+                    if (!maximizeUdon && (state.dayBrands & bit)) continue;
                     int bias = (state.score.matchBrands & bit) ? 10000 : 0;
                     if (neighborhood) {
-                        const bool rescue = agent == neighborhood->primary &&
-                            (state.dayBrands & neighborhood->target) == 0;
-                        bias = rescue ? ((bit & neighborhood->target) ? 0 : 100000) :
-                            ((bit & neighborhood->preserve) ? 0 : 10000);
+                        if (maximizeUdon) {
+                            const bool requiredMissing =
+                                (state.dayBrands & neighborhood->requiredDayBrands) !=
+                                neighborhood->requiredDayBrands;
+                            if (requiredMissing &&
+                                (bit & neighborhood->requiredDayBrands) &&
+                                !(state.dayBrands & bit)) {
+                                bias = 0;
+                            } else if (neighborhood->targetSpots & spotBit(s)) {
+                                bias = 2000 - std::min(100, state.remainingStocks[s]) * 10;
+                            } else {
+                                bias = 10000;
+                            }
+                        } else {
+                            const bool rescue = agent == neighborhood->primary &&
+                                (state.dayBrands & neighborhood->target) == 0;
+                            bias = rescue ? ((bit & neighborhood->target) ? 0 : 100000) :
+                                ((bit & neighborhood->preserve) ? 0 : 10000);
+                        }
                     }
                     priority = std::min(priority, bias + distances[s][pos]);
                 }
@@ -218,16 +244,22 @@ inline BrandSearchResult maximizeDayBrands(
         }
     };
     visit = [&](const GameState& state) {
-        if (reachedUpper || stopped() || upper(state) <= best) return;
+        const auto stateUpper = upper(state);
+        const auto bestBrands = std::make_pair(std::get<0>(best), std::get<1>(best));
+        if (reachedUpper || stopped() ||
+            (!maximizeUdon && stateUpper <= bestBrands) ||
+            (maximizeUdon && stateUpper < bestBrands)) return;
         if (nodeLimit && result.expanded >= nodeLimit) {
             result.interrupted = true;
             return;
         }
         if (!visited.insert(canonicalSearchState(state)).second) return;
         ++result.expanded;
-        const auto possibleCompletion = neighborhood ? std::make_pair(
+        const auto possibleCompletion = neighborhood ? std::make_tuple(
             countBits(state.score.matchBrands | neighborhood->fixedBrands),
-            countBits(state.dayBrands | neighborhood->fixedBrands)) : score(state);
+            countBits(state.dayBrands | neighborhood->fixedBrands),
+            maximizeUdon ? state.score.totalUdon + neighborhood->fixedFutureUdon : 0) :
+            score(state);
         if (possibleCompletion > best) {
             DailyPlan completed = plan;
             for (AgentIndex a = 0; a < state.agentCount; ++a) {
@@ -244,20 +276,29 @@ inline BrandSearchResult maximizeDayBrands(
                 if (left > 0) completed[a].push_back(-left);
             }
             const auto replay = simulateDay(setting, matchState, completed, previousScore);
-            if (replay.valid && score(replay.state) > best) {
+            const bool preservesRequired = !maximizeUdon ||
+                (neighborhood->exactBrandMasks
+                    ? replay.state.score.matchBrands == neighborhood->requiredMatchBrands &&
+                          replay.state.dayBrands == neighborhood->requiredDayBrands
+                    : (replay.state.score.matchBrands & neighborhood->requiredMatchBrands) ==
+                              neighborhood->requiredMatchBrands &&
+                          (replay.state.dayBrands & neighborhood->requiredDayBrands) ==
+                              neighborhood->requiredDayBrands);
+            if (replay.valid && preservesRequired && score(replay.state) > best) {
                 best = score(replay.state);
                 result.plan = std::move(completed);
                 result.finalState = replay.state;
-                reachedUpper = best == rootUpper;
+                reachedUpper = !maximizeUdon &&
+                    std::make_pair(std::get<0>(best), std::get<1>(best)) == rootUpper;
             }
         }
         if (state.remainingSteps() > 0 && !reachedUpper) assign(state, 0);
     };
     visit(initial);
-    result.optimal = reachedUpper || !result.interrupted;
+    result.optimal = !maximizeUdon && (reachedUpper || !result.interrupted);
     if (result.optimal) {
-        result.matchUpperBound = best.first;
-        result.dailyUpperBound = best.second;
+        result.matchUpperBound = std::get<0>(best);
+        result.dailyUpperBound = std::get<1>(best);
     }
     result.plan = compressWaitActions(result.plan);
     return result;

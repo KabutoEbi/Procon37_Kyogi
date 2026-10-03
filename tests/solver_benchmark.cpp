@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
     int agentOnly = 0, spotOnly = 0, brandOnly = 0, dayOnly = 0;
     bool currentOnly = false, noCompletion = false, legacyWeights = false, tightFuel = false;
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
-    bool compareBrandRepair = false;
+    bool compareBrandRepair = false, compareUdonAlns = false;
     std::string variant = "improved";
     try {
         for (int i = 1; i < argc; ++i) {
@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
             if (option == "--fixed-work") { fixedWork = true; continue; }
             if (option == "--profile") { profile = true; continue; }
             if (option == "--compare-brand-repair") { compareBrandRepair = true; continue; }
+            if (option == "--compare-udon-alns") { compareUdonAlns = true; continue; }
             if (++i == argc) throw std::invalid_argument("missing option value");
             const std::string value = argv[i];
             if (option == "--variant") { variant = value; continue; }
@@ -57,12 +58,19 @@ int main(int argc, char** argv) {
             spotOnly < 0 || brandOnly < 0 ||
             (spotOnly > 0 && brandOnly > spotOnly))
             throw std::invalid_argument("invalid generated setting override");
+        if (compareBrandRepair && compareUdonAlns)
+            throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
             variant = "brand-repair";
         }
-        const std::string baselineName = compareBrandRepair ? "no-brand-repair" : "baseline";
-        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair"};
+        if (compareUdonAlns) {
+            if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
+            variant = "udon-alns";
+        }
+        const std::string baselineName = compareBrandRepair ? "no-brand-repair" :
+            (compareUdonAlns ? "no-udon-alns" : "baseline");
+        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -71,12 +79,13 @@ int main(int argc, char** argv) {
             std::int64_t supplyMoves = 0;
             std::int64_t removedSupplyLoops = 0;
             std::int64_t repairAttempts = 0, repairExpanded = 0, repairImprovements = 0;
+            std::int64_t alnsAttempts = 0, alnsExpanded = 0, alnsImprovements = 0;
             std::vector<std::int64_t> times;
         };
         std::map<std::string, Summary> summaries;
         using Score = std::tuple<int, int, int>;
         int wins = 0, ties = 0, losses = 0;
-        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements\n";
+        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements\n";
         for (const int size : {8, 16, 24, 32}) {
             if (sizeOnly != 0 && size != sizeOnly) continue;
             for (int seed = seedStart; seed - seedStart < seeds; ++seed) {
@@ -103,6 +112,7 @@ int main(int argc, char** argv) {
                         MatchRunnerConfig config;
                         auto& beam = config.beam;
                         beam.useBrandRepair = name != "no-brand-repair" && name != "baseline";
+                        beam.useUdonAlns = name != "no-udon-alns" && name != "baseline";
                         beam.coordinatedAssignments = name != "baseline" && name != "no-coordination";
                         beam.detourRendezvous = name != "baseline" && name != "no-detour";
                         beam.exhaustFeasibleDetours = name != "limited-detour-scan";
@@ -187,7 +197,9 @@ int main(int argc, char** argv) {
                                 << valid << ','
                                 << fingerprint << ',' << day.assignmentTimeNs << ',' << day.flowTimeNs << ','
                                 << day.rendezvousTimeNs << ',' << day.brandRepairAttempts << ','
-                                << day.brandRepairExpanded << ',' << day.brandRepairImprovements << '\n';
+                                << day.brandRepairExpanded << ',' << day.brandRepairImprovements << ','
+                                << day.udonAlnsAttempts << ',' << day.udonAlnsExpanded << ','
+                                << day.udonAlnsImprovements << '\n';
                             if (!valid) return 1;
                             previous = day.endState.score;
                             elapsed += day.elapsedMs;
@@ -209,6 +221,9 @@ int main(int argc, char** argv) {
                             summary.repairAttempts += day.brandRepairAttempts;
                             summary.repairExpanded += day.brandRepairExpanded;
                             summary.repairImprovements += day.brandRepairImprovements;
+                            summary.alnsAttempts += day.udonAlnsAttempts;
+                            summary.alnsExpanded += day.udonAlnsExpanded;
+                            summary.alnsImprovements += day.udonAlnsImprovements;
                         }
                         summary.times.push_back(elapsed);
                         scores[name] = {brands, match.score.sumOfDailyBrandCounts, match.score.totalUdon};
@@ -232,7 +247,10 @@ int main(int argc, char** argv) {
                 << " removed_supply_loops=" << summary.removedSupplyLoops
                 << " repair_attempts=" << summary.repairAttempts
                 << " repair_expanded=" << summary.repairExpanded
-                << " repair_improvements=" << summary.repairImprovements << '\n';
+                << " repair_improvements=" << summary.repairImprovements
+                << " alns_attempts=" << summary.alnsAttempts
+                << " alns_expanded=" << summary.alnsExpanded
+                << " alns_improvements=" << summary.alnsImprovements << '\n';
         }
         if (!currentOnly)
             std::cerr << variant << " vs " << baselineName << " wins/ties/losses=" << wins << '/' << ties << '/' << losses << '\n';

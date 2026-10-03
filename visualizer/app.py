@@ -57,6 +57,9 @@ from backend import (
 )
 
 
+APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
+
+
 class AutoScrollbar(ttk.Scrollbar):
     """内容が表示領域に収まるときは場所を取らないスクロールバー。"""
 
@@ -85,6 +88,13 @@ class SolverGUI(tk.Tk):
         if not supported_tk():
             raise RuntimeError("このPythonのTkはGUI表示に非対応です。python3 visualizer/app.pyで起動してください")
         super().__init__()
+        self._app_icon: tk.PhotoImage | None = None
+        try:
+            self._app_icon = tk.PhotoImage(file=str(APP_ICON_PATH))
+            self.iconphoto(True, self._app_icon)
+        except (OSError, tk.TclError):
+            # アイコンが読めない環境でも、操作画面そのものは利用可能にする。
+            self._app_icon = None
         self.title("ビジュアライザ")
         self.geometry("1380x880")
         self.minsize(1040, 700)

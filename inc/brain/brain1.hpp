@@ -4,6 +4,7 @@
 #include "../action_routes.hpp"
 #include "../brand_search.hpp"
 #include "../brand_repair.hpp"
+#include "../udon_alns.hpp"
 #include "../evaluation.hpp"
 #include "../game_state_hash.hpp"
 #include "../min_cost_flow.hpp"
@@ -40,6 +41,8 @@ struct BeamSearchConfig {
     bool exactBrands = false;
     bool useBrandRepair = true;
     BrandRepairConfig brandRepair{};
+    bool useUdonAlns = true;
+    UdonAlnsConfig udonAlns{};
     std::size_t beamWidth = 128;
 
     // 同じステップで複数の待機中でないエージェントへ行動を割り当てる際の幅。
@@ -125,6 +128,9 @@ struct BeamSearchResult {
     std::size_t brandRepairAttempts = 0;
     std::size_t brandRepairExpanded = 0;
     std::size_t brandRepairImprovements = 0;
+    std::size_t udonAlnsAttempts = 0;
+    std::size_t udonAlnsExpanded = 0;
+    std::size_t udonAlnsImprovements = 0;
     bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
@@ -3296,11 +3302,18 @@ inline BeamSearchResult brain1(
     auto result = brain1Beam(setting, matchState, previousScore, beamConfig);
     if (!result.success) return result;
     bool changed = false;
+    const bool finalDay = matchState.day >= 0 &&
+        static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
+    const bool runUdonAlns = config.useUdonAlns && !config.exactBrands &&
+        (!config.udonAlns.finalDayOnly || finalDay);
     if (config.useBrandRepair && !config.exactBrands) {
         auto repairDeadline = deadline;
         if (limited) {
             const auto now = Clock::now();
-            repairDeadline = now + std::max(Clock::duration::zero(), deadline - now) * 3 / 4;
+            const auto remaining =
+                std::max(Clock::duration::zero(), deadline - now);
+            repairDeadline = now +
+                (runUdonAlns ? remaining * 2 / 5 : remaining * 3 / 4);
         }
         const auto repair = repairDayBrands(setting, matchState, previousScore,
             result.plan, config.brandRepair, repairDeadline);
@@ -3313,8 +3326,27 @@ inline BeamSearchResult brain1(
             changed = true;
         }
     }
+    if (runUdonAlns) {
+        auto alnsDeadline = deadline;
+        if (limited) {
+            const auto now = Clock::now();
+            alnsDeadline = now +
+                std::max(Clock::duration::zero(), deadline - now) / 3;
+        }
+        const auto improved = improveDayUdon(setting, matchState, previousScore,
+            result.plan, config.udonAlns, alnsDeadline);
+        result.udonAlnsAttempts = improved.attempts;
+        result.udonAlnsExpanded = improved.expanded;
+        result.udonAlnsImprovements = improved.improvements;
+        if (improved.improvements) {
+            result.plan = improved.plan;
+            result.finalState = improved.finalState;
+            changed = true;
+        }
+    }
     const auto refined = maximizeDayBrands(setting, matchState, previousScore,
-        result.plan, config.exactBrands ? 0 : config.brandSearchNodeLimit, deadline);
+        result.plan, config.exactBrands ? 0 : config.brandSearchNodeLimit,
+        deadline);
     result.brandOptimal = refined.optimal;
     result.matchBrandUpperBound = refined.matchUpperBound;
     result.dailyBrandUpperBound = refined.dailyUpperBound;

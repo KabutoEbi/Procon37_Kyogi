@@ -14,7 +14,7 @@ TEST_DIR := $(BUILD_DIR)/tests
 SAN_DIR := $(BUILD_DIR)/sanitize
 TOOL_DIR := $(BUILD_DIR)/tools
 COMMON_FLAGS := -std=c++17 -pthread -Iinc
-CORE_TESTS := model_test algorithm_test solver_options_test brand_search_test brand_repair_test
+CORE_TESTS := model_test algorithm_test solver_options_test brand_search_test brand_repair_test udon_alns_test
 CPP_TESTS := $(CORE_TESTS) official_qa_test property_test sample_maps_test
 TEST_BINS := $(addprefix $(TEST_DIR)/,$(CPP_TESTS))
 SAN_TESTS := $(CORE_TESTS) official_qa_test property_test
@@ -23,7 +23,7 @@ TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark agent_selection_benchmark
 PY_ENV = PYTHONPYCACHEPREFIX="$(abspath $(BUILD_DIR)/pycache)" PROCON_TEST_SOLVER="$(abspath main)"
 
 .PHONY: all release tools test test-core test-cpp test-python test-samples test-property test-official-qa \
-        test-model test-algorithm test-options test-brands test-brand-repair test-gui test-server test-sanitize \
+        test-model test-algorithm test-options test-brands test-brand-repair test-udon-alns test-gui test-server test-sanitize \
         test-all check-samples help
 
 all: main
@@ -47,8 +47,8 @@ $(BUILD_DIR) $(TEST_DIR) $(SAN_DIR) $(TOOL_DIR):
 
 # Normal regression suite: no GUI, real server, or external network.
 test: test-cpp test-python
-test-core: test-model test-algorithm test-options test-brands test-brand-repair test-official-qa test-property test-python
-test-cpp: test-model test-algorithm test-options test-brands test-brand-repair test-official-qa test-property test-samples
+test-core: test-model test-algorithm test-options test-brands test-brand-repair test-udon-alns test-official-qa test-property test-python
+test-cpp: test-model test-algorithm test-options test-brands test-brand-repair test-udon-alns test-official-qa test-property test-samples
 
 test-model: $(TEST_DIR)/model_test
 	$(TEST_DIR)/model_test
@@ -60,6 +60,8 @@ test-brands: $(TEST_DIR)/brand_search_test
 	$(TEST_DIR)/brand_search_test
 test-brand-repair: $(TEST_DIR)/brand_repair_test
 	$(TEST_DIR)/brand_repair_test
+test-udon-alns: $(TEST_DIR)/udon_alns_test
+	$(TEST_DIR)/udon_alns_test
 test-property: $(TEST_DIR)/property_test
 	$(TEST_DIR)/property_test
 test-official-qa: $(TEST_DIR)/official_qa_test
@@ -90,6 +92,7 @@ test-sanitize: $(SAN_BINS)
 	$(SAN_DIR)/solver_options_test
 	$(SAN_DIR)/brand_search_test
 	$(SAN_DIR)/brand_repair_test
+	$(SAN_DIR)/udon_alns_test
 	$(SAN_DIR)/official_qa_test
 	$(SAN_DIR)/property_test
 test-all: test test-gui test-server test-sanitize

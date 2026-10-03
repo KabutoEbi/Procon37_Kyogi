@@ -29,6 +29,8 @@ if (result.success) {
 - `exactBrands`: 補完の状態展開上限を解除。締切は維持。既定false
 - `useBrandRepair`: 未獲得系列を対象とした連鎖再計画。既定true
 - `brandRepair`: 局所探索の試行数（16）、各試行の展開上限（1000）、巡回車数（2）。詳細は[系列救済](../brand_repair.md)
+- `useUdonAlns`: 達成済み系列マスクを固定した玉数ALNS。既定true
+- `udonAlns`: ALNSの試行数（12）、各試行の展開上限（800）、解放する巡回車数（2）。詳細は[玉数ALNS](../udon_alns.md)
 - `jointBeamWidth`: 同時に空いた複数台へ行動を割り当てる途中幅
 - `timeLimitMs`: 相対時間制限。0なら指定なし
 - `useStateDeadline`: `MatchState::endsAt`も締切に使う
@@ -61,7 +63,7 @@ if (result.success) {
 
 `BeamSearchResult`には計画、最終状態、評価内訳、展開数、評価回数、マクロ統計、補給車から除去した周回数`removedSupplyLoops`、経過時間、停止理由が入る。`success == false`の場合は`plan`を送信せず、`application.hpp`の`solveDay()`などで待機計画へフォールバックする。
 
-公開入口`brain1()`はビーム探索後に`brand_repair.hpp`で系列救済型の連鎖再計画を行い、その後`brand_search.hpp`で全車の系列を補完する。有限時間では安全余裕を除いた予算の80%をビームへ渡し、ビーム終了後の残り時間の75%を連鎖再計画へ、残りを全車探索へ渡す。全車補完は6方向移動と1ステップ待機を列挙し、補給・在庫競合・移動中取得を公式シミュレータで判定する。燃料を緩和した最短時間で系列上限を求め、現解を超えない状態と完全に等価な状態だけを捨てる。長時間待機は1ステップ待機の反復で表現できるので、行動候補の打切りはない。`brandRepairAttempts`、`brandRepairExpanded`、`brandRepairImprovements`で連鎖再計画の統計を確認できる。`exactBrands=true`では連鎖再計画を省略する。
+公開入口`brain1()`はビーム探索後に`brand_repair.hpp`で系列救済型の連鎖再計画を行い、最終日は`udon_alns.hpp`でその時点の系列マスクを固定して玉数を改善した後、`brand_search.hpp`で全車の系列を補完する。有限時間では安全余裕を除いた予算の80%をビームへ渡し、残時間を連鎖再計画、ALNS、全車探索に分配する。全車補完は6方向移動と1ステップ待機を列挙し、補給・在庫競合・移動中取得を公式シミュレータで判定する。燃料を緩和した最短時間で系列上限を求め、現解を超えない状態と完全に等価な状態だけを捨てる。`brandRepairAttempts`等と`udonAlnsAttempts`等で各局所探索の統計を確認できる。`exactBrands=true`では両局所探索を省略する。
 
 `brandOptimal=true`は、指定種別・当日交通に対する「当日終了時の試合系列数、当日系列数」の辞書順最大値を証明したことを表す。上限達成または全探索完了で証明する。`matchBrandUpperBound`と`dailyBrandUpperBound`は系列上限、`brandSearchExpanded`は補完の状態展開数。上限未達で時間・展開数上限に達した場合は`brandOptimal=false`を返し、得られた合法な最良計画を保持する。補完は系列数が厳密に改善した場合だけ計画を置換する。同系列数の玉数や翌日配置の最適化はビーム側が担当する。全日・種別選択の大域最適性はこの証明の対象外。
 
