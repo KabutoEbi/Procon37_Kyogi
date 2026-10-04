@@ -107,7 +107,7 @@ python3 -m unittest tests/visualizer_test.py
 python3 -m unittest tests/visualizer_runtime_test.py
 ```
 
-2026-10-02時点では、ランダム生成既定値、日別探索時間、JSON表示整形を含む`make test-python`の33テストが成功している。
+2026-10-04時点では、ランダム生成既定値、日別探索時間、JSON表示整形、現在ステップ・初期在庫の読込を含む`make test-python`の36テストが成功している。
 
 実ソルバーを使った4日分の連携と途中日からの続行も検査する場合:
 
