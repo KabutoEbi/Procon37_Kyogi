@@ -889,10 +889,12 @@ class Workflow:
             )
         except (ApiError, OSError, ValueError) as error:
             raise WorkflowError(str(error)) from error
-        if value.get("day") != day:
+        actual_day = value.get("day")
+        if actual_day != day:
             downloaded.unlink(missing_ok=True)
+            displayed_day = actual_day + 1 if type(actual_day) is int else actual_day
             raise WorkflowError(
-                f"取得した状態はday={value.get('day')}です（期待値: {day}）"
+                f"取得した状態はday={displayed_day}です（期待値: {day + 1}）"
             )
         downloaded.replace(output)
         return output
@@ -925,7 +927,7 @@ class Workflow:
         setting_value = read_json(setting)
         duration = _day_duration(setting_value, day)
         if day > 0 and checkpoint is None:
-            raise WorkflowError("day 1以降は得点チェックポイントが必要です")
+            raise WorkflowError("day 2以降は得点チェックポイントが必要です")
         if checkpoint is not None and read_json(checkpoint).get("nextDay") != day:
             raise WorkflowError("チェックポイントの日番号が当日状態と一致しません")
         arguments = ["solve", str(setting.resolve()), str(state.resolve())]
@@ -1217,7 +1219,10 @@ class AutomaticMatch:
                 if type(actual) is not int:
                     raise WorkflowError("当日状態のdayが不正です")
                 if actual > self.day:
-                    raise WorkflowError(f"サーバーはday={actual}です。期待したday={self.day}を過ぎました")
+                    raise WorkflowError(
+                        f"サーバーはday={actual + 1}です。"
+                        f"期待したday={self.day + 1}を過ぎました"
+                    )
                 if actual == self.day:
                     downloaded.replace(path)
                     return
@@ -1248,7 +1253,7 @@ class AutomaticMatch:
             labels = {"setting": "問題情報の公開待ち・取得", "select": "エージェント種別選択",
                       "send_agents": "種別送信", "state": "当日マップの公開待ち・取得",
                       "solve": "探索", "send_answer": "回答送信"}
-            self.emit("phase", f"自動: {labels[phase]} / day={self.day}")
+            self.emit("phase", f"自動: {labels[phase]} / day={self.day + 1}")
             if phase == "setting":
                 self._wait_fetch("setting", self.setting)
                 days = read_json(self.setting).get("daySteps", [])

@@ -119,16 +119,15 @@ class GUITest(unittest.TestCase):
                 else:
                     (workflow.work_dir / "answer.json").write_text(answer_text)
                     (workflow.work_dir / "score-next.json").write_text(json.dumps({"nextDay": day + 1}))
-                    if args[0] != "solve":
-                        (workflow.work_dir / "result-state.json").write_text(json.dumps({
-                            "day": 0,
-                            "step": setting["daySteps"][0],
-                            "agents": [
-                                {"kind": 0, "pos": pos, "fuel": 17}
-                                for pos in setting["agents"]
-                            ],
-                            "remainingStocks": [0] * len(setting["spots"]),
-                        }))
+                    (workflow.work_dir / "result-state.json").write_text(json.dumps({
+                        "day": day,
+                        "step": setting["daySteps"][day],
+                        "agents": [
+                            {"kind": 0, "pos": pos, "fuel": 17}
+                            for pos in setting["agents"]
+                        ],
+                        "remainingStocks": [0] * len(setting["spots"]),
+                    }))
                 report = f"""test-token log
 === procon37 solver report ===
 day={day}
@@ -226,12 +225,12 @@ result
                 self.assertTrue((Path(directory) / "agents.json").is_file())
                 self.assertEqual(gui.setting_var.get(), str((Path(directory) / "setting.json").resolve()))
                 self.assertEqual(gui._selected_kinds, [0, 0, 0, 0])
-                self.assertEqual(gui.day_var.get(), 0)
+                self.assertEqual(gui.day_var.get(), 1)
                 self.assertEqual(
                     gui.parameter_vars["time_limit_ms"].get(),
                     str(setting["daySeconds"][0] * 1000),
                 )
-                self.assertEqual(int(gui.day_spinbox.cget("to")), 3)
+                self.assertEqual(int(gui.day_spinbox.cget("to")), 4)
                 self.assertIn("day=未取得", gui.map_info_var.get())
                 self.assertIn("days=4", gui.map_info_var.get())
                 self.assertIn(f"spots={len(setting['spots'])}", gui.map_info_var.get())
@@ -256,7 +255,7 @@ result
                 self.assertEqual(str(first_spot[3]), f"0/{setting['spots'][0]['stocks']}")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 self.assertEqual(gui.search_result_vars["status"].get(), "時間上限")
-                self.assertEqual(gui.search_result_vars["target"].get(), "ローカル day=0")
+                self.assertEqual(gui.search_result_vars["target"].get(), "ローカル day=1")
                 self.assertEqual(gui.search_result_vars["elapsed"].get(), "1,234 ms")
                 self.assertEqual(gui.search_result_vars["expanded"].get(), "56,789")
                 total_udon = sum(spot["stocks"] for spot in setting["spots"])
@@ -288,7 +287,10 @@ result
                 self.assertEqual(posted, ["agent"])
                 self.assertTrue((Path(directory) / "state-day0.json").is_file())
                 self.assertTrue((Path(directory) / "answer.json").is_file())
+                self.assertTrue(gui.state_var.get().endswith("state-day0.json"))
                 self.assertEqual(gui._current_snapshot.day, 0)
+                first_spot = gui.spot_table.item(gui.spot_table.get_children()[0], "values")
+                self.assertEqual(str(first_spot[3]), f"0/{setting['spots'][0]['stocks']}")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 first_route = gui.map_canvas.find_withtag("answer-route-agent-0")
                 second_route = gui.map_canvas.find_withtag("answer-route-agent-1")
@@ -301,7 +303,7 @@ result
                      mock.patch("backend.send", side_effect=send):
                     gui._send_answer()
                     drain(expected_posts=2)
-                self.assertEqual(gui.day_var.get(), 0)
+                self.assertEqual(gui.day_var.get(), 1)
                 self.assertEqual(gui.solve_day_button.cget("text"), "2  探索")
                 # 同じ日の再探索はGETなし。自動モードでは新しい回答を送信する。
                 gui.mode_var.set("auto")
@@ -312,13 +314,13 @@ result
                     gui.solve_day_button.invoke()
                     drain(expected_posts=3)
                     fetch_again.assert_not_called()
-                self.assertEqual(gui.day_var.get(), 0)
+                self.assertEqual(gui.day_var.get(), 1)
                 self.assertEqual(json.loads((Path(directory) / "submission-day0.json").read_text())["revision"], 2)
                 # 終了時刻を過ぎたときだけ対象日を進め、初回取得ボタンに戻す。
                 gui._day_deadlines[0] = time.time() - 1
                 gui._advance_finished_day()
                 day = 1
-                self.assertEqual(gui.day_var.get(), 1)
+                self.assertEqual(gui.day_var.get(), 2)
                 self.assertEqual(gui.solve_day_button.cget("text"), "2  当日状態を取得・探索")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 gui.mode_var.set("auto")
@@ -330,7 +332,7 @@ result
                     gui._fetch_and_solve_day()
                     drain(expected_posts=4)
                 self.assertEqual(posted, ["agent", "action", "action", "action"])
-                self.assertEqual(gui.day_var.get(), 1)
+                self.assertEqual(gui.day_var.get(), 2)
                 self.assertIn("score-day1.json", gui.score_var.get())
                 self.assertEqual(gui.solve_day_button.cget("text"), "2  探索")
                 self.assertEqual(gui._current_snapshot.day, 1)
@@ -353,19 +355,19 @@ result
                 deadline = gui._day_deadlines[1]
                 with mock.patch("app.time.time", return_value=deadline - 0.01):
                     gui._advance_finished_day()
-                    self.assertEqual(gui.day_var.get(), 1)
+                    self.assertEqual(gui.day_var.get(), 2)
                 with mock.patch("app.time.time", return_value=deadline):
                     gui._busy = True
                     gui._advance_finished_day()
-                    self.assertEqual(gui.day_var.get(), 1)
+                    self.assertEqual(gui.day_var.get(), 2)
                     gui._busy = False
                     gui._advance_finished_day()
-                    self.assertEqual(gui.day_var.get(), 2)
+                    self.assertEqual(gui.day_var.get(), 3)
                 with mock.patch("app.time.time", return_value=gui._day_deadlines[3]):
                     gui._advance_finished_day()
-                    self.assertEqual(gui.day_var.get(), 4)
+                    self.assertEqual(gui.day_var.get(), 5)
                     self.assertEqual(str(gui.solve_day_button["state"]), "disabled")
-                gui.day_var.set(0)
+                gui.day_var.set(1)
                 gui.url_var.set("http://another-match")
                 self.assertFalse(gui._daily_inputs)
                 self.assertFalse(gui._day_deadlines)

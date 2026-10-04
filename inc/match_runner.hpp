@@ -36,6 +36,7 @@ struct MatchDayResult {
     std::size_t removedSupplyLoops = 0;
     std::size_t brandRepairAttempts = 0, brandRepairExpanded = 0, brandRepairImprovements = 0;
     std::size_t udonAlnsAttempts = 0, udonAlnsExpanded = 0, udonAlnsImprovements = 0;
+    std::size_t spotRouteLnsAttempts = 0, spotRouteLnsImprovements = 0;
     std::int64_t assignmentTimeNs = 0, flowTimeNs = 0, rendezvousTimeNs = 0;
     SearchStopReason stopReason = SearchStopReason::NoValidPlan;
 };
@@ -203,6 +204,8 @@ public:
             record.udonAlnsAttempts = search.udonAlnsAttempts;
             record.udonAlnsExpanded = search.udonAlnsExpanded;
             record.udonAlnsImprovements = search.udonAlnsImprovements;
+            record.spotRouteLnsAttempts = search.spotRouteLnsAttempts;
+            record.spotRouteLnsImprovements = search.spotRouteLnsImprovements;
             record.assignmentTimeNs = search.assignmentTimeNs;
             record.flowTimeNs = search.flowTimeNs;
             record.rendezvousTimeNs = search.rendezvousTimeNs;

@@ -136,7 +136,8 @@ class SolverGUI(tk.Tk):
         self.setting_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/setting.json"))
         self.state_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/state-day0.json"))
         self.score_var = tk.StringVar()
-        self.day_var = tk.IntVar(value=0)
+        # GUI表示は1始まり。API・JSON・ファイル名へ渡す直前に0始まりへ戻す。
+        self.day_var = tk.IntVar(value=1)
         self.status_var = tk.StringVar(value="準備完了")
         self.map_info_var = tk.StringVar(value="試合設定を取得または読み込んでください")
         self.search_result_vars = {
@@ -253,7 +254,7 @@ class SolverGUI(tk.Tk):
                             command=self._mode_changed).pack(side=tk.LEFT, padx=4)
         self.stop_button = ttk.Button(mode, text="停止", command=self._request_stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=6)
-        ttk.Label(mode, text="dayは0始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
+        ttk.Label(mode, text="dayは1始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
 
         content = ttk.Panedwindow(self, orient=tk.VERTICAL)
         content.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
@@ -489,7 +490,7 @@ class SolverGUI(tk.Tk):
         day_row.grid(row=row, column=0, sticky=tk.EW)
         ttk.Label(day_row, text="対象日 day").pack(side=tk.LEFT)
         self.day_spinbox = ttk.Spinbox(
-            day_row, from_=0, to=9, textvariable=self.day_var, width=5
+            day_row, from_=1, to=10, textvariable=self.day_var, width=5
         )
         self.day_spinbox.pack(side=tk.RIGHT)
         row += 1
@@ -869,7 +870,7 @@ class SolverGUI(tk.Tk):
             self.setting_var.set(str(client_work / "setting.json"))
             self.state_var.set(str(client_work / "state-day0.json"))
             self.score_var.set("")
-            self.day_var.set(0)
+            self.day_var.set(1)
             self._active_token = info.token
             self._set_simple_server_milestones(info)
             self._log(
@@ -913,7 +914,7 @@ class SolverGUI(tk.Tk):
         self.setting_var.set(str(client_work / "setting.json"))
         self.state_var.set(str(client_work / "state-day0.json"))
         self.score_var.set("")
-        self.day_var.set(0)
+        self.day_var.set(1)
         self._selected_kinds = []
         self._day_count = 0
         self._current_snapshot = None
@@ -1062,7 +1063,7 @@ class SolverGUI(tk.Tk):
             self._sync_day_button()
         elif key == "solve_start":
             self._clear_answer_route()
-            self._begin_search_result(f"day={data}")
+            self._begin_search_result(f"day={data + 1}")
         elif key == "phase":
             self.status_var.set(str(data))
             self._log(str(data))
@@ -1088,15 +1089,15 @@ class SolverGUI(tk.Tk):
         elif key == "accepted":
             revision, checkpoint, next_day = data
             self.score_var.set(str(checkpoint))
-            self.day_var.set(next_day)
+            self.day_var.set(next_day + 1)
             self._log(f"revision={revision}\n次日チェックポイント: {checkpoint}")
 
     def _day(self) -> int:
-        day = self.day_var.get()
-        maximum = self._day_count - 1 if self._day_count else 9
-        if not 0 <= day <= maximum:
-            raise WorkflowError(f"dayは0〜{maximum}で指定してください")
-        return day
+        displayed = self.day_var.get()
+        maximum = self._day_count if self._day_count else 10
+        if not 1 <= displayed <= maximum:
+            raise WorkflowError(f"dayは1〜{maximum}で指定してください")
+        return displayed - 1
 
     def _day_or_dialog(self) -> int | None:
         try:
@@ -1115,8 +1116,8 @@ class SolverGUI(tk.Tk):
         self.score_var.set("")
         self._selected_kinds = []
         self._day_count = 0
-        self.day_spinbox.configure(to=9)
-        self.day_var.set(0)
+        self.day_spinbox.configure(to=10)
+        self.day_var.set(1)
         self._sync_day_time_limit()
         self._refresh_views()
         self._log_match_schedule(path)
@@ -1184,17 +1185,20 @@ class SolverGUI(tk.Tk):
         if self._busy or not self._day_count:
             return
         try:
-            day = self.day_var.get()
-        except tk.TclError:
+            day = self._day()
+        except (WorkflowError, tk.TclError):
             return
         original = day
         now = time.time()
         while day < self._day_count and 0 < self._day_deadlines.get(day, 0) <= now:
             day += 1
         if day != original:
-            self.day_var.set(day)
+            self.day_var.set(day + 1)
             self.score_var.set(str(self._work_path(f"score-day{day}.json")))
-            self._log(f"対象日をday={day}へ更新" if day < self._day_count else "全日程が終了しました")
+            self._log(
+                f"対象日をday={day + 1}へ更新"
+                if day < self._day_count else "全日程が終了しました"
+            )
 
     def _day_context(self, day: int) -> tuple:
         setting = Path(self.setting_var.get()).expanduser().resolve()
@@ -1211,12 +1215,13 @@ class SolverGUI(tk.Tk):
 
     def _sync_day_button(self) -> None:
         try:
-            cached = self._cached_day(self._day_context(self.day_var.get()))
+            day = self._day()
+            cached = self._cached_day(self._day_context(day))
         except (OSError, WorkflowError, tk.TclError, ValueError):
             cached = None
         try:
-            finished = bool(self._day_count and self.day_var.get() >= self._day_count)
-        except tk.TclError:
+            finished = bool(self._day_count and self.day_var.get() > self._day_count)
+        except (WorkflowError, tk.TclError):
             finished = False
         self.solve_day_button.configure(
             text="全日程終了" if finished else ("2  探索" if cached else "2  当日状態を取得・探索"),
@@ -1231,7 +1236,7 @@ class SolverGUI(tk.Tk):
         """設定済みの対象日の試合時間を探索上限の初期値にする。"""
         try:
             setting = read_json(Path(self.setting_var.get()).expanduser())
-            day = self.day_var.get()
+            day = self._day()
             if not isinstance(setting, dict):
                 return
             self.parameter_vars["time_limit_ms"].set(
@@ -1255,7 +1260,7 @@ class SolverGUI(tk.Tk):
             messagebox.showerror("当日状態", str(error), parent=self)
             return
         auto_send = self.mode_var.get() == "auto"
-        self._begin_search_result(f"day={day}")
+        self._begin_search_result(f"day={day + 1}")
         setting = Path(self.setting_var.get())
         state = self._work_path(f"state-day{day}.json")
         checkpoint: Path | None = None
@@ -1280,7 +1285,13 @@ class SolverGUI(tk.Tk):
         def completed(result: CommandResult) -> None:
             self.state_var.set(str(state))
             self._state_loaded(state)
-            self._show_answer_route(self._work_path("answer.json"))
+            source_snapshot = self._current_snapshot
+            self._show_answer_route(
+                self._work_path("answer.json"), source_snapshot=source_snapshot
+            )
+            result_state = self._work_path("result-state.json")
+            if result_state.is_file():
+                self._state_loaded(result_state)
             self._show_search_result(result)
             self._show_json(self._work_path("answer.json"))
             if auto_send:
@@ -1289,7 +1300,7 @@ class SolverGUI(tk.Tk):
                 )
 
         self._run_task(
-            f"day={day} " + ("探索" if cached else "状態取得・探索"),
+            f"day={day + 1} " + ("探索" if cached else "状態取得・探索"),
             fetch_and_solve,
             completed,
             self._search_result_failed,
@@ -1363,7 +1374,7 @@ class SolverGUI(tk.Tk):
         score = workflow.work_dir / "score-next.json"
         if confirm and not messagebox.askyesno(
             "回答送信の確認",
-            f"day={day} の回答を送信します。\n\n{answer}\n\n受理後に得点チェックポイントを確定します。実行しますか？",
+            f"day={day + 1} の回答を送信します。\n\n{answer}\n\n受理後に得点チェックポイントを確定します。実行しますか？",
             parent=self,
         ):
             return
@@ -1375,7 +1386,7 @@ class SolverGUI(tk.Tk):
             )
 
         self._run_task(
-            f"day={day} 回答送信",
+            f"day={day + 1} 回答送信",
             lambda: workflow.send_answer(day, answer, score, state, setting),
             accepted,
         )
@@ -1388,19 +1399,22 @@ class SolverGUI(tk.Tk):
                 ends_at = value.get("endsAt", 0)
                 if type(ends_at) in (int, float) and ends_at > 0:
                     self._day_deadlines[day] = float(ends_at)
-                self.day_var.set(day)
+                self.day_var.set(day + 1)
                 if day > 0:
                     candidate = self._work_path(f"score-day{day}.json")
                     if candidate.is_file() or not self.score_var.get().strip():
                         self.score_var.set(str(candidate))
         except WorkflowError:
             pass
-        self._refresh_views()
+        self._refresh_views(path)
 
-    def _refresh_views(self) -> None:
+    def _refresh_views(self, state_override: Path | None = None) -> None:
         setting = Path(self.setting_var.get()).expanduser()
-        state_text = self.state_var.get().strip()
-        state = Path(state_text).expanduser() if state_text else None
+        if state_override is None:
+            state_text = self.state_var.get().strip()
+            state = Path(state_text).expanduser() if state_text else None
+        else:
+            state = state_override.expanduser()
         try:
             snapshot = load_snapshot(setting, state)
         except (WorkflowError, OSError, ValueError, KeyError, TypeError) as error:
@@ -1412,11 +1426,11 @@ class SolverGUI(tk.Tk):
             ))
         self._current_snapshot = snapshot
         self._day_count = len(snapshot.day_steps)
-        self.day_spinbox.configure(to=max(0, self._day_count - 1))
+        self.day_spinbox.configure(to=max(1, self._day_count))
         self._draw_map(snapshot)
         self._fill_agents(snapshot)
         self._fill_spots(snapshot)
-        day_text = "未取得" if snapshot.day is None else str(snapshot.day)
+        day_text = "未取得" if snapshot.day is None else str(snapshot.day + 1)
         steps = "-"
         if snapshot.day is not None and snapshot.day < len(snapshot.day_steps):
             steps = str(snapshot.day_steps[snapshot.day])
@@ -1470,7 +1484,7 @@ class SolverGUI(tk.Tk):
         }.get(summary.stop, summary.stop)
         self.search_result_vars["status"].set(stop)
         prefix = "ローカル " if local else ""
-        self.search_result_vars["target"].set(f"{prefix}day={summary.day}")
+        self.search_result_vars["target"].set(f"{prefix}day={summary.day + 1}")
         self.search_result_vars["elapsed"].set(f"{summary.elapsed_ms:,} ms")
         self.search_result_vars["expanded"].set(f"{summary.expanded:,}")
         try:

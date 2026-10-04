@@ -11,6 +11,7 @@
 #include "../plan_validator.hpp"
 #include "../search_state.hpp"
 #include "../simulator.hpp"
+#include "../spot_route_lns.hpp"
 
 #include <algorithm>
 #include <array>
@@ -43,6 +44,8 @@ struct BeamSearchConfig {
     BrandRepairConfig brandRepair{};
     bool useUdonAlns = true;
     UdonAlnsConfig udonAlns{};
+    bool useSpotRouteLns = true;
+    SpotRouteLnsConfig spotRouteLns{};
     std::size_t beamWidth = 128;
 
     // 同じステップで複数の待機中でないエージェントへ行動を割り当てる際の幅。
@@ -139,6 +142,8 @@ struct BeamSearchResult {
     std::size_t udonAlnsAttempts = 0;
     std::size_t udonAlnsExpanded = 0;
     std::size_t udonAlnsImprovements = 0;
+    std::size_t spotRouteLnsAttempts = 0;
+    std::size_t spotRouteLnsImprovements = 0;
     bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
@@ -3334,6 +3339,8 @@ inline BeamSearchResult brain1(
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
     const bool runUdonAlns = config.useUdonAlns &&
         (!config.udonAlns.finalDayOnly || finalDay);
+    const bool runSpotRouteLns = config.useSpotRouteLns &&
+        (!config.spotRouteLns.finalDayOnly || finalDay);
     if (config.useBrandRepair && !config.exactBrands) {
         auto repairDeadline = deadline;
         if (limited) {
@@ -3371,6 +3378,23 @@ inline BeamSearchResult brain1(
         result.plan = refined.plan;
         result.finalState = refined.finalState;
         changed = true;
+    }
+    if (runSpotRouteLns && Clock::now() < deadline) {
+        auto routeDeadline = deadline;
+        if (runUdonAlns && limited) {
+            const auto now = Clock::now();
+            routeDeadline = now +
+                std::max(Clock::duration::zero(), deadline - now) / 2;
+        }
+        const auto routed = improveSpotRoutes(setting, matchState, previousScore,
+            result.plan, config.spotRouteLns, routeDeadline);
+        result.spotRouteLnsAttempts = routed.attempts;
+        result.spotRouteLnsImprovements = routed.improvements;
+        if (routed.improvements) {
+            result.plan = routed.plan;
+            result.finalState = routed.finalState;
+            changed = true;
+        }
     }
     if (runUdonAlns) {
         auto improved = improveDayUdon(setting, matchState, previousScore,

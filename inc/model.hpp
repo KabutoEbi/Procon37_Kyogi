@@ -18,5 +18,6 @@
 #include "path.hpp"
 #include "plan_validator.hpp"
 #include "simulator.hpp"
+#include "spot_route_lns.hpp"
 #include "types.hpp"
 #include "weight_tuner.hpp"

@@ -301,6 +301,8 @@ inline void printConsoleReport(
         << "  brand-repair-attempts=" << result.brandRepairAttempts << '\n'
         << "  brand-repair-expanded=" << result.brandRepairExpanded << '\n'
         << "  brand-repair-improvements=" << result.brandRepairImprovements << '\n'
+        << "  spot-route-lns-attempts=" << result.spotRouteLnsAttempts << '\n'
+        << "  spot-route-lns-improvements=" << result.spotRouteLnsImprovements << '\n'
         << "  udon-alns-attempts=" << result.udonAlnsAttempts << '\n'
         << "  udon-alns-expanded=" << result.udonAlnsExpanded << '\n'
         << "  udon-alns-improvements=" << result.udonAlnsImprovements << '\n'

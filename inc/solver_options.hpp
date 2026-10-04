@@ -43,7 +43,7 @@ private:
         }
         if ((name == "--macro-actions" || name == "--adaptive-beam" ||
              name == "--exact-brands" || name == "--brand-repair" ||
-             name == "--udon-alns") &&
+             name == "--udon-alns" || name == "--spot-route-lns") &&
             value > 1) {
             throw std::invalid_argument(
                 "expected 0 or 1: " + std::string(name));
@@ -64,6 +64,7 @@ private:
         else if (name == "--exact-brands") beam.exactBrands = value != 0;
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
+        else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
         else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
         else if (name == "--trial-beam-width") selection.trialBeamWidth = value;
         else if (name == "--trial-joint-beam-width") {
