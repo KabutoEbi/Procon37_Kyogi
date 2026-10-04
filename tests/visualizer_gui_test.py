@@ -65,7 +65,8 @@ class GUITest(unittest.TestCase):
             self.assertEqual(gui.random_setting_frame.master, gui.config_frame)
             self.assertEqual(gui.log_frame.master, gui.content_pane)
             self.assertEqual(gui.controls_frame.master, gui.control_panel)
-            self.assertLess(gui.control_panel.winfo_width(), 320)
+            self.assertGreaterEqual(gui.control_panel.winfo_width(), 300)
+            self.assertLess(gui.control_panel.winfo_width(), 360)
             self.assertEqual(gui.search_result_frame.master, gui.controls_frame)
             self.assertGreater(
                 int(gui.search_result_frame.grid_info()["row"]),
@@ -121,6 +122,7 @@ class GUITest(unittest.TestCase):
                     if args[0] != "solve":
                         (workflow.work_dir / "result-state.json").write_text(json.dumps({
                             "day": 0,
+                            "step": setting["daySteps"][0],
                             "agents": [
                                 {"kind": 0, "pos": pos, "fuel": 17}
                                 for pos in setting["agents"]
@@ -232,6 +234,11 @@ result
                 self.assertEqual(int(gui.day_spinbox.cget("to")), 3)
                 self.assertIn("day=未取得", gui.map_info_var.get())
                 self.assertIn("days=4", gui.map_info_var.get())
+                self.assertIn(f"spots={len(setting['spots'])}", gui.map_info_var.get())
+                self.assertIn(
+                    f"brands={len({spot['brand'] for spot in setting['spots']})}",
+                    gui.map_info_var.get(),
+                )
                 schedule_log = gui.log_text.get("1.0", "end")
                 self.assertIn("試合開始予定", schedule_log)
                 self.assertIn("1日目終了予定", schedule_log)
@@ -243,8 +250,10 @@ result
                 self.assertTrue(gui.state_var.get().endswith("result-state.json"))
                 first_agent = gui.agent_table.item(gui.agent_table.get_children()[0], "values")
                 first_spot = gui.spot_table.item(gui.spot_table.get_children()[0], "values")
-                self.assertEqual(first_agent[4], "17/40")
-                self.assertEqual(str(first_spot[3]), "0")
+                self.assertEqual(first_agent[1], "P")
+                self.assertEqual(first_agent[3], "17/40")
+                self.assertEqual(first_agent[4], "40/40")
+                self.assertEqual(str(first_spot[3]), f"0/{setting['spots'][0]['stocks']}")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 self.assertEqual(gui.search_result_vars["status"].get(), "時間上限")
                 self.assertEqual(gui.search_result_vars["target"].get(), "ローカル day=0")

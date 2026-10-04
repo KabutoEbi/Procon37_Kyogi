@@ -244,6 +244,7 @@ result
             }), encoding="utf-8")
             state.write_text(json.dumps({
                 "day": 0,
+                "step": 4,
                 "traffics": [{"pos": 1, "status": 2}],
                 "agents": [{"kind": 0, "pos": 0, "fuel": 7}],
                 "remainingStocks": [1],
@@ -253,6 +254,8 @@ result
             self.assertEqual(snapshot.spots[1], (3, 1))
             self.assertEqual(snapshot.traffics[1], 2)
             self.assertEqual(snapshot.agents[0].fuel, 7)
+            self.assertEqual(snapshot.step, 4)
+            self.assertEqual(snapshot.stock_limits[1], 2)
             self.assertEqual(trace_answer_routes(snapshot, [[2, -3, 5]]), ((0, 1, 0),))
             with self.assertRaises(WorkflowError):
                 trace_answer_routes(snapshot, [[5]])

@@ -14,7 +14,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -205,6 +205,8 @@ class MapSnapshot:
     day: int | None
     day_steps: tuple[int, ...]
     fuel_limit: int
+    step: int = 0
+    stock_limits: dict[int, int] = field(default_factory=dict)
 
 
 def trace_answer_routes(snapshot: MapSnapshot, answer: object) -> tuple[tuple[int, ...], ...]:
@@ -536,9 +538,13 @@ def load_snapshot(setting_path: Path, state_path: Path | None = None) -> MapSnap
     cells = tuple(tuple(int(cell) for cell in row) for row in raw_cells)
 
     spots: dict[int, tuple[int, int]] = {}
+    stock_limits: dict[int, int] = {}
     for spot in setting.get("spots", []):
         if isinstance(spot, dict):
-            spots[int(spot["pos"])] = (int(spot["brand"]), int(spot["stocks"]))
+            pos = int(spot["pos"])
+            stocks = int(spot["stocks"])
+            spots[pos] = (int(spot["brand"]), stocks)
+            stock_limits[pos] = stocks
 
     traffics: dict[int, int] = {
         int(entry["pos"]): int(entry["status"])
@@ -549,12 +555,15 @@ def load_snapshot(setting_path: Path, state_path: Path | None = None) -> MapSnap
         for index, pos in enumerate(setting.get("agents", []))
     )
     day: int | None = None
+    step = 0
     if state_path is not None and state_path.is_file():
         state = read_json(state_path)
         if not isinstance(state, dict):
             raise WorkflowError("当日状態はJSONオブジェクトではありません")
         if type(state.get("day")) is int:
             day = state["day"]
+        if type(state.get("step")) is int:
+            step = state["step"]
         for traffic in state.get("traffics", []):
             if isinstance(traffic, dict):
                 traffics[int(traffic["pos"])] = int(traffic["status"])
@@ -591,6 +600,8 @@ def load_snapshot(setting_path: Path, state_path: Path | None = None) -> MapSnap
         day=day,
         day_steps=tuple(int(value) for value in setting.get("daySteps", [])),
         fuel_limit=int(setting.get("fuelLimits", 0)),
+        step=step,
+        stock_limits=stock_limits,
     )
 
 

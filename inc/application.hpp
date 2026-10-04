@@ -328,6 +328,7 @@ inline bool printResultStateJson(
 
     output << "{\n"
            << "  \"day\": " << state.day << ",\n"
+           << "  \"step\": " << state.step << ",\n"
            << "  \"agents\": [\n";
     for (std::size_t i = 0; i < state.agentCount; ++i) {
         const Agent& agent = state.agents[i];

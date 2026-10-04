@@ -262,7 +262,7 @@ class SolverGUI(tk.Tk):
         self.main_pane = main
         content.add(main, weight=4)
 
-        control_panel = ttk.Frame(main, width=260)
+        control_panel = ttk.Frame(main, width=350)
         self.control_panel = control_panel
         control_panel.columnconfigure(0, weight=1)
         controls = ttk.Frame(control_panel, padding=8)
@@ -612,19 +612,19 @@ class SolverGUI(tk.Tk):
         agents_frame.columnconfigure(0, weight=1)
         self.agent_table = ttk.Treeview(
             agents_frame,
-            columns=("id", "kind", "pos", "coord", "fuel"),
+            columns=("id", "kind", "position", "fuel", "steps"),
             show="headings",
             height=6,
         )
-        for key, title, width in [
-            ("id", "ID", 36),
-            ("kind", "種別", 70),
-            ("pos", "pos", 50),
-            ("coord", "座標", 65),
-            ("fuel", "燃料", 65),
+        for key, title, width, minwidth in [
+            ("id", "ID", 25, 20),
+            ("kind", "種類", 42, 32),
+            ("position", "位置", 90, 65),
+            ("fuel", "燃料", 60, 45),
+            ("steps", "ステップ", 65, 50),
         ]:
             self.agent_table.heading(key, text=title)
-            self.agent_table.column(key, width=width, minwidth=35, anchor=tk.CENTER)
+            self.agent_table.column(key, width=width, minwidth=minwidth, anchor=tk.CENTER)
         agent_scroll = AutoScrollbar(
             agents_frame, orient=tk.VERTICAL, command=self.agent_table.yview
         )
@@ -1421,9 +1421,11 @@ class SolverGUI(tk.Tk):
         if snapshot.day is not None and snapshot.day < len(snapshot.day_steps):
             steps = str(snapshot.day_steps[snapshot.day])
         days_text = str(len(snapshot.day_steps)) if snapshot.day_steps else "未取得"
+        brand_count = len({brand for brand, _ in snapshot.spots.values()})
         self.map_info_var.set(
             f"{snapshot.width}×{snapshot.height}  day={day_text}  days={days_text}  "
-            f"steps={steps}  agents={len(snapshot.agents)}  fuelLimit={snapshot.fuel_limit}"
+            f"steps={steps}  agents={len(snapshot.agents)}  spots={len(snapshot.spots)}  "
+            f"brands={brand_count}  fuelLimit={snapshot.fuel_limit}"
         )
 
     def _clear_answer_route(self) -> None:
@@ -1633,6 +1635,12 @@ class SolverGUI(tk.Tk):
 
     def _fill_agents(self, snapshot: MapSnapshot) -> None:
         self.agent_table.delete(*self.agent_table.get_children())
+        step_limit = (
+            snapshot.day_steps[snapshot.day]
+            if snapshot.day is not None and 0 <= snapshot.day < len(snapshot.day_steps)
+            else None
+        )
+        steps = f"{snapshot.step}/{step_limit}" if step_limit is not None else "-"
         for agent in snapshot.agents:
             x = agent.pos % snapshot.width
             y = agent.pos // snapshot.width
@@ -1645,10 +1653,10 @@ class SolverGUI(tk.Tk):
                 tk.END,
                 values=(
                     agent.index,
-                    "巡回車" if agent.kind == 0 else ("補給車" if agent.kind == 1 else "未選択"),
-                    agent.pos,
-                    f"({x},{y})",
+                    "P" if agent.kind == 0 else ("S" if agent.kind == 1 else "-"),
+                    f"{agent.pos}({x},{y})",
                     f"{agent.fuel}/{snapshot.fuel_limit}",
+                    steps,
                 ),
                 tags=(color_tag,),
             )
@@ -1661,7 +1669,12 @@ class SolverGUI(tk.Tk):
             self.spot_table.insert(
                 "",
                 tk.END,
-                values=(pos, f"({x},{y})", brand, stocks),
+                values=(
+                    pos,
+                    f"({x},{y})",
+                    brand,
+                    f"{stocks}/{snapshot.stock_limits.get(pos, stocks)}",
+                ),
             )
 
     def _show_json(self, path: Path) -> None:

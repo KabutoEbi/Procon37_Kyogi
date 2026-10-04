@@ -133,6 +133,7 @@ void testResultStateJson() {
     assert(printResultStateJson(output, state));
     const std::string json = output.str();
     assert(json.find("\"day\": 0") != std::string::npos);
+    assert(json.find("\"step\": 0") != std::string::npos);
     assert(json.find("\"kind\": 0, \"pos\": 3, \"fuel\": 0") != std::string::npos);
     assert(json.find("\"remainingStocks\": [2]") != std::string::npos);
 
