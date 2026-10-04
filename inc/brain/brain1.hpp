@@ -151,6 +151,44 @@ struct BeamSearchResult {
     std::int64_t rendezvousTimeNs = 0;
     SearchStopReason stopReason = SearchStopReason::NoValidPlan;
     std::int64_t elapsedMs = 0;
+
+    // Add counters that describe work performed while searching.  Keeping this
+    // in one place prevents portfolio and iterative-deepening wrappers from
+    // silently dropping a newly added metric.
+    void addSearchWork(const BeamSearchResult& other) noexcept {
+        expandedNodes += other.expandedNodes;
+        fullEvaluations += other.fullEvaluations;
+        reusedEvaluations += other.reusedEvaluations;
+        macroCandidates += other.macroCandidates;
+        macroContinuations += other.macroContinuations;
+        assignmentCacheHits += other.assignmentCacheHits;
+        assignmentComputations += other.assignmentComputations;
+        repairedAssignments += other.repairedAssignments;
+        detourPlans += other.detourPlans;
+        removedSupplyLoops += other.removedSupplyLoops;
+        assignmentTimeNs += other.assignmentTimeNs;
+        flowTimeNs += other.flowTimeNs;
+        rendezvousTimeNs += other.rendezvousTimeNs;
+        reusedDistanceTables =
+            reusedDistanceTables || other.reusedDistanceTables;
+    }
+
+    void copySearchWork(const BeamSearchResult& other) noexcept {
+        expandedNodes = other.expandedNodes;
+        fullEvaluations = other.fullEvaluations;
+        reusedEvaluations = other.reusedEvaluations;
+        macroCandidates = other.macroCandidates;
+        macroContinuations = other.macroContinuations;
+        assignmentCacheHits = other.assignmentCacheHits;
+        assignmentComputations = other.assignmentComputations;
+        repairedAssignments = other.repairedAssignments;
+        detourPlans = other.detourPlans;
+        removedSupplyLoops = other.removedSupplyLoops;
+        assignmentTimeNs = other.assignmentTimeNs;
+        flowTimeNs = other.flowTimeNs;
+        rendezvousTimeNs = other.rendezvousTimeNs;
+        reusedDistanceTables = other.reusedDistanceTables;
+    }
 };
 
 class Brain1 final {
@@ -3044,47 +3082,12 @@ inline BeamSearchResult brain1Pass(
          officialScore(periodic) > officialScore(primary) ||
          (officialScore(periodic) == officialScore(primary) &&
           periodic.evaluation.total > primary.evaluation.total));
-    const std::size_t expandedNodes =
-        primary.expandedNodes + periodic.expandedNodes;
-    const std::size_t fullEvaluations =
-        primary.fullEvaluations + periodic.fullEvaluations;
-    const std::size_t reusedEvaluations =
-        primary.reusedEvaluations + periodic.reusedEvaluations;
-    const std::size_t macroCandidates =
-        primary.macroCandidates + periodic.macroCandidates;
-    const std::size_t macroContinuations =
-        primary.macroContinuations + periodic.macroContinuations;
-    const std::size_t assignmentCacheHits =
-        primary.assignmentCacheHits + periodic.assignmentCacheHits;
-    const std::size_t assignmentComputations =
-        primary.assignmentComputations + periodic.assignmentComputations;
-    const std::size_t repairedAssignments =
-        primary.repairedAssignments + periodic.repairedAssignments;
-    const std::size_t detourPlans =
-        primary.detourPlans + periodic.detourPlans;
-    const std::int64_t assignmentTimeNs =
-        primary.assignmentTimeNs + periodic.assignmentTimeNs;
-    const std::int64_t flowTimeNs =
-        primary.flowTimeNs + periodic.flowTimeNs;
-    const std::int64_t rendezvousTimeNs =
-        primary.rendezvousTimeNs + periodic.rendezvousTimeNs;
-    const bool reusedDistanceTables =
-        primary.reusedDistanceTables || periodic.reusedDistanceTables;
+    BeamSearchResult totalWork;
+    totalWork.addSearchWork(primary);
+    totalWork.addSearchWork(periodic);
     BeamSearchResult selected = usePeriodic
         ? std::move(periodic) : std::move(primary);
-    selected.expandedNodes = expandedNodes;
-    selected.fullEvaluations = fullEvaluations;
-    selected.reusedEvaluations = reusedEvaluations;
-    selected.macroCandidates = macroCandidates;
-    selected.macroContinuations = macroContinuations;
-    selected.assignmentCacheHits = assignmentCacheHits;
-    selected.assignmentComputations = assignmentComputations;
-    selected.repairedAssignments = repairedAssignments;
-    selected.detourPlans = detourPlans;
-    selected.assignmentTimeNs = assignmentTimeNs;
-    selected.flowTimeNs = flowTimeNs;
-    selected.rendezvousTimeNs = rendezvousTimeNs;
-    selected.reusedDistanceTables = reusedDistanceTables;
+    selected.copySearchWork(totalWork);
     selected.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         Clock::now() - started).count();
     return selected;
@@ -3128,20 +3131,7 @@ inline BeamSearchResult brain1Beam(
 
     const auto deadline = started + std::chrono::milliseconds(effectiveMs);
     BeamSearchResult best;
-    std::size_t totalExpanded = 0;
-    std::size_t totalFull = 0;
-    std::size_t totalReused = 0;
-    std::size_t totalMacroCandidates = 0;
-    std::size_t totalMacroContinuations = 0;
-    std::size_t totalCacheHits = 0;
-    std::size_t totalComputations = 0;
-    std::size_t totalRepairs = 0;
-    std::size_t totalDetours = 0;
-    std::size_t totalRemovedLoops = 0;
-    std::int64_t totalAssignmentNs = 0;
-    std::int64_t totalFlowNs = 0;
-    std::int64_t totalRendezvousNs = 0;
-    bool reusedTables = false;
+    BeamSearchResult totalWork;
 
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
@@ -3177,20 +3167,7 @@ inline BeamSearchResult brain1Beam(
         BeamSearchResult current = brain1Pass(
             setting, matchState, previousScore, pass);
 
-        totalExpanded += current.expandedNodes;
-        totalFull += current.fullEvaluations;
-        totalReused += current.reusedEvaluations;
-        totalMacroCandidates += current.macroCandidates;
-        totalMacroContinuations += current.macroContinuations;
-        totalCacheHits += current.assignmentCacheHits;
-        totalComputations += current.assignmentComputations;
-        totalRepairs += current.repairedAssignments;
-        totalDetours += current.detourPlans;
-        totalRemovedLoops += current.removedSupplyLoops;
-        totalAssignmentNs += current.assignmentTimeNs;
-        totalFlowNs += current.flowTimeNs;
-        totalRendezvousNs += current.rendezvousTimeNs;
-        reusedTables = reusedTables || current.reusedDistanceTables;
+        totalWork.addSearchWork(current);
 
         const bool timedOut = current.stopReason == SearchStopReason::TimeLimit;
         if (better(current, best)) best = std::move(current);
@@ -3248,21 +3225,9 @@ inline BeamSearchResult brain1Beam(
         fallback.safetyMarginMs = 1;
         fallback.useStateDeadline = false;
         best = brain1Pass(setting, matchState, previousScore, fallback);
+        totalWork.addSearchWork(best);
     }
-    best.expandedNodes = totalExpanded;
-    best.fullEvaluations = totalFull;
-    best.reusedEvaluations = totalReused;
-    best.macroCandidates = totalMacroCandidates;
-    best.macroContinuations = totalMacroContinuations;
-    best.assignmentCacheHits = totalCacheHits;
-    best.assignmentComputations = totalComputations;
-    best.repairedAssignments = totalRepairs;
-    best.detourPlans = totalDetours;
-    best.removedSupplyLoops = totalRemovedLoops;
-    best.assignmentTimeNs = totalAssignmentNs;
-    best.flowTimeNs = totalFlowNs;
-    best.rendezvousTimeNs = totalRendezvousNs;
-    best.reusedDistanceTables = reusedTables;
+    best.copySearchWork(totalWork);
     best.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         Clock::now() - started).count();
     if (Clock::now() >= deadline) best.stopReason = SearchStopReason::TimeLimit;
@@ -3304,7 +3269,7 @@ inline BeamSearchResult brain1(
     bool changed = false;
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
-    const bool runUdonAlns = config.useUdonAlns && !config.exactBrands &&
+    const bool runUdonAlns = config.useUdonAlns &&
         (!config.udonAlns.finalDayOnly || finalDay);
     if (config.useBrandRepair && !config.exactBrands) {
         auto repairDeadline = deadline;
@@ -3326,24 +3291,9 @@ inline BeamSearchResult brain1(
             changed = true;
         }
     }
-    if (runUdonAlns) {
-        auto alnsDeadline = deadline;
-        if (limited) {
-            const auto now = Clock::now();
-            alnsDeadline = now +
-                std::max(Clock::duration::zero(), deadline - now) / 3;
-        }
-        const auto improved = improveDayUdon(setting, matchState, previousScore,
-            result.plan, config.udonAlns, alnsDeadline);
-        result.udonAlnsAttempts = improved.attempts;
-        result.udonAlnsExpanded = improved.expanded;
-        result.udonAlnsImprovements = improved.improvements;
-        if (improved.improvements) {
-            result.plan = improved.plan;
-            result.finalState = improved.finalState;
-            changed = true;
-        }
-    }
+    // Establish the best reachable brand counts before optimizing quantity.
+    // The quantity search below treats these counts as hard lower bounds, so a
+    // larger udon total can never replace a plan with fewer brands.
     const auto refined = maximizeDayBrands(setting, matchState, previousScore,
         result.plan, config.exactBrands ? 0 : config.brandSearchNodeLimit,
         deadline);
@@ -3358,6 +3308,18 @@ inline BeamSearchResult brain1(
         result.plan = refined.plan;
         result.finalState = refined.finalState;
         changed = true;
+    }
+    if (runUdonAlns) {
+        const auto improved = improveDayUdon(setting, matchState, previousScore,
+            result.plan, config.udonAlns, deadline);
+        result.udonAlnsAttempts = improved.attempts;
+        result.udonAlnsExpanded = improved.expanded;
+        result.udonAlnsImprovements = improved.improvements;
+        if (improved.improvements) {
+            result.plan = improved.plan;
+            result.finalState = improved.finalState;
+            changed = true;
+        }
     }
     if (changed) {
         EvaluationContext context;

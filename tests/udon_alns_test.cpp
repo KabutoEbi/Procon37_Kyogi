@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <random>
+#include <tuple>
 
 using namespace benzen;
 
@@ -44,6 +45,9 @@ void checkSameBrandExtraUdon() {
     const auto improved = improveDayUdon(s, ms, {}, incumbent, cfg,
         std::chrono::steady_clock::time_point::max());
     assert(improved.improvements > 0);
+    assert(improved.attempts > cfg.maxAttempts);
+    assert(improved.attempts <=
+           cfg.maxAttempts + cfg.improvementBonusAttempts);
     assert(improved.finalState.dayBrands == before.state.dayBrands);
     assert(improved.finalState.score.matchBrands == before.state.score.matchBrands);
     assert(improved.finalState.dayUdon == 2);
@@ -51,7 +55,31 @@ void checkSameBrandExtraUdon() {
     assert(replay.valid && replay.state == improved.finalState);
 }
 
-void checkRandomValidityAndFixedBrands() {
+void checkBrainMaximizesBrandsBeforeUdon() {
+    const auto s = line(4, 8, {0}, {{0, 1, 1, -1}, {0, 3, 1, -1}});
+    const auto ms = stateFor(s, {AgentKind::Patrol});
+    BeamSearchConfig cfg;
+    cfg.beamWidth = cfg.jointBeamWidth = cfg.maxActionsPerAgent = 1;
+    cfg.macroTargetLimit = 1;
+    cfg.adaptiveBeamWidth = cfg.adaptiveActionLimit = cfg.autoTuneWeights = false;
+    cfg.coordinatedAssignments = cfg.twoSpotLookahead = false;
+    cfg.comparePeriodicReplanPlans = cfg.iterativeDeepening = false;
+    cfg.useStateDeadline = false;
+    cfg.useBrandRepair = false;
+    cfg.exactBrands = true;
+    cfg.udonAlns.maxAttempts = 12;
+    cfg.udonAlns.nodesPerAttempt = 2000;
+
+    const auto result = brain1(s, ms, {}, cfg);
+    assert(result.success && result.brandOptimal);
+    assert(countBits(result.finalState.dayBrands) == 1);
+    assert(result.finalState.dayUdon == 2);
+    assert(result.udonAlnsAttempts > 0);
+    const auto replay = simulateDay(s, ms, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
+void checkRandomValidityAndPreservedBrandCounts() {
     for (std::uint64_t seed = 1; seed <= 12; ++seed) {
         CreateConfig create;
         create.width = create.height = 8;
@@ -85,18 +113,26 @@ void checkRandomValidityAndFixedBrands() {
             std::chrono::steady_clock::time_point::max());
         const auto replay = simulateDay(s, ms, result.plan);
         assert(replay.valid && replay.state == result.finalState);
-        assert(result.finalState.dayBrands == incumbent.finalState.dayBrands);
-        assert(result.finalState.score.matchBrands ==
-               incumbent.finalState.score.matchBrands);
-        assert(result.finalState.score.totalUdon >=
-               incumbent.finalState.score.totalUdon);
-        assert(result.attempts <= cfg.maxAttempts);
-        assert(result.expanded <= cfg.maxAttempts * cfg.nodesPerAttempt);
+        const auto incumbentScore = std::make_tuple(
+            countBits(incumbent.finalState.score.matchBrands),
+            countBits(incumbent.finalState.dayBrands),
+            incumbent.finalState.score.totalUdon);
+        const auto resultScore = std::make_tuple(
+            countBits(result.finalState.score.matchBrands),
+            countBits(result.finalState.dayBrands),
+            result.finalState.score.totalUdon);
+        assert(resultScore >= incumbentScore);
+        assert(result.attempts <=
+               cfg.maxAttempts + cfg.improvementBonusAttempts);
+        assert(result.expanded <=
+               (cfg.maxAttempts + cfg.improvementBonusAttempts) *
+                   cfg.nodesPerAttempt);
     }
 }
 }  // namespace
 
 int main() {
     checkSameBrandExtraUdon();
-    checkRandomValidityAndFixedBrands();
+    checkBrainMaximizesBrandsBeforeUdon();
+    checkRandomValidityAndPreservedBrandCounts();
 }

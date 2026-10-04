@@ -39,10 +39,13 @@ struct BrandNeighborhood {
     BrandMask fixedBrands = 0;
     BrandMask requiredMatchBrands = 0;
     BrandMask requiredDayBrands = 0;
+    std::uint32_t requiredMatchBrandCount = 0;
+    std::uint32_t requiredDayBrandCount = 0;
     SpotMask targetSpots = 0;
     std::int32_t fixedFutureUdon = 0;
     bool maximizeUdon = false;
     bool exactBrandMasks = false;
+    bool preserveBrandCounts = false;
     const std::vector<std::vector<int>>* actionsAtStep = nullptr;
     const std::vector<std::vector<int>>* actionStarts = nullptr;
 };
@@ -277,7 +280,12 @@ inline BrandSearchResult maximizeDayBrands(
             }
             const auto replay = simulateDay(setting, matchState, completed, previousScore);
             const bool preservesRequired = !maximizeUdon ||
-                (neighborhood->exactBrandMasks
+                (neighborhood->preserveBrandCounts
+                    ? countBits(replay.state.score.matchBrands) >=
+                              neighborhood->requiredMatchBrandCount &&
+                          countBits(replay.state.dayBrands) >=
+                              neighborhood->requiredDayBrandCount
+                    : neighborhood->exactBrandMasks
                     ? replay.state.score.matchBrands == neighborhood->requiredMatchBrands &&
                           replay.state.dayBrands == neighborhood->requiredDayBrands
                     : (replay.state.score.matchBrands & neighborhood->requiredMatchBrands) ==

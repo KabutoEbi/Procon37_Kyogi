@@ -14,6 +14,9 @@ namespace benzen {
 
 struct UdonAlnsConfig {
     std::size_t maxAttempts = 12;
+    // Once a useful neighborhood is found, spend a small extra budget there.
+    // Unproductive instances still stop at maxAttempts.
+    std::size_t improvementBonusAttempts = 4;
     std::size_t nodesPerAttempt = 800;
     std::size_t maxPatrols = 2;
     bool finalDayOnly = true;
@@ -28,9 +31,9 @@ struct UdonAlnsResult {
     bool interrupted = false;
 };
 
-// Adaptive large-neighborhood search for the third official score component.
-// The incumbent's exact match/day brand masks are constraints: a candidate is
-// accepted only when both masks are unchanged and total udon strictly rises.
+// Adaptive large-neighborhood search in official lexicographic score order.
+// The incumbent's match/day brand counts are lower bounds. This permits a
+// different brand combination when it keeps both counts and gains more udon.
 inline UdonAlnsResult improveDayUdon(
     const MatchSetting& s, const MatchState& ms, ScoreState prev,
     const DailyPlan& incumbent, const UdonAlnsConfig& config,
@@ -69,7 +72,11 @@ inline UdonAlnsResult improveDayUdon(
         {2, true, 3, 0},
     }};
 
-    while (result.attempts < config.maxAttempts && !stopped()) {
+    const auto attemptLimit = [&] {
+        return config.maxAttempts +
+            (result.improvements ? config.improvementBonusAttempts : 0);
+    };
+    while (result.attempts < attemptLimit() && !stopped()) {
         const auto trace = detail::repairTrace(s, ms, prev, result.plan, stopped);
         if (trace.checkpoints.empty()) break;
 
@@ -104,8 +111,11 @@ inline UdonAlnsResult improveDayUdon(
         neighborhood.preserve = result.finalState.dayBrands;
         neighborhood.requiredMatchBrands = result.finalState.score.matchBrands;
         neighborhood.requiredDayBrands = result.finalState.dayBrands;
+        neighborhood.requiredMatchBrandCount =
+            countBits(result.finalState.score.matchBrands);
+        neighborhood.requiredDayBrandCount = countBits(result.finalState.dayBrands);
         neighborhood.maximizeUdon = true;
-        neighborhood.exactBrandMasks = true;
+        neighborhood.preserveBrandCounts = true;
         neighborhood.actionsAtStep = &trace.actionsAtStep;
         neighborhood.actionStarts = &trace.starts;
         neighborhood.freeAgents[primary] = true;
@@ -183,7 +193,7 @@ inline UdonAlnsResult improveDayUdon(
                 break;
             }
             const auto slots = std::min<std::size_t>(
-                4, config.maxAttempts - result.attempts);
+                4, attemptLimit() - result.attempts);
             attemptDeadline = now + (deadline - now) / slots;
         }
 
@@ -191,12 +201,14 @@ inline UdonAlnsResult improveDayUdon(
         const auto candidate = maximizeDayBrands(s, ms, prev, result.plan,
             config.nodesPerAttempt, attemptDeadline, &neighborhood, &distances);
         result.expanded += candidate.expanded;
+        const auto officialScore = [](const GameState& state) {
+            return std::make_tuple(
+                countBits(state.score.matchBrands),
+                countBits(state.dayBrands),
+                state.score.totalUdon);
+        };
         const bool improved =
-            candidate.finalState.score.matchBrands ==
-                result.finalState.score.matchBrands &&
-            candidate.finalState.dayBrands == result.finalState.dayBrands &&
-            candidate.finalState.score.totalUdon >
-                result.finalState.score.totalUdon;
+            officialScore(candidate.finalState) > officialScore(result.finalState);
         if (improved) {
             result.plan = candidate.plan;
             result.finalState = candidate.finalState;
