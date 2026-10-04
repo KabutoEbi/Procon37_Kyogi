@@ -146,7 +146,8 @@ void testFinalDayRoutePortfolio() {
         config.beam.macroReplanInterval = 4;
         const auto periodic = brain1(setting, last.startState, previous, config.beam);
         assert(portfolio.success && periodic.success);
-        assert(trialScore(portfolio.finalState.score) > trialScore(ordinary.score));
+        // 通常経路側の改善で同点まで追いつく場合も、ポートフォリオは退行しない。
+        assert(trialScore(portfolio.finalState.score) >= trialScore(ordinary.score));
         assert(trialScore(portfolio.finalState.score) >= trialScore(periodic.finalState.score));
         const auto replay = simulateDay(setting, last.startState, portfolio.plan, previous);
         assert(replay.valid && replay.state == portfolio.finalState);

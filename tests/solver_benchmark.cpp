@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
         }
         const std::string baselineName = compareBrandRepair ? "no-brand-repair" :
             (compareUdonAlns ? "no-udon-alns" : "baseline");
-        const std::vector<std::string> allowed = {"improved", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
+        const std::vector<std::string> allowed = {"improved", "no-quantity-upgrades", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -117,6 +117,12 @@ int main(int argc, char** argv) {
                         beam.detourRendezvous = name != "baseline" && name != "no-detour";
                         beam.exhaustFeasibleDetours = name != "limited-detour-scan";
                         beam.twoSpotLookahead = name != "baseline" && name != "no-lookahead";
+                        beam.robustRouteLookahead = name != "no-quantity-upgrades" &&
+                            name != "no-robust-route";
+                        beam.sharedRendezvous = name != "no-quantity-upgrades" &&
+                            name != "no-shared-rendezvous";
+                        beam.diversifyAcquiredSpots = name != "no-quantity-upgrades" &&
+                            name != "no-quantity-diversity";
                         beam.prioritizeHardNextDayTargets =
                             name != "baseline" && name != "no-hard-nextday";
                         beam.assignmentCacheLimit = name == "baseline" || name == "no-cache" ? 0 : 4096;

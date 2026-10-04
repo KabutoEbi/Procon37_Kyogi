@@ -96,6 +96,10 @@ struct BeamSearchConfig {
     bool coordinatedAssignments = true;
     bool detourRendezvous = true;
     bool twoSpotLookahead = true;
+    // 最良の2店目だけでなく、在庫競合時の代替候補も巡回先評価へ反映する。
+    bool robustRouteLookahead = true;
+    // 同じ補給地点へ向かう複数巡回車を1台の補給車へまとめて割り当てる。
+    bool sharedRendezvous = true;
     // 翌日の配置では、全巡回車から遠いスポットを先に担当させる。
     bool prioritizeHardNextDayTargets = true;
     std::size_t assignmentCacheLimit = 4096;
@@ -109,6 +113,10 @@ struct BeamSearchConfig {
     std::size_t lookaheadCandidateLimit = 6;
     bool profilePlanning = false;
     bool dominancePruning = true;
+    // 系列・位置が同じでも、各車の取得済みスポットが異なる候補を残す。
+    bool diversifyAcquiredSpots = true;
+    // 短時間探索ではニッチ増加より既存候補の深掘りを優先する。
+    std::int64_t quantityEnhancementsMinTimeMs = 500;
     // 上位解を残しつつ、この割合を異なる系列・位置の候補へ確保する。
     double diversityFraction = 0.25;
 };
@@ -638,6 +646,7 @@ private:
     static void deduplicateAndLimit(
         std::vector<BeamNode>& nodes, std::size_t limit,
         const Field& field, const BeamSearchConfig& config,
+        bool diversifyAcquiredSpots,
         std::vector<std::size_t>& indices, std::vector<BeamNode>& unique) {
         sortAndLimit(nodes, nodes.size());
         indices.clear();
@@ -701,6 +710,10 @@ private:
                 detail::hashValue(hash, c.x / 3);
                 detail::hashValue(hash, c.y / 3);
                 detail::hashValue(hash, node.aims[a]);
+                if (diversifyAcquiredSpots &&
+                    node.state.agents[a].isPatrol()) {
+                    detail::hashValue(hash, node.state.acquiredSpots[a]);
+                }
             }
             return hash;
         };
@@ -1119,6 +1132,7 @@ private:
                 // 次の1店も時間・残燃料内で到達できる場合だけ先読みする。
                 // 即時取得の辞書順を覆さない範囲で、巡回順序を誘導する。
                 std::int64_t continuation = 0;
+                std::int64_t alternative = 0;
                 if (currentDay && dist.planning.twoSpotLookahead) {
                     const int left = available - travel;
                     const auto firstBrand = setting.field.spots[i].brandIndex;
@@ -1137,11 +1151,20 @@ private:
                         const int value = b != firstBrand &&
                             (state.score.matchBrands & bit) == 0 ? 3 :
                             (b != firstBrand && (state.dayBrands & bit) == 0 ? 2 : 1);
-                        continuation = std::max(continuation,
-                            std::min(timeBound / 2,
-                                static_cast<std::int64_t>(value) *
-                                (left - second->steps + 1)));
+                        const std::int64_t candidate = std::min(timeBound / 2,
+                            static_cast<std::int64_t>(value) *
+                            (left - second->steps + 1));
+                        if (candidate > continuation) {
+                            alternative = continuation;
+                            continuation = candidate;
+                        } else {
+                            alternative = std::max(alternative, candidate);
+                        }
                     }
+                    // 最良候補が別車に取られても巡回を継続できる経路を優先する。
+                    // 主候補より弱く加点し、直近1玉の価値は決して覆さない。
+                    if (dist.planning.robustRouteLookahead)
+                        continuation += alternative / 16;
                 }
                 times[a][i] = travel;
                 const std::int64_t preparation =
@@ -1562,10 +1585,38 @@ private:
                 dist.planning.profilePlanning ? &dist.timings->flow : nullptr);
             flow.run(0, sink, n);
         }
-        for (int p = 0; p < n; ++p)
-            for (int q = 0; q < n; ++q)
-                if (edges[p][q] >= 0 && flow.capacity(p + 1, edges[p][q]) == 0)
+        std::array<bool, kMaxAgents> usedSupply{};
+        for (int p = 0; p < n; ++p) {
+            for (int q = 0; q < n; ++q) {
+                if (edges[p][q] >= 0 && flow.capacity(p + 1, edges[p][q]) == 0) {
                     result[p] = pairs[p][q];
+                    usedSupply[q] = true;
+                }
+            }
+        }
+        if (dist.planning.sharedRendezvous) {
+            // 公式ルールでは同じセルの補給車1台が複数巡回車を同時に
+            // 満タンにできる。一対一フローで主担当を決めた後、同じ補給経路を
+            // 共有できる未割当車を追加し、異なる地点への二重割当は避ける。
+            for (int p = 0; p < n; ++p) {
+                if (!state.agents[p].isPatrol() || result[p].valid) continue;
+                for (int q = 0; q < n; ++q) {
+                    if (!usedSupply[q] || !pairs[p][q].valid) continue;
+                    const auto primary = std::find_if(
+                        result.begin(), result.end(), [&](const RendezvousPlan& meet) {
+                            return meet.valid &&
+                                   meet.supply == static_cast<AgentIndex>(q);
+                        });
+                    if (primary == result.end() ||
+                        primary->pos != pairs[p][q].pos ||
+                        primary->supplyArrival != pairs[p][q].supplyArrival) {
+                        continue;
+                    }
+                    result[p] = pairs[p][q];
+                    break;
+                }
+            }
+        }
         return result;
     }
 
@@ -2282,6 +2333,7 @@ public:
         if (cfg.beamWidth == 0 || cfg.jointBeamWidth == 0 ||
             cfg.timeLimitMs < 0 || cfg.safetyMarginMs < 0 ||
             cfg.routePortfolioMinTimeMs < 0 ||
+            cfg.quantityEnhancementsMinTimeMs < 0 ||
             cfg.incumbentInterval == 0 || !std::isfinite(cfg.diversityFraction) ||
             cfg.diversityFraction < 0 || cfg.diversityFraction > 1) {
             return finish(SearchStopReason::NoValidPlan);
@@ -2310,6 +2362,10 @@ public:
             budgetMs = std::max<std::int64_t>(
                 0, budgetMs - cfg.safetyMarginMs);
         }
+        const bool useQuantityEnhancements =
+            !limited || budgetMs >= cfg.quantityEnhancementsMinTimeMs;
+        const bool diversifyAcquiredSpots =
+            cfg.diversifyAcquiredSpots && useQuantityEnhancements;
         const auto deadline = limited
                                   ? started + std::chrono::milliseconds(budgetMs)
                                   : Clock::time_point::max();
@@ -2419,6 +2475,10 @@ public:
             cfg.distanceCacheEntries,
             res.reusedDistanceTables);
         spotDist.planning = cfg;
+        if (!useQuantityEnhancements) {
+            spotDist.planning.robustRouteLookahead = false;
+            spotDist.planning.sharedRendezvous = false;
+        }
         if (finalDay) {
             spotDist.planning.detourCandidateLimit = std::max(
                 spotDist.planning.detourCandidateLimit,
@@ -2565,6 +2625,7 @@ public:
                 beam,
                 adaptiveLimit(cfg.beamWidth, cfg.minimumBeamWidth),
                 s.field, cfg,
+                diversifyAcquiredSpots,
                 uniqueIndices,
                 dedupScratch);
             if (beam.empty()) {
@@ -2942,7 +3003,8 @@ public:
             for (std::size_t step = eventStep + 1; step <= dayStepCount; ++step) {
                 if (touched[step] && eventBuckets[step].size() / 4 > bucketLimit)
                     deduplicateAndLimit(eventBuckets[step], bucketLimit,
-                        s.field, cfg, uniqueIndices, dedupScratch);
+                        s.field, cfg, diversifyAcquiredSpots,
+                        uniqueIndices, dedupScratch);
             }
             if (expired(true)) {
                 return finish(
@@ -2962,6 +3024,7 @@ public:
             beam,
             adaptiveLimit(cfg.beamWidth, cfg.minimumBeamWidth),
             s.field, cfg,
+            diversifyAcquiredSpots,
             uniqueIndices,
             dedupScratch);
 
