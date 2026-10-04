@@ -3373,8 +3373,36 @@ inline BeamSearchResult brain1(
         changed = true;
     }
     if (runUdonAlns) {
-        const auto improved = improveDayUdon(setting, matchState, previousScore,
+        auto improved = improveDayUdon(setting, matchState, previousScore,
             result.plan, config.udonAlns, deadline);
+        if (finalDay && config.udonAlns.expandedPortfolio &&
+            Clock::now() < deadline) {
+            auto expandedConfig = config.udonAlns;
+            expandedConfig.maxAttempts = std::max<std::size_t>(
+                expandedConfig.maxAttempts, 16);
+            expandedConfig.nodesPerAttempt = std::max<std::size_t>(
+                expandedConfig.nodesPerAttempt, 1600);
+            expandedConfig.maxPatrols = std::max<std::size_t>(
+                expandedConfig.maxPatrols, 3);
+            expandedConfig.expandedPortfolio = false;
+            const auto expanded = improveDayUdon(
+                setting, matchState, previousScore, result.plan,
+                expandedConfig, deadline);
+            improved.attempts += expanded.attempts;
+            improved.expanded += expanded.expanded;
+            improved.improvements += expanded.improvements;
+            improved.interrupted = improved.interrupted || expanded.interrupted;
+            const auto score = [](const GameState& state) {
+                return std::make_tuple(
+                    countBits(state.score.matchBrands),
+                    countBits(state.dayBrands),
+                    state.score.totalUdon);
+            };
+            if (score(expanded.finalState) > score(improved.finalState)) {
+                improved.plan = expanded.plan;
+                improved.finalState = expanded.finalState;
+            }
+        }
         result.udonAlnsAttempts = improved.attempts;
         result.udonAlnsExpanded = improved.expanded;
         result.udonAlnsImprovements = improved.improvements;

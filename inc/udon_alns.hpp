@@ -19,7 +19,11 @@ struct UdonAlnsConfig {
     std::size_t improvementBonusAttempts = 4;
     std::size_t nodesPerAttempt = 800;
     std::size_t maxPatrols = 2;
+    // 中間日も、翌日に引き継ぐ位置・燃料・系列マスクを変えない候補に限り探索する。
     bool finalDayOnly = true;
+    bool preserveIntermediateState = true;
+    // 最終日は従来近傍と広い近傍を比較し、公式得点が高い方だけを採る。
+    bool expandedPortfolio = true;
 };
 
 struct UdonAlnsResult {
@@ -44,6 +48,23 @@ inline UdonAlnsResult improveDayUdon(
     const auto checked = simulateDay(s, ms, incumbent, prev);
     if (!checked.valid) return result;
     result.finalState = checked.state;
+    const bool finalDay = ms.day >= 0 &&
+        static_cast<std::size_t>(ms.day + 1) >= s.dayCount();
+    const auto preservesFuture = [&](const GameState& candidate) {
+        if (finalDay || !config.preserveIntermediateState) return true;
+        if (candidate.score.matchBrands != result.finalState.score.matchBrands ||
+            candidate.dayBrands != result.finalState.dayBrands ||
+            candidate.agentCount != result.finalState.agentCount) {
+            return false;
+        }
+        for (AgentIndex a = 0; a < candidate.agentCount; ++a) {
+            if (candidate.agents[a].pos != result.finalState.agents[a].pos ||
+                candidate.agents[a].fuel != result.finalState.agents[a].fuel) {
+                return false;
+            }
+        }
+        return true;
+    };
     const auto stopped = [&] {
         if (Clock::now() >= deadline) result.interrupted = true;
         return result.interrupted;
@@ -65,11 +86,13 @@ inline UdonAlnsResult improveDayUdon(
         int weight;
         std::size_t uses = 0;
     };
-    std::array<Operator, 4> operators{{
+    std::array<Operator, 6> operators{{
         {1, false, 6, 0},
         {1, true, 5, 0},
         {2, false, 4, 0},
         {2, true, 3, 0},
+        {3, false, 2, 0},
+        {3, true, 2, 0},
     }};
 
     const auto attemptLimit = [&] {
@@ -115,14 +138,15 @@ inline UdonAlnsResult improveDayUdon(
             countBits(result.finalState.score.matchBrands);
         neighborhood.requiredDayBrandCount = countBits(result.finalState.dayBrands);
         neighborhood.maximizeUdon = true;
-        neighborhood.preserveBrandCounts = true;
+        neighborhood.preserveBrandCounts = finalDay ||
+            !config.preserveIntermediateState;
+        neighborhood.exactBrandMasks = !neighborhood.preserveBrandCounts;
         neighborhood.actionsAtStep = &trace.actionsAtStep;
         neighborhood.actionStarts = &trace.starts;
         neighborhood.freeAgents[primary] = true;
 
         if (op.patrolCount > 1) {
-            AgentIndex secondary = primary;
-            int bestOpportunity = -1;
+            std::vector<std::pair<int, AgentIndex>> opportunities;
             for (const AgentIndex other : patrols) {
                 if (other == primary) continue;
                 int opportunity = 0;
@@ -131,12 +155,13 @@ inline UdonAlnsResult improveDayUdon(
                         !(result.finalState.acquiredSpots[other] & spotBit(spot)))
                         ++opportunity;
                 }
-                if (opportunity > bestOpportunity) {
-                    bestOpportunity = opportunity;
-                    secondary = other;
-                }
+                opportunities.emplace_back(-opportunity, other);
             }
-            if (secondary != primary) neighborhood.freeAgents[secondary] = true;
+            std::sort(opportunities.begin(), opportunities.end());
+            for (std::size_t i = 0;
+                 i < opportunities.size() && i + 1 < op.patrolCount; ++i) {
+                neighborhood.freeAgents[opportunities[i].second] = true;
+            }
         }
 
         if (op.freeSupply) {
@@ -207,7 +232,7 @@ inline UdonAlnsResult improveDayUdon(
                 countBits(state.dayBrands),
                 state.score.totalUdon);
         };
-        const bool improved =
+        const bool improved = preservesFuture(candidate.finalState) &&
             officialScore(candidate.finalState) > officialScore(result.finalState);
         if (improved) {
             result.plan = candidate.plan;

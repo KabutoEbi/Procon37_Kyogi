@@ -53,7 +53,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `repair_attempts`, `repair_expanded`, `repair_improvements`: 系列救済の試行数、状態展開数、採用数。採用数は全車探索前のビーム計画に対する改善数であり、従来の全車探索より勝った試合数とは異なる
 - `alns_attempts`, `alns_expanded`, `alns_improvements`: 系列マスク固定ALNSの試行数、状態展開数、玉数改善の採用数
 
-`no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流をまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`は各機能のアブレーションに使う。
+`no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流、拡張ALNSポートフォリオをまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`、`no-expanded-alns`は各機能のアブレーションに使う。
 
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 

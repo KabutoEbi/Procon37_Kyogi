@@ -79,6 +79,33 @@ void checkBrainMaximizesBrandsBeforeUdon() {
     assert(replay.valid && replay.state == result.finalState);
 }
 
+void checkIntermediateDayPreservesFutureState() {
+    auto s = line(3, 6, {1, 0}, {{0, 0, 1, -1}, {0, 2, 1, -1}});
+    s.daySteps.push_back(6);
+    s.daySeconds.push_back(60);
+    auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    const DailyPlan incumbent{{5, -4}, {-6}};
+    const auto before = simulateDay(s, ms, incumbent);
+    assert(before.valid && before.state.dayUdon == 1);
+
+    UdonAlnsConfig cfg;
+    cfg.maxAttempts = 20;
+    cfg.nodesPerAttempt = 5000;
+    cfg.maxPatrols = 1;
+    const auto improved = improveDayUdon(s, ms, {}, incumbent, cfg,
+        std::chrono::steady_clock::time_point::max());
+    assert(improved.finalState.dayUdon > before.state.dayUdon);
+    assert(improved.improvements > 0);
+    assert(improved.finalState.score.matchBrands == before.state.score.matchBrands);
+    assert(improved.finalState.dayBrands == before.state.dayBrands);
+    for (AgentIndex a = 0; a < before.state.agentCount; ++a) {
+        assert(improved.finalState.agents[a].pos == before.state.agents[a].pos);
+        assert(improved.finalState.agents[a].fuel == before.state.agents[a].fuel);
+    }
+    const auto replay = simulateDay(s, ms, improved.plan);
+    assert(replay.valid && replay.state == improved.finalState);
+}
+
 void checkRandomValidityAndPreservedBrandCounts() {
     for (std::uint64_t seed = 1; seed <= 12; ++seed) {
         CreateConfig create;
@@ -134,5 +161,6 @@ void checkRandomValidityAndPreservedBrandCounts() {
 int main() {
     checkSameBrandExtraUdon();
     checkBrainMaximizesBrandsBeforeUdon();
+    checkIntermediateDayPreservesFutureState();
     checkRandomValidityAndPreservedBrandCounts();
 }

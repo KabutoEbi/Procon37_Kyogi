@@ -30,7 +30,7 @@ if (result.success) {
 - `useBrandRepair`: 未獲得系列を対象とした連鎖再計画。既定true
 - `brandRepair`: 局所探索の試行数（16）、各試行の展開上限（1000）、巡回車数（2）。詳細は[系列救済](../brand_repair.md)
 - `useUdonAlns`: 達成済み系列マスクを固定した玉数ALNS。既定true
-- `udonAlns`: ALNSの試行数（12）、各試行の展開上限（800）、解放する巡回車数（2）。詳細は[玉数ALNS](../udon_alns.md)
+- `udonAlns`: ALNSの試行数（12）、各試行の展開上限（800）、解放する巡回車数（2）。最終日は16試行・1600展開・巡回車3台までの拡張近傍も比較し、公式得点が高い方だけを採用する。詳細は[玉数ALNS](../udon_alns.md)
 - `jointBeamWidth`: 同時に空いた複数台へ行動を割り当てる途中幅
 - `timeLimitMs`: 相対時間制限。0なら指定なし
 - `useStateDeadline`: `MatchState::endsAt`も締切に使う
