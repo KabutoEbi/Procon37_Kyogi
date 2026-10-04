@@ -82,6 +82,8 @@ int main() {
     assert(!parse({"main", "--udon-alns", "0"}).beam.useUdonAlns);
     assert(parse({"main", "--udon-alns", "1"}).beam.useUdonAlns);
     assert(!parse({"main", "--spot-route-lns", "0"}).beam.useSpotRouteLns);
+    assert(!parse({"main", "--route-columns", "0"}).beam.routeColumns.enabled);
+    assert(parse({"main", "--route-columns", "1"}).beam.routeColumns.enabled);
     assert(!parse({"main", "--next-day-probe", "0"}).beam.compareNextDayPlans);
     assert(parse({"main", "--next-day-probe", "1"}).beam.compareNextDayPlans);
     for (const auto& invalid : std::vector<std::vector<std::string>>{
@@ -90,6 +92,7 @@ int main() {
         {"main", "--beam-width"}, {"main", "--macro-actions", "2"},
         {"main", "--exact-brands", "2"}, {"main", "--brand-repair", "2"},
         {"main", "--udon-alns", "2"}, {"main", "--spot-route-lns", "2"},
+        {"main", "--route-columns", "2"},
         {"main", "--next-day-probe", "2"},
         {"main", "--auto-beam-width", "2"}}) {
         bool rejected = false;

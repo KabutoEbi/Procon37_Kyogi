@@ -17,6 +17,7 @@ int main(int argc, char** argv) {
     bool currentOnly = false, noCompletion = false, legacyWeights = false, tightFuel = false;
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
     bool compareBrandRepair = false, compareUdonAlns = false, compareSpotRouteLns = false;
+    bool compareRouteColumns = false;
     std::string variant = "improved";
     try {
         for (int i = 1; i < argc; ++i) {
@@ -32,6 +33,7 @@ int main(int argc, char** argv) {
             if (option == "--compare-brand-repair") { compareBrandRepair = true; continue; }
             if (option == "--compare-udon-alns") { compareUdonAlns = true; continue; }
             if (option == "--compare-spot-route-lns") { compareSpotRouteLns = true; continue; }
+            if (option == "--compare-route-columns") { compareRouteColumns = true; continue; }
             if (++i == argc) throw std::invalid_argument("missing option value");
             const std::string value = argv[i];
             if (option == "--variant") { variant = value; continue; }
@@ -61,7 +63,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("invalid generated setting override");
         if (static_cast<int>(compareBrandRepair) +
                 static_cast<int>(compareUdonAlns) +
-                static_cast<int>(compareSpotRouteLns) > 1)
+                static_cast<int>(compareSpotRouteLns) +
+                static_cast<int>(compareRouteColumns) > 1)
             throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
@@ -75,10 +78,15 @@ int main(int argc, char** argv) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
             variant = "improved";
         }
+        if (compareRouteColumns) {
+            if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
+            variant = "improved";
+        }
         const std::string baselineName = compareBrandRepair ? "no-brand-repair" :
             (compareUdonAlns ? "no-udon-alns" :
-             (compareSpotRouteLns ? "no-spot-route-lns" : "baseline"));
-        const std::vector<std::string> allowed = {"improved", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
+             (compareSpotRouteLns ? "no-spot-route-lns" :
+              (compareRouteColumns ? "no-route-columns" : "baseline")));
+        const std::vector<std::string> allowed = {"improved", "no-route-columns", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -93,7 +101,7 @@ int main(int argc, char** argv) {
         std::map<std::string, Summary> summaries;
         using Score = std::tuple<int, int, int>;
         int wins = 0, ties = 0, losses = 0;
-        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements\n";
+        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements\n";
         for (const int size : {8, 16, 24, 32}) {
             if (sizeOnly != 0 && size != sizeOnly) continue;
             for (int seed = seedStart; seed - seedStart < seeds; ++seed) {
@@ -136,6 +144,8 @@ int main(int argc, char** argv) {
                         beam.useSpotRouteLns = name != "baseline" &&
                             name != "no-quantity-upgrades" &&
                             name != "no-spot-route-lns";
+                        beam.routeColumns.enabled = name != "no-route-columns";
+                        if (compareRouteColumns) beam.routeColumns.minimumBudgetMs = 0;
                         beam.prioritizeHardNextDayTargets =
                             name != "baseline" && name != "no-hard-nextday";
                         beam.assignmentCacheLimit = name == "baseline" || name == "no-cache" ? 0 : 4096;
@@ -218,7 +228,10 @@ int main(int argc, char** argv) {
                                 << day.rendezvousTimeNs << ',' << day.brandRepairAttempts << ','
                                 << day.brandRepairExpanded << ',' << day.brandRepairImprovements << ','
                                 << day.udonAlnsAttempts << ',' << day.udonAlnsExpanded << ','
-                                << day.udonAlnsImprovements << '\n';
+                                << day.udonAlnsImprovements << ','
+                                << day.routeColumnsGenerated << ','
+                                << day.routeColumnsMasterNodes << ','
+                                << day.routeColumnsImprovements << '\n';
                             if (!valid) return 1;
                             previous = day.endState.score;
                             elapsed += day.elapsedMs;

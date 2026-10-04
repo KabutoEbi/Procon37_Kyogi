@@ -22,7 +22,7 @@
 | [`visualizer_runtime_test.py`](visualizer_runtime_test.md) | 対応するPython/Tkの選択テスト |
 | [`visualizer_simple_server_test.py`](visualizer_simple_server_test.md) | 同梱簡易サーバーと実ソルバーの結合テスト |
 | [`solver_options_test.cpp`](solver_options_test.md) | 探索引数の反映と不正値拒否 |
-| `spot_route_lns_test.cpp` | スポット単位ビーム、巡回車間の訪問移送・交換、中間日終点変更の合法性と非退行 |
+| `spot_route_lns_test.cpp` | スポット単位ビーム、巡回車間の訪問移送・交換、中間日終点変更、経路候補組合せの合法性と非退行 |
 | `brand_repair_test.cpp` | 役割交換・補給・巻き戻し・固定行動の系列救済テスト。詳細は[系列救済](../inc/brand_repair.md) |
 | `udon_alns_test.cpp` | 系列マスク固定、玉数改善、ランダム問題の非退行・合法性テスト |
 
@@ -39,6 +39,8 @@ make -j3 test
 `solver_benchmark`と`tune_weights`は結果を比較・調整するためのツールなので、通常の回帰テストとは分けて実行する。
 
 2026-10-04時点では、系列救済型の連鎖再計画、系列固定の玉数ALNS、32×32向け種別選択、最終日の経路方式比較、理論値表示・評価、補給車経路安定化を含めて`make test`と`make test-sanitize`が成功し、Python 36件もすべて成功している。アプリアイコン読込を含むGUI実画面1件も成功している。
+
+2026-10-05の経路候補組合せ追加後は`make test-core`（C++回帰、Python 36件）と`spot_route_lns_test`のASan/UBSan実行が成功した。今回の変更について`make test`全体やGUI実画面を再実行したという意味ではない。
 
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 
@@ -63,6 +65,8 @@ make test-python
 未獲得系列に対する巻き戻し・役割交換・補給車連携の比較は[連鎖再計画の検証記録](brand-repair-results-2026-10-03.md)を参照。
 
 系列マスクを完全に固定したALNSの玉数改善は[玉数ALNSの検証記録](udon-alns-results-2026-10-04.md)を参照。
+
+巡回車別の経路候補組合せの5秒ON/OFF比較とその限界は[2026-10-05の検証記録](route-column-results-2026-10-05.md)を参照。
 
 16系列・4日64系列を維持したスポット再探索と保存済み対局の比較は[玉数再探索の検証記録](quantity-portfolio-results-2026-10-04.md)を参照。
 

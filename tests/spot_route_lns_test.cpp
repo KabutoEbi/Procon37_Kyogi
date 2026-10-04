@@ -1,4 +1,5 @@
 #include "model.hpp"
+#include "route_column_search.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -139,6 +140,165 @@ void checkIntermediateFuelDominance() {
     assert(replay.valid && replay.state == result.finalState);
 }
 
+void checkRouteColumnsWithRefuel() {
+    MatchSetting setting;
+    setting.field.width = 4;
+    setting.field.height = 1;
+    setting.field.cells.assign(4, {CellType::Plain, -1});
+    setting.field.spots = {{0, 1, 1, -1}, {0, 3, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0, 1};
+    setting.daySteps = {8};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 2;
+    MatchState state;
+    state.trafficByPos.assign(4, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 1},
+                    {1, AgentKind::Supply, 1, 0}};
+    const DailyPlan incumbent{{2, -6}, {-8}};
+    const auto before = simulateDay(setting, state, incumbent);
+    assert(before.valid && before.state.dayUdon == 1);
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, RouteColumnConfig{},
+        std::chrono::steady_clock::time_point::max());
+    assert(result.generated > 0 && result.masterNodes > 0);
+    assert(result.improvements > 0 && result.finalState.dayUdon == 2);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
+void checkRouteColumnsRespectStock() {
+    MatchSetting setting;
+    setting.field.width = 5;
+    setting.field.height = 1;
+    setting.field.cells.assign(5, {CellType::Plain, -1});
+    setting.field.spots = {{0, 2, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0, 4};
+    setting.daySteps = {6};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 5;
+    MatchState state;
+    state.trafficByPos.assign(5, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 5},
+                    {1, AgentKind::Patrol, 4, 5}};
+    const DailyPlan incumbent{{-6}, {-6}};
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, RouteColumnConfig{},
+        std::chrono::steady_clock::time_point::max());
+    assert(result.improvements > 0);
+    assert(result.finalState.dayUdon == 1);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
+void checkRouteColumnsCombinePatrols() {
+    MatchSetting setting;
+    setting.field.width = 5;
+    setting.field.height = 1;
+    setting.field.cells.assign(5, {CellType::Plain, -1});
+    setting.field.spots = {{0, 1, 1, -1}, {1, 3, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0, 4};
+    setting.daySteps = {2};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 2;
+    MatchState state;
+    state.trafficByPos.assign(5, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 2},
+                    {1, AgentKind::Patrol, 4, 2}};
+    const DailyPlan incumbent{{-2}, {-2}};
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, RouteColumnConfig{},
+        std::chrono::steady_clock::time_point::max());
+    assert(result.finalState.dayUdon == 2);
+    assert(countBits(result.finalState.dayBrands) == 2);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
+void checkRouteColumnsSupplyStation() {
+    MatchSetting setting;
+    setting.field.width = 4;
+    setting.field.height = 1;
+    setting.field.cells.assign(4, {CellType::Plain, -1});
+    setting.field.spots = {{0, 1, 1, -1}, {0, 3, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0, 2};
+    setting.daySteps = {8};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 2;
+    MatchState state;
+    state.trafficByPos.assign(4, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 1},
+                    {1, AgentKind::Supply, 2, 0}};
+    const DailyPlan incumbent{{2, -6}, {-8}};
+    assert(simulateDay(setting, state, incumbent).state.dayUdon == 1);
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, RouteColumnConfig{},
+        std::chrono::steady_clock::time_point::max());
+    assert(result.improvements > 0 && result.finalState.dayUdon == 2);
+    assert(result.plan[1] != incumbent[1]);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
+void checkRouteColumnsLargePool() {
+    MatchSetting setting;
+    setting.field.width = 14;
+    setting.field.height = 1;
+    setting.field.cells.assign(14, {CellType::Plain, -1});
+    for (int pos = 1; pos <= 12; ++pos)
+        setting.field.spots.push_back({pos % 3, pos, 2, -1});
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0, 13};
+    setting.daySteps = {24};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 24;
+    MatchState state;
+    state.trafficByPos.assign(14, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 24},
+                    {1, AgentKind::Patrol, 13, 24}};
+    const DailyPlan incumbent{{-24}, {-24}};
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, RouteColumnConfig{},
+        std::chrono::steady_clock::time_point::max());
+    assert(result.generated > 100);
+    assert(result.masterNodes > 0);
+    assert(countBits(result.finalState.dayBrands) == 3);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
+void checkRouteColumnsSuffixInsertionWithoutTerminalWait() {
+    MatchSetting setting;
+    setting.field.width = 3;
+    setting.field.height = 2;
+    setting.field.cells.assign(6, {CellType::Plain, -1});
+    setting.field.spots = {
+        {0, 1, 1, -1}, {1, 4, 1, -1}, {2, 5, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0};
+    setting.daySteps = {6};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 10;
+    MatchState state;
+    state.trafficByPos.assign(6, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 10}};
+    const DailyPlan incumbent{{2, 4, 1}};
+    const auto before = simulateDay(setting, state, incumbent);
+    assert(before.valid && before.state.dayUdon == 2);
+    RouteColumnConfig config;
+    config.maxVisits = 0; // Exercise incumbent-derived suffixes only.
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, config,
+        std::chrono::steady_clock::time_point::max());
+    assert(result.improvements > 0);
+    assert(result.finalState.dayUdon == 3);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
 }  // namespace
 
 int main() {
@@ -146,4 +306,10 @@ int main() {
     checkIntermediateFuelDominance();
     checkJointRouteSearch();
     checkIntermediatePositionChange();
+    checkRouteColumnsWithRefuel();
+    checkRouteColumnsRespectStock();
+    checkRouteColumnsCombinePatrols();
+    checkRouteColumnsSupplyStation();
+    checkRouteColumnsLargePool();
+    checkRouteColumnsSuffixInsertionWithoutTerminalWait();
 }

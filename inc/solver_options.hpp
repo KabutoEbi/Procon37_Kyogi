@@ -48,6 +48,7 @@ private:
         if ((name == "--macro-actions" || name == "--adaptive-beam" ||
              name == "--exact-brands" || name == "--brand-repair" ||
              name == "--udon-alns" || name == "--spot-route-lns" ||
+             name == "--route-columns" ||
              name == "--next-day-probe" || name == "--auto-beam-width") &&
             value > 1) {
             throw std::invalid_argument(
@@ -74,6 +75,7 @@ private:
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
+        else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
         else if (name == "--auto-beam-width") {
             autoBeamWidth = value != 0;

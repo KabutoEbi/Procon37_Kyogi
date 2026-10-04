@@ -123,7 +123,9 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " threads=" << config.threadCount
               << " time-limit-ms=" << config.timeLimitMs
               << " safety-margin-ms=" << config.safetyMarginMs
-              << " auto-beam-width=" << (config.autoSizedBeam ? 1 : 0) << '\n';
+              << " auto-beam-width=" << (config.autoSizedBeam ? 1 : 0)
+              << " route-columns=" << (config.routeColumns.enabled ? 1 : 0)
+              << '\n';
 
     const auto result = solveDay(setting, state, score, config);
     if (!result.success) {

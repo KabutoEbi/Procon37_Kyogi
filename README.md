@@ -41,3 +41,5 @@ python3 visualizer/app.py
 `.env`、実行ファイル、生成JSON、`runtime/`はGit管理対象外である。接続用TOKENはGitへ追加しない。
 
 32×32・混雑／渋滞条件では、種別選択を中心補給台数から比較し、最終日に通常経路と周期再計画経路を比較する。計測結果は[種別選択改善](manual/tests/agent-selection-traffic-results-2026-10-02.md)と[経路選択改善](manual/tests/route-selection-results-2026-10-02.md)を参照する。
+
+日次探索ではビーム探索後に系列補完、スポット再探索、巡回車ごとの経路候補組合せ、玉数ALNSを順に試す。経路候補組合せは5秒以上の探索予算で、先行するスポット再探索後に時間が残る場合だけ実行する。候補は在庫制約を守って選び、採用前に公式シミュレータで検証する。`--route-columns 0`でこの追加探索だけを無効化できる。方式の詳細は[経路候補の組合せ探索](manual/inc/route_column_search.md)、生成問題での比較は[検証記録](manual/tests/route-column-results-2026-10-05.md)を参照する。系列数・玉数の全盤面での同時改善や50秒設定での優位性を保証するものではない。

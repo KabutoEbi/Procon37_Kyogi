@@ -2,7 +2,7 @@
 
 対象: [`tests/solver_options_test.cpp`](../../tests/solver_options_test.cpp)
 
-GUIから渡すビーム幅、スレッド数、時間制限、マクロ設定などの反映と不正値の拒否を検査する。種別選択の既定値が補給車を最低1台要求することも確認する。
+GUIから渡すビーム幅、スレッド数、時間制限、マクロ設定、`--route-columns 0/1`などの反映と不正値の拒否を検査する。種別選択の既定値が補給車を最低1台要求することも確認する。
 
 ```sh
 c++ -std=c++17 -O2 -pthread -Iinc tests/solver_options_test.cpp -o /tmp/solver_options_test

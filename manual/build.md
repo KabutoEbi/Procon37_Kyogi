@@ -33,6 +33,8 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 
 2026-10-04時点で`make test`、`make test-sanitize`、`make test-python`の成功を確認している。`make test-python`はPython 36件を実行する。`make test-gui`はデスクトップと対応Tkを持つ環境で別途実行し、同日時点で1件の成功を確認している。
 
+2026-10-05の経路候補組合せ追加後には`make test-core`が成功した。追加した`spot_route_lns_test`の経路候補組合せテストはASan/UBSanでも通過した。この変更について`make test`・`make test-sanitize`全体やGUI実画面を再実行したという意味ではない。
+
 ## コンパイラ等の指定
 
 ```sh

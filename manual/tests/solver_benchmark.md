@@ -34,7 +34,7 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 出力は次のCSV形式である。
 
 ```text
-size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements
+size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements
 ```
 
 - `variant`: 比較する機能構成
@@ -52,6 +52,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `assignment_ns`, `flow_ns`, `rendezvous_ns`: `--profile`時の処理時間。未指定時は0。計測範囲が重複するため加算しない
 - `repair_attempts`, `repair_expanded`, `repair_improvements`: 系列救済の試行数、状態展開数、採用数。採用数は全車探索前のビーム計画に対する改善数であり、従来の全車探索より勝った試合数とは異なる
 - `alns_attempts`, `alns_expanded`, `alns_improvements`: 系列マスク固定ALNSの試行数、状態展開数、玉数改善の採用数
+- `route_columns_generated`, `route_columns_master_nodes`, `route_columns_improvements`: 巡回車別の経路候補数、在庫制約付き組合せ探索の訪問ノード数、採用改善数
 
 `no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流、拡張ALNSポートフォリオをまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`、`no-expanded-alns`は各機能のアブレーションに使う。
 
@@ -87,6 +88,8 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 ```
 
 `--current-only`では別バイナリ間の実行順を自動交替しない。比較側で順序を変えた反復も行う。
+
+`--compare-route-columns`は`no-route-columns`と`improved`を同じ生成問題・予算で交互に実行する。この比較モードでは5秒未満でも新方式を評価できるよう、適用下限を0msへ変更する。通常のCLIでの既定適用条件とは異なる。個別構成の比較には`--variant no-route-columns`も使える。結果と限界は[経路候補組合せの検証記録](route-column-results-2026-10-05.md)を参照する。
 
 系列救済型の連鎖再計画だけを比較する例:
 

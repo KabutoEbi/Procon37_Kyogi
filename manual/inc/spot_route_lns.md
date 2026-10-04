@@ -8,4 +8,6 @@
 
 中間日の既定設定では、試合・当日の系列マスクを維持し、翌日に到達可能な系列数を減らさず、系列への距離と巡回車の残燃料を許容範囲に保つ場合に限り終端位置の変更を認める。これは未知の翌日交通や他チームの行動まで保証する条件ではない。厳密な終端一致が必要なら`allowFuturePositionChange=false`を指定する。
 
-`brain1()`は残り時間に応じてスポット単位ビーム、局所LNS、複数巡回車LNS、玉数ALNSの順に試す。CLIの`--spot-route-lns 0`でこのスポット系探索を停止できる。テストは[`spot_route_lns_test.cpp`](../../tests/spot_route_lns_test.cpp)を参照。
+`brain1()`は残り時間に応じてスポット単位ビーム、局所LNS、複数巡回車LNS、経路候補組合せ、玉数ALNSの順に試す。CLIの`--spot-route-lns 0`でこのスポット系探索を停止できる。テストは[`spot_route_lns_test.cpp`](../../tests/spot_route_lns_test.cpp)を参照。
+
+既存のスポット再探索後に時間が残る場合は、別の[`route_column_search.hpp`](route_column_search.md)で巡回車別の完成経路を組み合わせ、その後に玉数ALNSを試す。`--route-columns 0`は追加探索のみを停止し、`--spot-route-lns 0`はスポット系探索全体を停止する。

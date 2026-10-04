@@ -12,6 +12,7 @@
 #include "../search_state.hpp"
 #include "../simulator.hpp"
 #include "../spot_route_lns.hpp"
+#include "../route_column_search.hpp"
 
 #include <algorithm>
 #include <array>
@@ -46,6 +47,7 @@ struct BeamSearchConfig {
     UdonAlnsConfig udonAlns{};
     bool useSpotRouteLns = true;
     SpotRouteLnsConfig spotRouteLns{};
+    RouteColumnConfig routeColumns{};
     bool compareNextDayPlans = false;
     std::int64_t nextDayProbeMs = 500;
     std::size_t beamWidth = 128;
@@ -151,6 +153,9 @@ struct BeamSearchResult {
     std::size_t spotPortfolioMaxBrands = 0;
     std::size_t spotPortfolioMaxUdon = 0;
     std::size_t spotPortfolioMaxValidUdon = 0;
+    std::size_t routeColumnsGenerated = 0;
+    std::size_t routeColumnsMasterNodes = 0;
+    std::size_t routeColumnsImprovements = 0;
     bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
@@ -3348,11 +3353,14 @@ inline BeamSearchResult brain1(
     }
     const bool limited = budget != std::numeric_limits<std::int64_t>::max();
     if (limited) budget = std::max<std::int64_t>(0, budget - config.safetyMarginMs);
+    const bool routeColumnsActive = config.useSpotRouteLns &&
+        config.routeColumns.enabled &&
+        (!limited || budget >= config.routeColumns.minimumBudgetMs);
     const auto deadline = limited ? started + std::chrono::milliseconds(budget)
                                   : Clock::time_point::max();
     auto beamConfig = config;
     if (limited && budget > 1) {
-        // 完了計画の確保に80%、系列補完に残りを確保する。
+        // Reserve time for independent route columns and the legacy refiners.
         beamConfig.timeLimitMs = std::max<std::int64_t>(1,
             budget - budget / (config.autoSizedBeam ? 20 : 5));
         beamConfig.safetyMarginMs = 0;
@@ -3424,10 +3432,11 @@ inline BeamSearchResult brain1(
             routeDeadline = now +
                 std::max(Clock::duration::zero(), deadline - now) * 3 / 4;
         }
-        if (config.spotRouteLns.spotPortfolio && Clock::now() < routeDeadline) {
+        const auto legacyRouteDeadline = routeDeadline;
+        if (config.spotRouteLns.spotPortfolio && Clock::now() < legacyRouteDeadline) {
             const auto now = Clock::now();
             const auto portfolioDeadline = now +
-                std::max(Clock::duration::zero(), routeDeadline - now) / 2;
+                std::max(Clock::duration::zero(), legacyRouteDeadline - now) / 2;
             const std::array<int, 4> hardnessWeights{{4, 0, 16, 8}};
             for (std::size_t pass = 0;
                  pass < hardnessWeights.size() && Clock::now() < portfolioDeadline;
@@ -3468,11 +3477,11 @@ inline BeamSearchResult brain1(
                 }
             }
         }
-        auto localDeadline = routeDeadline;
+        auto localDeadline = legacyRouteDeadline;
         if (config.spotRouteLns.teamNeighborhood && limited) {
             const auto now = Clock::now();
             localDeadline = now +
-                std::max(Clock::duration::zero(), routeDeadline - now) / 3;
+                std::max(Clock::duration::zero(), legacyRouteDeadline - now) / 3;
         }
         const auto routed = improveSpotRoutes(setting, matchState, previousScore,
             result.plan, config.spotRouteLns, localDeadline);
@@ -3484,18 +3493,32 @@ inline BeamSearchResult brain1(
             changed = true;
             remember();
         }
-        if (config.spotRouteLns.teamNeighborhood && Clock::now() < routeDeadline) {
+        if (config.spotRouteLns.teamNeighborhood && Clock::now() < legacyRouteDeadline) {
             auto teamConfig = config.spotRouteLns;
-            if (limited && routeDeadline - Clock::now() > std::chrono::seconds(3))
+            if (limited && legacyRouteDeadline - Clock::now() > std::chrono::seconds(3))
                 teamConfig.maxTeamAttempts = std::max<std::size_t>(
                     teamConfig.maxTeamAttempts, 2000);
             const auto team = improveTeamSpotRoutes(setting, matchState,
-                previousScore, result.plan, teamConfig, routeDeadline);
+                previousScore, result.plan, teamConfig, legacyRouteDeadline);
             result.spotRouteLnsAttempts += team.attempts;
             result.spotRouteLnsImprovements += team.improvements;
             if (team.improvements) {
                 result.plan = team.plan;
                 result.finalState = team.finalState;
+                changed = true;
+                remember();
+            }
+        }
+        if (routeColumnsActive && Clock::now() < routeDeadline) {
+            const auto columns = searchRouteColumns(setting, matchState,
+                previousScore, result.plan, config.spotRouteLns,
+                config.routeColumns, routeDeadline);
+            result.routeColumnsGenerated = columns.generated;
+            result.routeColumnsMasterNodes = columns.masterNodes;
+            result.routeColumnsImprovements = columns.improvements;
+            if (columns.improvements) {
+                result.plan = columns.plan;
+                result.finalState = columns.finalState;
                 changed = true;
                 remember();
             }
