@@ -17,7 +17,9 @@ int main(int argc, char** argv) {
     bool currentOnly = false, noCompletion = false, legacyWeights = false, tightFuel = false;
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
     bool compareBrandRepair = false, compareUdonAlns = false;
+    bool compareAlnsRouteRecovery = false;
     std::string variant = "improved";
+    std::string baselineOverride;
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string option = argv[i];
@@ -31,9 +33,14 @@ int main(int argc, char** argv) {
             if (option == "--profile") { profile = true; continue; }
             if (option == "--compare-brand-repair") { compareBrandRepair = true; continue; }
             if (option == "--compare-udon-alns") { compareUdonAlns = true; continue; }
+            if (option == "--compare-alns-route-recovery") {
+                compareAlnsRouteRecovery = true;
+                continue;
+            }
             if (++i == argc) throw std::invalid_argument("missing option value");
             const std::string value = argv[i];
             if (option == "--variant") { variant = value; continue; }
+            if (option == "--baseline") { baselineOverride = value; continue; }
             std::size_t consumed = 0;
             const int number = std::stoi(value, &consumed);
             if (consumed != value.size() || number <= 0)
@@ -58,7 +65,9 @@ int main(int argc, char** argv) {
             spotOnly < 0 || brandOnly < 0 ||
             (spotOnly > 0 && brandOnly > spotOnly))
             throw std::invalid_argument("invalid generated setting override");
-        if (compareBrandRepair && compareUdonAlns)
+        if (static_cast<int>(compareBrandRepair) +
+                static_cast<int>(compareUdonAlns) +
+                static_cast<int>(compareAlnsRouteRecovery) > 1)
             throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
@@ -68,11 +77,20 @@ int main(int argc, char** argv) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
             variant = "udon-alns";
         }
-        const std::string baselineName = compareBrandRepair ? "no-brand-repair" :
-            (compareUdonAlns ? "no-udon-alns" : "baseline");
-        const std::vector<std::string> allowed = {"improved", "no-quantity-upgrades", "no-expanded-alns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
+        if (compareAlnsRouteRecovery) {
+            if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
+            variant = "improved";
+        }
+        const std::string defaultBaseline = compareBrandRepair ? "no-brand-repair" :
+            (compareUdonAlns ? "no-udon-alns" :
+             (compareAlnsRouteRecovery ? "no-alns-route-recovery" : "baseline"));
+        const std::string baselineName = baselineOverride.empty()
+            ? defaultBaseline : baselineOverride;
+        const std::vector<std::string> allowed = {"improved", "no-quantity-upgrades", "no-expanded-alns", "no-alns-route-recovery", "no-alns-suffix-recovery", "no-alns-patrol-selection", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
+        if (std::find(allowed.begin(), allowed.end(), baselineName) == allowed.end())
+            throw std::invalid_argument("invalid baseline");
         struct Summary {
             std::int64_t brands = 0, daily = 0, udon = 0, nodes = 0;
             std::int64_t supplyBacktracks = 0;
@@ -125,6 +143,14 @@ int main(int argc, char** argv) {
                             name != "no-quantity-diversity";
                         beam.udonAlns.expandedPortfolio =
                             name != "no-quantity-upgrades" && name != "no-expanded-alns";
+                        beam.udonAlns.recoverDestroyedSuffix =
+                            name != "no-quantity-upgrades" &&
+                            name != "no-alns-route-recovery" &&
+                            name != "no-alns-suffix-recovery";
+                        beam.udonAlns.selectReachablePatrols =
+                            name != "no-quantity-upgrades" &&
+                            name != "no-alns-route-recovery" &&
+                            name != "no-alns-patrol-selection";
                         beam.prioritizeHardNextDayTargets =
                             name != "baseline" && name != "no-hard-nextday";
                         beam.assignmentCacheLimit = name == "baseline" || name == "no-cache" ? 0 : 4096;

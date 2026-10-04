@@ -24,6 +24,11 @@ struct UdonAlnsConfig {
     bool preserveIntermediateState = true;
     // 最終日は従来近傍と広い近傍を比較し、公式得点が高い方だけを採る。
     bool expandedPortfolio = true;
+    // 後半経路を破壊した時点の在庫・取得状況から候補店を作り直す。
+    // 最終結果だけを見ると、破壊区間で取り切った店が候補から消えてしまう。
+    bool recoverDestroyedSuffix = true;
+    // 複数台近傍では、切断後に追加取得できる店が多い巡回車を優先する。
+    bool selectReachablePatrols = true;
 };
 
 struct UdonAlnsResult {
@@ -79,6 +84,31 @@ inline UdonAlnsResult improveDayUdon(
 
     const auto distances = buildBrandDistances(s, ms, stopped);
     if (distances.size() != s.field.spots.size()) return result;
+
+    // A useful target is either still left after the incumbent, or was picked
+    // by this patrol in the suffix that the neighborhood is about to destroy.
+    // Do not expose every stock visible at the cut: some of it is reserved by
+    // fixed agents and only dilutes the bounded local search.
+    const auto isDestroyedPickup = [&](const GameState& cut, AgentIndex patrol,
+                                       std::size_t spot) {
+        return config.recoverDestroyedSuffix &&
+            cut.remainingStocks[spot] > 0 &&
+            !(cut.acquiredSpots[patrol] & spotBit(spot)) &&
+            (result.finalState.acquiredSpots[patrol] & spotBit(spot));
+    };
+    const auto isRouteTarget = [&](const GameState& cut, AgentIndex patrol,
+                                   std::size_t spot) {
+        if (!config.recoverDestroyedSuffix) {
+            return result.finalState.remainingStocks[spot] > 0 &&
+                !(result.finalState.acquiredSpots[patrol] & spotBit(spot));
+        }
+        if (cut.remainingStocks[spot] <= 0 ||
+            (cut.acquiredSpots[patrol] & spotBit(spot))) return false;
+        const bool leftAfterIncumbent =
+            result.finalState.remainingStocks[spot] > 0 &&
+            !(result.finalState.acquiredSpots[patrol] & spotBit(spot));
+        return leftAfterIncumbent || isDestroyedPickup(cut, patrol, spot);
+    };
 
     struct Operator {
         std::size_t patrolCount;
@@ -151,9 +181,19 @@ inline UdonAlnsResult improveDayUdon(
                 if (other == primary) continue;
                 int opportunity = 0;
                 for (std::size_t spot = 0; spot < s.field.spots.size(); ++spot) {
-                    if (result.finalState.remainingStocks[spot] > 0 &&
-                        !(result.finalState.acquiredSpots[other] & spotBit(spot)))
+                    if (!isRouteTarget(cp.state, other, spot)) continue;
+                    if (!config.selectReachablePatrols) {
                         ++opportunity;
+                        continue;
+                    }
+                    const int steps = distances[spot][cp.state.agents[other].pos];
+                    if (steps <= cp.state.remainingSteps()) {
+                        // 元経路で未取得だった店をわずかに優先し、単なる
+                        // suffix再構築だけでなく追加の1玉を生む台を選ぶ。
+                        opportunity +=
+                            (result.finalState.acquiredSpots[other] & spotBit(spot))
+                                ? 2 : 3;
+                    }
                 }
                 opportunities.emplace_back(-opportunity, other);
             }
@@ -194,8 +234,14 @@ inline UdonAlnsResult improveDayUdon(
             }
             if (neighborhood.freeAgents[a] && ms.agents[a].isPatrol()) {
                 for (std::size_t spot = 0; spot < s.field.spots.size(); ++spot) {
-                    if (!(result.finalState.acquiredSpots[a] & spotBit(spot)) &&
-                        result.finalState.remainingStocks[spot] > 0)
+                    if (isDestroyedPickup(cp.state, a, spot) &&
+                        distances[spot][cp.state.agents[a].pos] <=
+                            cp.state.remainingSteps()) {
+                        neighborhood.recoverySpots |= spotBit(spot);
+                    } else if (isRouteTarget(cp.state, a, spot) &&
+                        (!config.recoverDestroyedSuffix ||
+                         distances[spot][cp.state.agents[a].pos] <=
+                             cp.state.remainingSteps()))
                         neighborhood.targetSpots |= spotBit(spot);
                 }
             } else if (!neighborhood.freeAgents[a]) {

@@ -41,6 +41,9 @@ struct BrandNeighborhood {
     BrandMask requiredDayBrands = 0;
     std::uint32_t requiredMatchBrandCount = 0;
     std::uint32_t requiredDayBrandCount = 0;
+    // The incumbent acquired these after the cut. Rebuild them before exploring
+    // untouched stock so a bounded quantity search does not lose its baseline.
+    SpotMask recoverySpots = 0;
     SpotMask targetSpots = 0;
     std::int32_t fixedFutureUdon = 0;
     bool maximizeUdon = false;
@@ -209,6 +212,8 @@ inline BrandSearchResult maximizeDayBrands(
                                 (bit & neighborhood->requiredDayBrands) &&
                                 !(state.dayBrands & bit)) {
                                 bias = 0;
+                            } else if (neighborhood->recoverySpots & spotBit(s)) {
+                                bias = 1000 - std::min(100, state.remainingStocks[s]) * 10;
                             } else if (neighborhood->targetSpots & spotBit(s)) {
                                 bias = 2000 - std::min(100, state.remainingStocks[s]) * 10;
                             } else {
