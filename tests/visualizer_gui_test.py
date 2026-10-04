@@ -78,6 +78,8 @@ class GUITest(unittest.TestCase):
             gui.solver_var.set(sys.executable)
             gui.parameter_vars["beam_width"].set("19")
             gui.parameter_vars["joint_beam_width"].set("71")
+            self.assertEqual(gui.parameter_vars["auto_beam_width"].get(), "1")
+            gui.parameter_vars["auto_beam_width"].set("0")
             gui.parameter_vars["trial_candidates"].set("0")
             callback_errors = []
             gui.report_callback_exception = lambda *args: callback_errors.append(args)

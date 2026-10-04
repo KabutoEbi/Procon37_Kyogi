@@ -46,7 +46,11 @@ struct BeamSearchConfig {
     UdonAlnsConfig udonAlns{};
     bool useSpotRouteLns = true;
     SpotRouteLnsConfig spotRouteLns{};
+    bool compareNextDayPlans = false;
+    std::int64_t nextDayProbeMs = 500;
     std::size_t beamWidth = 128;
+    // Automatic daily sizing spends more of its capped budget on the beam.
+    bool autoSizedBeam = false;
 
     // 同じステップで複数の待機中でないエージェントへ行動を割り当てる際の幅。
     std::size_t jointBeamWidth = 512;
@@ -144,6 +148,9 @@ struct BeamSearchResult {
     std::size_t udonAlnsImprovements = 0;
     std::size_t spotRouteLnsAttempts = 0;
     std::size_t spotRouteLnsImprovements = 0;
+    std::size_t spotPortfolioMaxBrands = 0;
+    std::size_t spotPortfolioMaxUdon = 0;
+    std::size_t spotPortfolioMaxValidUdon = 0;
     bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
@@ -2287,10 +2294,19 @@ public:
             return std::make_tuple(countBits(state.score.matchBrands),
                 state.score.sumOfDailyBrandCounts, state.score.totalUdon);
         };
+        std::vector<DijkstraTable> selectionCache(s.field.cellCount());
+        std::vector<bool> selectionCached(s.field.cellCount(), false);
         const auto selectionScore = [&](const GameState& state) {
+            const auto future = finalDay ? detail::FutureRoutePotential{} :
+                detail::futureRoutePotential(s, ms, state,
+                    selectionCache, selectionCached);
             return std::make_tuple(countBits(state.score.matchBrands),
                 state.score.sumOfDailyBrandCounts,
-                finalDay ? state.score.totalUdon : 0);
+                future.reachableBrands,
+                finalDay ? state.score.totalUdon :
+                    8 * state.score.totalUdon - future.distanceSum +
+                        future.patrolFuel / 20,
+                state.score.totalUdon);
         };
         auto cache = std::make_shared<AssignmentCache>();
         auto timings = std::make_shared<PlanningTimings>();
@@ -3203,11 +3219,20 @@ inline BeamSearchResult brain1Beam(
 
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
+    std::vector<DijkstraTable> selectionCache(setting.field.cellCount());
+    std::vector<bool> selectionCached(setting.field.cellCount(), false);
     auto resultScore = [&](const BeamSearchResult& result) {
+        const auto future = finalDay ? detail::FutureRoutePotential{} :
+            detail::futureRoutePotential(setting, matchState, result.finalState,
+                selectionCache, selectionCached);
         return std::make_tuple(
             countBits(result.finalState.score.matchBrands),
             result.finalState.score.sumOfDailyBrandCounts,
-            finalDay ? result.finalState.score.totalUdon : 0);
+            future.reachableBrands,
+            finalDay ? result.finalState.score.totalUdon :
+                8 * result.finalState.score.totalUdon - future.distanceSum +
+                    future.patrolFuel / 20,
+            result.finalState.score.totalUdon);
     };
     auto better = [&](const BeamSearchResult& lhs,
                       const BeamSearchResult& rhs) {
@@ -3328,15 +3353,26 @@ inline BeamSearchResult brain1(
     auto beamConfig = config;
     if (limited && budget > 1) {
         // 完了計画の確保に80%、系列補完に残りを確保する。
-        beamConfig.timeLimitMs = std::max<std::int64_t>(1, budget - budget / 5);
+        beamConfig.timeLimitMs = std::max<std::int64_t>(1,
+            budget - budget / (config.autoSizedBeam ? 20 : 5));
         beamConfig.safetyMarginMs = 0;
         beamConfig.useStateDeadline = false;
     }
     auto result = brain1Beam(setting, matchState, previousScore, beamConfig);
     if (!result.success) return result;
+    struct FutureCandidate {
+        DailyPlan plan;
+        GameState state;
+    };
+    std::vector<FutureCandidate> futureCandidates;
     bool changed = false;
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
+    const auto remember = [&] {
+        if (!finalDay && config.compareNextDayPlans)
+            futureCandidates.push_back({result.plan, result.finalState});
+    };
+    remember();
     const bool runUdonAlns = config.useUdonAlns &&
         (!config.udonAlns.finalDayOnly || finalDay);
     const bool runSpotRouteLns = config.useSpotRouteLns &&
@@ -3359,6 +3395,7 @@ inline BeamSearchResult brain1(
             result.plan = repair.plan;
             result.finalState = repair.finalState;
             changed = true;
+            remember();
         }
     }
     // Establish the best reachable brand counts before optimizing quantity.
@@ -3378,22 +3415,90 @@ inline BeamSearchResult brain1(
         result.plan = refined.plan;
         result.finalState = refined.finalState;
         changed = true;
+        remember();
     }
     if (runSpotRouteLns && Clock::now() < deadline) {
         auto routeDeadline = deadline;
         if (runUdonAlns && limited) {
             const auto now = Clock::now();
             routeDeadline = now +
-                std::max(Clock::duration::zero(), deadline - now) / 2;
+                std::max(Clock::duration::zero(), deadline - now) * 3 / 4;
+        }
+        if (config.spotRouteLns.spotPortfolio && Clock::now() < routeDeadline) {
+            const auto now = Clock::now();
+            const auto portfolioDeadline = now +
+                std::max(Clock::duration::zero(), routeDeadline - now) / 2;
+            const std::array<int, 4> hardnessWeights{{4, 0, 16, 8}};
+            for (std::size_t pass = 0;
+                 pass < hardnessWeights.size() && Clock::now() < portfolioDeadline;
+                 ++pass) {
+                auto portfolioConfig = config.spotRouteLns;
+                portfolioConfig.spotPortfolioHardnessWeight = hardnessWeights[pass];
+                const auto maxPortfolioWidth = setting.field.cellCount() >= 1024
+                    ? std::size_t{512} : std::size_t{2048};
+                portfolioConfig.spotPortfolioBeamWidth = std::min<std::size_t>(
+                    maxPortfolioWidth,
+                    portfolioConfig.spotPortfolioBeamWidth >
+                            (maxPortfolioWidth >> pass)
+                        ? maxPortfolioWidth
+                        : portfolioConfig.spotPortfolioBeamWidth << pass);
+                portfolioConfig.spotPortfolioCandidatesPerDepth =
+                    std::min<std::size_t>(64,
+                        portfolioConfig.spotPortfolioCandidatesPerDepth >
+                                (std::size_t{64} >> pass)
+                            ? std::size_t{64}
+                            : portfolioConfig.spotPortfolioCandidatesPerDepth << pass);
+                const auto portfolio = searchSpotPortfolio(setting, matchState,
+                    previousScore, result.plan, portfolioConfig,
+                    portfolioDeadline);
+                result.spotRouteLnsAttempts += portfolio.attempts;
+                result.spotRouteLnsImprovements += portfolio.improvements;
+                result.spotPortfolioMaxBrands = std::max(
+                    result.spotPortfolioMaxBrands, portfolio.portfolioMaxBrands);
+                result.spotPortfolioMaxUdon = std::max(
+                    result.spotPortfolioMaxUdon, portfolio.portfolioMaxUdon);
+                result.spotPortfolioMaxValidUdon = std::max(
+                    result.spotPortfolioMaxValidUdon,
+                    portfolio.portfolioMaxValidUdon);
+                if (portfolio.improvements) {
+                    result.plan = portfolio.plan;
+                    result.finalState = portfolio.finalState;
+                    changed = true;
+                    remember();
+                }
+            }
+        }
+        auto localDeadline = routeDeadline;
+        if (config.spotRouteLns.teamNeighborhood && limited) {
+            const auto now = Clock::now();
+            localDeadline = now +
+                std::max(Clock::duration::zero(), routeDeadline - now) / 3;
         }
         const auto routed = improveSpotRoutes(setting, matchState, previousScore,
-            result.plan, config.spotRouteLns, routeDeadline);
-        result.spotRouteLnsAttempts = routed.attempts;
-        result.spotRouteLnsImprovements = routed.improvements;
+            result.plan, config.spotRouteLns, localDeadline);
+        result.spotRouteLnsAttempts += routed.attempts;
+        result.spotRouteLnsImprovements += routed.improvements;
         if (routed.improvements) {
             result.plan = routed.plan;
             result.finalState = routed.finalState;
             changed = true;
+            remember();
+        }
+        if (config.spotRouteLns.teamNeighborhood && Clock::now() < routeDeadline) {
+            auto teamConfig = config.spotRouteLns;
+            if (limited && routeDeadline - Clock::now() > std::chrono::seconds(3))
+                teamConfig.maxTeamAttempts = std::max<std::size_t>(
+                    teamConfig.maxTeamAttempts, 2000);
+            const auto team = improveTeamSpotRoutes(setting, matchState,
+                previousScore, result.plan, teamConfig, routeDeadline);
+            result.spotRouteLnsAttempts += team.attempts;
+            result.spotRouteLnsImprovements += team.improvements;
+            if (team.improvements) {
+                result.plan = team.plan;
+                result.finalState = team.finalState;
+                changed = true;
+                remember();
+            }
         }
     }
     if (runUdonAlns) {
@@ -3433,6 +3538,77 @@ inline BeamSearchResult brain1(
         if (improved.improvements) {
             result.plan = improved.plan;
             result.finalState = improved.finalState;
+            changed = true;
+            remember();
+        }
+    }
+    if (!finalDay && config.compareNextDayPlans &&
+        futureCandidates.size() > 1 &&
+        deadline - Clock::now() > std::chrono::milliseconds(
+            500 + 2 * std::max<std::int64_t>(1, config.nextDayProbeMs) *
+                static_cast<std::int64_t>(futureCandidates.size()))) {
+        const auto currentBrandScore = brandScore(result.finalState);
+        auto probeConfig = config;
+        probeConfig.refineBrands = false;
+        probeConfig.exactBrands = false;
+        probeConfig.useBrandRepair = false;
+        probeConfig.useSpotRouteLns = false;
+        probeConfig.useUdonAlns = false;
+        probeConfig.iterativeDeepening = false;
+        probeConfig.comparePeriodicReplanPlans = false;
+        probeConfig.compareNextDayPlans = false;
+        probeConfig.useStateDeadline = false;
+        probeConfig.safetyMarginMs = 0;
+        probeConfig.threadCount = 1;
+        probeConfig.beamWidth = 16;
+        probeConfig.jointBeamWidth = 64;
+        probeConfig.timeLimitMs = std::max<std::int64_t>(
+            1, config.nextDayProbeMs);
+        bool haveProbe = false;
+        std::tuple<int, int, int, int> bestProbe{};
+        std::size_t bestIndex = 0;
+        for (std::size_t i = 0; i < futureCandidates.size(); ++i) {
+            if (deadline - Clock::now() <= std::chrono::milliseconds(500)) break;
+            const auto& candidate = futureCandidates[i];
+            if (brandScore(candidate.state) != currentBrandScore) continue;
+            MatchState tomorrow;
+            tomorrow.day = matchState.day + 1;
+            tomorrow.trafficByPos = matchState.trafficByPos;
+            tomorrow.agents.assign(candidate.state.agents.begin(),
+                candidate.state.agents.begin() + candidate.state.agentCount);
+            int worstBrands = std::numeric_limits<int>::max();
+            int worstUdon = std::numeric_limits<int>::max();
+            for (int scenario = 0; scenario < 2; ++scenario) {
+                if (deadline - Clock::now() <= std::chrono::milliseconds(500)) {
+                    worstBrands = -1;
+                    break;
+                }
+                if (scenario == 1)
+                    tomorrow.trafficByPos.assign(setting.field.cellCount(),
+                        TrafficStatus::Smooth);
+                const auto trial = Brain1::search(setting, tomorrow,
+                    candidate.state.score, probeConfig);
+                if (!trial.success) { worstBrands = -1; break; }
+                worstBrands = std::min(worstBrands,
+                    static_cast<int>(countBits(trial.finalState.dayBrands)));
+                worstUdon = std::min(worstUdon,
+                    trial.finalState.dayUdon);
+            }
+            if (worstBrands < 0) continue;
+            const auto projected = std::make_tuple(
+                static_cast<int>(countBits(candidate.state.score.matchBrands)),
+                worstBrands,
+                candidate.state.score.totalUdon + worstUdon,
+                candidate.state.score.totalUdon);
+            if (!haveProbe || projected > bestProbe) {
+                haveProbe = true;
+                bestProbe = projected;
+                bestIndex = i;
+            }
+        }
+        if (haveProbe) {
+            result.plan = std::move(futureCandidates[bestIndex].plan);
+            result.finalState = futureCandidates[bestIndex].state;
             changed = true;
         }
     }

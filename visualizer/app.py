@@ -122,6 +122,7 @@ class SolverGUI(tk.Tk):
             name: tk.StringVar(value=str(value))
             for name, value in vars(SearchParameters()).items()
         }
+        self.parameter_vars["auto_beam_width"].set("1")
         self.random_setting_vars = {
             name: tk.StringVar(value=str(value))
             for name, value in vars(RandomSettingParameters()).items()
@@ -409,6 +410,7 @@ class SolverGUI(tk.Tk):
         notebook.add(frame, text="探索パラメータ")
         self.parameters_frame = frame
         fields = [
+            ("auto_beam_width", "ビーム幅の自動選択", "1: 盤面・当日のステップ数に応じ約50秒 / 0: 下の手動幅"),
             ("beam_width", "ビーム幅", "各展開で保持する状態数"),
             ("joint_beam_width", "同時行動ビーム幅", "複数台への行動割当の幅"),
             ("threads", "スレッド数", "0: 自動 / 1: 直列"),
@@ -416,7 +418,7 @@ class SolverGUI(tk.Tk):
             ("safety_margin_ms", "締切余裕 (ms)", "探索・種別選択を締切より早く終了"),
             ("max_actions", "各車の行動候補数", "0: 全候補"),
             ("macro_actions", "マクロ行動", "1: 有効 / 0: 無効"),
-            ("adaptive_beam", "ビーム幅自動調整", "1: 有効 / 0: 指定幅を使用"),
+            ("adaptive_beam", "ビーム幅自動調整", "自動選択が0のときだけ使用"),
             ("trial_candidates", "種別選択の試走候補数", "0: 距離評価のみ"),
             ("trial_beam_width", "種別選択の試走ビーム幅", "1以上"),
             ("trial_joint_beam_width", "種別選択の同時行動幅", "1以上"),
@@ -442,8 +444,8 @@ class SolverGUI(tk.Tk):
                     row=row, column=2, sticky=tk.W
                 )
 
-        add_fields(daily, fields[:8])
-        add_fields(selection, fields[8:])
+        add_fields(daily, fields[:9])
+        add_fields(selection, fields[9:])
 
     def _path_row(
         self,

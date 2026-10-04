@@ -103,6 +103,9 @@ class BackendTest(unittest.TestCase):
 
     def test_day_time_limit_ms(self) -> None:
         self.assertEqual(SearchParameters().time_limit_ms, 60000)
+        self.assertIn("--auto-beam-width", SearchParameters(auto_beam_width=1).arguments())
+        with self.assertRaisesRegex(WorkflowError, "auto_beam_width"):
+            SearchParameters(auto_beam_width=2).arguments()
         setting = {"daySeconds": [60, 12.5, 3_000_000]}
         self.assertEqual(day_time_limit_ms(setting, 0), 60000)
         self.assertEqual(day_time_limit_ms(setting, 1), 12500)

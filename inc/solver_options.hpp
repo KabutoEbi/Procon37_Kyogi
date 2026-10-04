@@ -3,6 +3,7 @@
 #include "agent_selector.hpp"
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,6 +18,9 @@ struct SolverOptions {
     AgentSelectorConfig selection;
     bool hasTimeLimit = false;
     bool hasSelectionTimeLimit = false;
+    bool autoBeamWidth = true;
+    bool hasAutoBeamOption = false;
+    bool hasManualBeamWidth = false;
 
 private:
     static std::int64_t parseValue(
@@ -43,15 +47,20 @@ private:
         }
         if ((name == "--macro-actions" || name == "--adaptive-beam" ||
              name == "--exact-brands" || name == "--brand-repair" ||
-             name == "--udon-alns" || name == "--spot-route-lns") &&
+             name == "--udon-alns" || name == "--spot-route-lns" ||
+             name == "--next-day-probe" || name == "--auto-beam-width") &&
             value > 1) {
             throw std::invalid_argument(
                 "expected 0 or 1: " + std::string(name));
         }
 
-        if (name == "--beam-width") beam.beamWidth = value;
-        else if (name == "--joint-beam-width") beam.jointBeamWidth = value;
-        else if (name == "--threads") beam.threadCount = value;
+        if (name == "--beam-width") {
+            beam.beamWidth = value;
+            hasManualBeamWidth = true;
+        } else if (name == "--joint-beam-width") {
+            beam.jointBeamWidth = value;
+            hasManualBeamWidth = true;
+        } else if (name == "--threads") beam.threadCount = value;
         else if (name == "--time-limit-ms") {
             beam.timeLimitMs = value;
             hasTimeLimit = true;
@@ -65,7 +74,11 @@ private:
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
-        else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
+        else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
+        else if (name == "--auto-beam-width") {
+            autoBeamWidth = value != 0;
+            hasAutoBeamOption = true;
+        } else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
         else if (name == "--trial-beam-width") selection.trialBeamWidth = value;
         else if (name == "--trial-joint-beam-width") {
             selection.trialJointBeamWidth = value;
@@ -93,7 +106,80 @@ public:
             }
             options.setOption(name, parseValue(name, argv[i]));
         }
+        if (!options.hasAutoBeamOption && options.hasManualBeamWidth)
+            options.autoBeamWidth = false;
         return options;
+    }
+
+    BeamSearchConfig beamFor(
+        const MatchSetting& setting, const MatchState& state,
+        BeamSearchConfig config) const {
+        // An explicit zero keeps the established unlimited-search contract.
+        if (!autoBeamWidth ||
+            ((hasTimeLimit || config.exactBrands) && config.timeLimitMs == 0))
+            return config;
+
+        // Preserve a hard time bound even for offline states without endsAt.
+        const std::int64_t targetMs = 50000;
+        const std::int64_t cappedLimit = targetMs + config.safetyMarginMs;
+        if (config.timeLimitMs == 0 || config.timeLimitMs > cappedLimit)
+            config.timeLimitMs = cappedLimit;
+        const auto effectiveMs = std::max<std::int64_t>(1,
+            config.timeLimitMs - config.safetyMarginMs);
+
+        const double size = static_cast<double>(std::max(
+            setting.field.width, setting.field.height));
+        double base = 40000.0;
+        double referenceAgents = 4.0;
+        double ceiling = 40000.0;
+        if (size > 16.0 && size <= 24.0) {
+            const double share = (size - 16.0) / 8.0;
+            base = 40000.0 * std::pow(13000.0 / 40000.0, share);
+            referenceAgents = 4.0 + share;
+            ceiling = 30000.0;
+        } else if (size > 24.0 && size <= 32.0) {
+            const double share = (size - 24.0) / 8.0;
+            base = 13000.0 * std::pow(5400.0 / 13000.0, share);
+            referenceAgents = 5.0 + 3.0 * share;
+            ceiling = 12000.0;
+        } else if (size > 32.0) {
+            base = 5400.0 * 32.0 * 32.0 /
+                std::max(1.0, static_cast<double>(setting.field.cellCount()));
+            referenceAgents = 8.0;
+            ceiling = 12000.0;
+        }
+
+        const auto agents = std::max<std::size_t>(1, state.agents.size());
+        const double agentFactor = std::clamp(
+            referenceAgents / static_cast<double>(agents), 0.5, 1.5);
+        const auto day = state.day >= 0 ?
+            static_cast<std::size_t>(state.day) : std::size_t{0};
+        double dayFactor = 1.0;
+        if (day < setting.daySteps.size() && !setting.daySteps.empty() &&
+            setting.daySteps.front() > 0 && setting.daySteps[day] > 0) {
+            const double stepRatio = static_cast<double>(setting.daySteps.front()) /
+                static_cast<double>(setting.daySteps[day]);
+            if (size <= 16.0) {
+                dayFactor = std::pow(stepRatio, 0.75);
+            } else {
+                const double shorterDay = std::max(1.0, stepRatio);
+                dayFactor = std::pow(shorterDay, 1.7);
+                if (shorterDay > 1.0)
+                    dayFactor *= 1.0 + 0.1 * static_cast<double>(
+                        std::min<std::size_t>(day, 3));
+            }
+        }
+        const double timeFactor = effectiveMs >= 40000 ? 1.0 :
+            std::clamp(static_cast<double>(effectiveMs) / targetMs, 0.01, 1.0);
+        const double desired = base * agentFactor * dayFactor * timeFactor;
+        config.beamWidth = static_cast<std::size_t>(std::clamp(
+            std::round(desired), 128.0, ceiling));
+        config.jointBeamWidth = config.beamWidth * 4;
+        config.autoSizedBeam = true;
+        // The size-based adaptive multiplier would apply a second reduction
+        // to these already calibrated widths.
+        config.adaptiveBeamWidth = false;
+        return config;
     }
 
     AgentSelectorConfig selectorFor(const MatchSetting& setting) const {

@@ -28,7 +28,8 @@ def parser() -> argparse.ArgumentParser:
                         help="送信結果不明の場合は同じ日・同じ回答だけを再送")
     result.add_argument("--start-day", type=int)
     result.add_argument("--checkpoint", type=Path)
-    result.add_argument("--time-limit-ms", type=int, default=5000)
+    result.add_argument("--time-limit-ms", type=int, default=50000)
+    result.add_argument("--auto-beam-width", type=int, choices=(0, 1), default=1)
     result.add_argument("--send-reserve-ms", type=int, default=12000)
     result.add_argument("--clock-margin-ms", type=int, default=1000)
     return result
@@ -43,6 +44,7 @@ def main() -> int:
         connection = ConnectionConfig(args.url or "", args.token or "", args.timeout)
         connection.validate()
         parameters = SearchParameters(time_limit_ms=args.time_limit_ms,
+                                      auto_beam_width=args.auto_beam_width,
                                       send_reserve_ms=args.send_reserve_ms,
                                       clock_margin_ms=args.clock_margin_ms)
         parameters.arguments()

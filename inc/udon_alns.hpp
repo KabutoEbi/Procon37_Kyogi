@@ -1,6 +1,6 @@
 #pragma once
 
-#include "brand_repair.hpp"
+#include "spot_route_lns.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,9 +19,10 @@ struct UdonAlnsConfig {
     std::size_t improvementBonusAttempts = 4;
     std::size_t nodesPerAttempt = 800;
     std::size_t maxPatrols = 2;
-    // 中間日も、翌日に引き継ぐ位置・燃料・系列マスクを変えない候補に限り探索する。
-    bool finalDayOnly = true;
+    // 中間日は系列マスクを固定し、終端位置・燃料を翌日到達性で制限する。
+    bool finalDayOnly = false;
     bool preserveIntermediateState = true;
+    bool allowFuturePositionChange = true;
     // 最終日は従来近傍と広い近傍を比較し、公式得点が高い方だけを採る。
     bool expandedPortfolio = true;
 };
@@ -50,12 +51,26 @@ inline UdonAlnsResult improveDayUdon(
     result.finalState = checked.state;
     const bool finalDay = ms.day >= 0 &&
         static_cast<std::size_t>(ms.day + 1) >= s.dayCount();
+    std::vector<DijkstraTable> futureCache(s.field.cellCount());
+    std::vector<bool> futureCached(s.field.cellCount(), false);
+    const auto initialFuture = !finalDay && config.allowFuturePositionChange
+        ? detail::futureRoutePotential(s, ms, result.finalState,
+                                      futureCache, futureCached)
+        : detail::FutureRoutePotential{};
     const auto preservesFuture = [&](const GameState& candidate) {
         if (finalDay || !config.preserveIntermediateState) return true;
         if (candidate.score.matchBrands != result.finalState.score.matchBrands ||
             candidate.dayBrands != result.finalState.dayBrands ||
             candidate.agentCount != result.finalState.agentCount) {
             return false;
+        }
+        if (config.allowFuturePositionChange) {
+            const auto future = detail::futureRoutePotential(
+                s, ms, candidate, futureCache, futureCached);
+            const int extra = candidate.score.totalUdon - result.finalState.score.totalUdon;
+            return future.reachableBrands >= initialFuture.reachableBrands &&
+                future.distanceSum <= initialFuture.distanceSum + 16 + 8 * extra &&
+                future.patrolFuel >= initialFuture.patrolFuel - 20 - 30 * extra;
         }
         for (AgentIndex a = 0; a < candidate.agentCount; ++a) {
             if (candidate.agents[a].pos != result.finalState.agents[a].pos ||

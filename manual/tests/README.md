@@ -12,6 +12,7 @@
 | [`property_test.cpp`](property_test.md) | ランダム問題と時刻付き補給最短路のプロパティテスト |
 | [`sample_maps_test.cpp`](sample_maps_test.md) | `sample_maps/`を使うスモークテスト |
 | [`solver_benchmark.cpp`](solver_benchmark.md) | 複数シード・全日程・交通変化・機能別の得点と速度比較 |
+| [`beam_width_probe.cpp`](beam-width-tuning-2026-10-04.md) | 固定ビーム幅で日次探索が自然完了するまでの時間計測 |
 | [`agent_selection_benchmark.cpp`](agent_selection_benchmark.md) | ランダム生成マップでの種別選択と全日試走の比較 |
 | [`arena_benchmark.cpp`](arena_benchmark.md) | 公開アリーナ問題JSONを使った全日程・混合交通の再現比較 |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
@@ -21,6 +22,7 @@
 | [`visualizer_runtime_test.py`](visualizer_runtime_test.md) | 対応するPython/Tkの選択テスト |
 | [`visualizer_simple_server_test.py`](visualizer_simple_server_test.md) | 同梱簡易サーバーと実ソルバーの結合テスト |
 | [`solver_options_test.cpp`](solver_options_test.md) | 探索引数の反映と不正値拒否 |
+| `spot_route_lns_test.cpp` | スポット単位ビーム、巡回車間の訪問移送・交換、中間日終点変更の合法性と非退行 |
 | `brand_repair_test.cpp` | 役割交換・補給・巻き戻し・固定行動の系列救済テスト。詳細は[系列救済](../inc/brand_repair.md) |
 | `udon_alns_test.cpp` | 系列マスク固定、玉数改善、ランダム問題の非退行・合法性テスト |
 
@@ -62,9 +64,13 @@ make test-python
 
 系列マスクを完全に固定したALNSの玉数改善は[玉数ALNSの検証記録](udon-alns-results-2026-10-04.md)を参照。
 
+16系列・4日64系列を維持したスポット再探索と保存済み対局の比較は[玉数再探索の検証記録](quantity-portfolio-results-2026-10-04.md)を参照。
+
 経路の次善候補、取得履歴の探索多様化、同一地点の共有合流による玉数改善は[経路・探索・合流改善記録](quantity-routing-results-2026-10-04.md)を参照。
 
 ビーム幅を固定した32×32・8台の完走時間と、50秒前後の幅の選定は[50秒探索のビーム幅計測](beam-width-tuning-2026-10-03.md)を参照。
+
+スポット再探索を含む現行コードの24×24・5台および32×32・8台の幅選定は[現行ソルバーの50秒ビーム幅](beam-width-tuning-2026-10-04.md)を参照。
 
 混雑・渋滞下での古い合流先の再計画と、エージェント選択の再評価は[混合交通での再計画・種別選択記録](mixed-traffic-reroute-results-2026-09-30.md)を参照。
 

@@ -48,6 +48,9 @@ def _option_arguments(values: dict[str, int], excluded: tuple[str, ...] = ()) ->
 class SearchParameters:
     beam_width: int = 128
     joint_beam_width: int = 512
+    # Python API callers with explicit widths retain manual behavior.
+    # The GUI enables automatic daily widths by default.
+    auto_beam_width: int = 0
     threads: int = 0
     # GUIでは設定読込時に対象日のdaySecondsで上書きする。
     time_limit_ms: int = 60000
@@ -67,9 +70,10 @@ class SearchParameters:
         for name, value in values.items():
             if type(value) is not int or not 0 <= value <= 2147483647:
                 raise WorkflowError(f"{name}: 0以上の整数を指定してください")
-            if name.endswith("width") and value == 0:
+            if name in ("beam_width", "joint_beam_width",
+                        "trial_beam_width", "trial_joint_beam_width") and value == 0:
                 raise WorkflowError(f"{name}: 1以上を指定してください")
-            if name in ("macro_actions", "adaptive_beam") and value not in (0, 1):
+            if name in ("macro_actions", "adaptive_beam", "auto_beam_width") and value not in (0, 1):
                 raise WorkflowError(f"{name}: 0または1を指定してください")
         return _option_arguments(values, ("send_reserve_ms", "clock_margin_ms"))
 

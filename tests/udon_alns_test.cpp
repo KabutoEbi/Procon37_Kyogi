@@ -92,6 +92,7 @@ void checkIntermediateDayPreservesFutureState() {
     cfg.maxAttempts = 20;
     cfg.nodesPerAttempt = 5000;
     cfg.maxPatrols = 1;
+    cfg.allowFuturePositionChange = false;
     const auto improved = improveDayUdon(s, ms, {}, incumbent, cfg,
         std::chrono::steady_clock::time_point::max());
     assert(improved.finalState.dayUdon > before.state.dayUdon);

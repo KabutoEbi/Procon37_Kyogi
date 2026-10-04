@@ -110,18 +110,20 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
 
     auto config = options.beam;
     if (state.endsAt == 0 && !options.hasTimeLimit && !config.exactBrands) {
-        // sample_maps等のオフライン実行も無制限にしない。
+        // オフライン実行も無制限にしない。自動幅は50秒を目標にする。
         config.timeLimitMs = std::min<std::int64_t>(
-            5000,
+            options.autoBeamWidth ? 50000 : 5000,
             static_cast<std::int64_t>(setting.daySeconds[
                 static_cast<std::size_t>(state.day)]) * 1000);
     }
+    config = options.beamFor(setting, state, config);
 
     std::cout << "parameters beam-width=" << config.beamWidth
               << " joint-beam-width=" << config.jointBeamWidth
               << " threads=" << config.threadCount
               << " time-limit-ms=" << config.timeLimitMs
-              << " safety-margin-ms=" << config.safetyMarginMs << '\n';
+              << " safety-margin-ms=" << config.safetyMarginMs
+              << " auto-beam-width=" << (config.autoSizedBeam ? 1 : 0) << '\n';
 
     const auto result = solveDay(setting, state, score, config);
     if (!result.success) {

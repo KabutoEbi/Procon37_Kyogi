@@ -28,18 +28,70 @@ int main() {
     assert(options.selectorFor(setting).deadlineUnixSeconds == setting.startsAt);
     assert(options.selectorFor(setting).timeLimitMs == 100);
     assert(options.selectorFor(setting).extendTrialsToDeadline);
+    assert(!options.autoBeamWidth);
+    assert(parse({"main"}).autoBeamWidth);
+    assert(parse({"main", "--beam-width", "17", "--auto-beam-width", "1"})
+        .autoBeamWidth);
+    assert(!parse({"main", "--auto-beam-width", "0"}).autoBeamWidth);
+    setting.field.width = 24;
+    setting.field.height = 24;
+    setting.daySteps = {110, 142, 73, 82};
+    benzen::MatchState state;
+    state.agents.resize(5);
+    auto automatic = parse({"main"});
+    auto autoConfig = automatic.beam;
+    autoConfig.timeLimitMs = 50000;
+    autoConfig.safetyMarginMs = 0;
+    const auto first = automatic.beamFor(setting, state, autoConfig);
+    assert(first.beamWidth == 13000 && first.jointBeamWidth == 52000);
+    assert(!first.adaptiveBeamWidth && first.timeLimitMs == 50000);
+    state.day = 1;
+    const auto second = automatic.beamFor(setting, state, autoConfig);
+    state.day = 2;
+    const auto third = automatic.beamFor(setting, state, autoConfig);
+    assert(second.beamWidth == first.beamWidth);
+    assert(third.beamWidth > second.beamWidth);
+    autoConfig.timeLimitMs = 1000;
+    const auto shortRun = automatic.beamFor(setting, state, autoConfig);
+    assert(shortRun.beamWidth < third.beamWidth);
+    autoConfig.timeLimitMs = 90000;
+    assert(automatic.beamFor(setting, state, autoConfig).timeLimitMs == 50000);
+    assert(options.beamFor(setting, state, options.beam).beamWidth == 17);
+    const auto unlimited = parse({"main", "--time-limit-ms", "0"});
+    assert(unlimited.beamFor(setting, state, unlimited.beam).timeLimitMs == 0);
+    assert(unlimited.beamFor(setting, state, unlimited.beam).beamWidth == 128);
+    const auto exact = parse({"main", "--exact-brands", "1"});
+    assert(exact.beamFor(setting, state, exact.beam).timeLimitMs == 0);
+    setting.field.width = 16;
+    setting.field.height = 16;
+    setting.daySteps = {32, 48};
+    state.day = 0;
+    state.agents.resize(4);
+    assert(automatic.beamFor(setting, state, autoConfig).beamWidth == 40000);
+    state.day = 1;
+    assert(automatic.beamFor(setting, state, autoConfig).beamWidth < 40000);
+    setting.field.width = 32;
+    setting.field.height = 32;
+    setting.daySteps = {64};
+    state.day = 0;
+    state.agents.resize(8);
+    assert(automatic.beamFor(setting, state, autoConfig).beamWidth == 5400);
     assert(parse({"main", "--exact-brands", "1"}).beam.exactBrands);
     assert(!parse({"main", "--brand-repair", "0"}).beam.useBrandRepair);
     assert(parse({"main", "--brand-repair", "1"}).beam.useBrandRepair);
     assert(!parse({"main", "--udon-alns", "0"}).beam.useUdonAlns);
     assert(parse({"main", "--udon-alns", "1"}).beam.useUdonAlns);
     assert(!parse({"main", "--spot-route-lns", "0"}).beam.useSpotRouteLns);
+    assert(!parse({"main", "--next-day-probe", "0"}).beam.compareNextDayPlans);
+    assert(parse({"main", "--next-day-probe", "1"}).beam.compareNextDayPlans);
     for (const auto& invalid : std::vector<std::vector<std::string>>{
         {"main", "--beam-width", "0"}, {"main", "--threads", "-1"},
         {"main", "--time-limit-ms", "3ms"}, {"main", "--unknown", "1"},
         {"main", "--beam-width"}, {"main", "--macro-actions", "2"},
         {"main", "--exact-brands", "2"}, {"main", "--brand-repair", "2"},
-        {"main", "--udon-alns", "2"}, {"main", "--spot-route-lns", "2"}}) {
+        {"main", "--udon-alns", "2"}, {"main", "--spot-route-lns", "2"},
+        {"main", "--next-day-probe", "2"},
+        {"main", "--auto-beam-width", "2"}}) {
         bool rejected = false;
         try { (void)parse(invalid); }
         catch (const std::invalid_argument&) { rejected = true; }
