@@ -80,6 +80,44 @@ void checkJointRouteSearch() {
     assert(portfolioReplay.valid && portfolioReplay.state == portfolio.finalState);
 }
 
+void checkPortfolioPrefersNewMatchBrand() {
+    MatchSetting setting;
+    setting.field.width = 4;
+    setting.field.height = 1;
+    setting.field.cells.assign(4, {CellType::Plain, -1});
+    setting.field.spots = {
+        {0, 1, 1, -1},
+        {1, 3, 1, -1},
+    };
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0};
+    setting.daySteps = {8};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 4;
+
+    MatchState state;
+    state.trafficByPos.assign(4, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 4}};
+    ScoreState previous;
+    previous.matchBrands = brandBit(0);
+
+    SpotRouteLnsConfig config;
+    config.spotPortfolioBeamWidth = 1;
+    config.spotPortfolioCandidatesPerDepth = 1;
+    config.spotPortfolioHardnessWeight = 0;
+    const DailyPlan incumbent{{-8}};
+    const auto result = searchSpotPortfolio(
+        setting, state, previous, incumbent, config,
+        std::chrono::steady_clock::time_point::max());
+
+    assert(result.improvements == 1);
+    assert((result.finalState.score.matchBrands & brandBit(1)) != 0);
+    assert(countBits(result.finalState.score.matchBrands) == 2);
+    assert(result.finalState.score.totalUdon == 2);
+    const auto replay = simulateDay(setting, state, result.plan, previous);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
 void checkIntermediatePositionChange() {
     MatchSetting setting;
     setting.field.width = 4;
@@ -270,6 +308,36 @@ void checkRouteColumnsLargePool() {
     assert(replay.valid && replay.state == result.finalState);
 }
 
+void checkRouteColumnsKeepSearchSlotBesideIncumbent() {
+    MatchSetting setting;
+    setting.field.width = 4;
+    setting.field.height = 1;
+    setting.field.cells.assign(4, {CellType::Plain, -1});
+    setting.field.spots = {{0, 1, 1, -1}, {1, 3, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0};
+    setting.daySteps = {8};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 8;
+
+    MatchState state;
+    state.trafficByPos.assign(4, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 8}};
+    const DailyPlan incumbent{{-8}};
+    RouteColumnConfig config;
+    config.columnsPerAgent = 1;
+    config.supplyRendezvous = false;
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, config,
+        std::chrono::steady_clock::time_point::max());
+
+    assert(result.improvements > 0);
+    assert(countBits(result.finalState.dayBrands) == 2);
+    assert(result.finalState.dayUdon == 2);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
 void checkRouteColumnsSuffixInsertionWithoutTerminalWait() {
     MatchSetting setting;
     setting.field.width = 3;
@@ -305,11 +373,13 @@ int main() {
     checkFinalDayInsertion();
     checkIntermediateFuelDominance();
     checkJointRouteSearch();
+    checkPortfolioPrefersNewMatchBrand();
     checkIntermediatePositionChange();
     checkRouteColumnsWithRefuel();
     checkRouteColumnsRespectStock();
     checkRouteColumnsCombinePatrols();
     checkRouteColumnsSupplyStation();
     checkRouteColumnsLargePool();
+    checkRouteColumnsKeepSearchSlotBesideIncumbent();
     checkRouteColumnsSuffixInsertionWithoutTerminalWait();
 }

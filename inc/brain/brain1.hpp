@@ -3360,9 +3360,13 @@ inline BeamSearchResult brain1(
                                   : Clock::time_point::max();
     auto beamConfig = config;
     if (limited && budget > 1) {
-        // Reserve time for independent route columns and the legacy refiners.
-        beamConfig.timeLimitMs = std::max<std::int64_t>(1,
-            budget - budget / (config.autoSizedBeam ? 20 : 5));
+        // In exact mode the beam is only an incumbent generator. Keep most of
+        // the deadline for the exhaustive proof; otherwise exactBrands could
+        // receive only 5--20% of the requested budget.
+        beamConfig.timeLimitMs = config.exactBrands
+            ? std::max<std::int64_t>(1, budget / 5)
+            : std::max<std::int64_t>(1,
+                  budget - budget / (config.autoSizedBeam ? 20 : 5));
         beamConfig.safetyMarginMs = 0;
         beamConfig.useStateDeadline = false;
     }

@@ -301,12 +301,19 @@ inline SpotRouteLnsResult improveSpotRoutes(
                     }
                     if (!inserted) break;
                     sequence = std::move(nextSequence);
-                    bestPlan = std::move(nextPlan);
-                    bestState = nextState;
-                    haveCandidate = true;
+                    // Keep the strongest completed plan seen at any repair
+                    // depth. A later insertion may be useful as a stepping
+                    // stone yet lose an incidental pickup; it must not erase
+                    // an earlier improvement.
+                    if (preservesFuture(nextState) &&
+                        score(nextState) > score(incumbentState) &&
+                        (!haveCandidate || quality(nextState) > quality(bestState))) {
+                        bestPlan = std::move(nextPlan);
+                        bestState = nextState;
+                        haveCandidate = true;
+                    }
                 }
-                if (haveCandidate && preservesFuture(bestState) &&
-                    score(bestState) > score(incumbentState) &&
+                if (haveCandidate &&
                     quality(bestState) > quality(result.finalState)) {
                     result.plan = std::move(bestPlan);
                     result.finalState = bestState;
@@ -372,16 +379,21 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
         return true;
     };
 
+    // Keep the best submitted plan separate from the working plan. Equal-score
+    // route changes can move to another part of the search space, as in the
+    // record-to-record/LNS approach, without lowering the returned score.
+    DailyPlan workingPlan = result.plan;
+    GameState workingState = result.finalState;
     for (std::size_t round = 0; round < config.maxTeamRounds && !stopped(); ++round) {
         const auto trace = detail::repairTrace(
-            setting, matchState, previous, result.plan, stopped);
+            setting, matchState, previous, workingPlan, stopped);
         if (trace.checkpoints.empty()) break;
         const auto& start = trace.checkpoints.front();
         std::vector<std::vector<std::size_t>> routes(matchState.agents.size());
         for (const AgentIndex a : patrols)
-            routes[a] = detail::acquiredSpotSequence(trace, result.finalState, a, 0);
-        const DailyPlan basePlan = result.plan;
-        const GameState baseState = result.finalState;
+            routes[a] = detail::acquiredSpotSequence(trace, workingState, a, 0);
+        const DailyPlan basePlan = workingPlan;
+        const GameState baseState = workingState;
         DailyPlan roundPlan;
         GameState roundState{};
         bool found = false;
@@ -401,11 +413,12 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
             };
             if (!rebuild(first, firstVisits) ||
                 (second != first && !rebuild(second, secondVisits))) return;
+            if (trial == basePlan) return;
             ++roundAttempts;
             ++result.attempts;
             ++result.teamAttempts;
             const auto replay = simulateDay(setting, matchState, trial, previous);
-            if (!replay.valid || score(replay.state) <= score(baseState) ||
+            if (!replay.valid || score(replay.state) < score(baseState) ||
                 (found && score(replay.state) <= score(roundState))) return;
             if (!preservesFuture(replay.state)) return;
             found = true;
@@ -498,9 +511,13 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
             }
         }
         if (!found) break;
-        result.plan = std::move(roundPlan);
-        result.finalState = roundState;
-        ++result.improvements;
+        workingPlan = std::move(roundPlan);
+        workingState = roundState;
+        if (score(workingState) > score(result.finalState)) {
+            result.plan = workingPlan;
+            result.finalState = workingState;
+            ++result.improvements;
+        }
     }
     return result;
 }
@@ -583,7 +600,12 @@ inline SpotRouteLnsResult searchSpotPortfolio(
         start.stock[i] = setting.field.spots[i].maxStock;
     std::vector<Node> beam{start};
     const auto rank = [&](const Node& node) {
-        return std::make_tuple(countBits(node.brands), node.udon,
+        // Keep the official score hierarchy in the approximate portfolio too.
+        // Otherwise a narrow beam can discard a never-before-seen brand in
+        // favour of a nearer brand that is already present in the match score.
+        return std::make_tuple(
+            countBits(node.brands & ~previous.matchBrands),
+            countBits(node.brands), node.udon,
             config.spotPortfolioHardnessWeight * node.hardness -
                 node.totalTravel);
     };

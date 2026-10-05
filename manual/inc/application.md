@@ -44,6 +44,8 @@ int main(int argc, char* argv[]) {
 
 `create()`と`createMatchSetting()`に共通する、引数解析、問題生成、保存失敗時の報告、生成結果の表示は`application_detail::createProblem()`が担当する。両APIの違いは、完全な生成問題を保存するか、公式`GET /setting`形式だけを保存するかである。これらは実装詳細用名前空間の関数であり、通常の呼び出し側は公開APIだけを使用する。
 
+公開の生成入口（`create()`、`createMatchSetting()`、`runLocalSolver()`）は[`sample_maps/README.md`](../../sample_maps/README.md)の3区分に適合しない幅・高さ・台数・スポット数・系列数を拒否する。行動回答時間も60秒に固定する。地形生成などの低レベル`ProblemCreator` APIは単体テスト用に任意の小盤面を扱える。
+
 現在の`runLocalSolver()`は通信せず、ローカル生成問題だけを対象にする。
 
 リポジトリ直下の`main.cpp`は`inc/application.hpp`を相対指定しているため、追加のインクルードパスなしでも実行できる。

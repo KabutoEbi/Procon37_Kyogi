@@ -366,13 +366,13 @@ class SolverGUI(tk.Tk):
         )
 
     def _build_random_setting_panel(self, parent: ttk.LabelFrame) -> None:
-        frame = ttk.LabelFrame(parent, text="ランダム設定", padding=6)
+        frame = ttk.LabelFrame(parent, text="ランダム設定（本選3区分のみ）", padding=6)
         self.random_setting_frame = frame
         frame.grid(row=4, column=0, columnspan=6, sticky=tk.EW, pady=(8, 0))
         fields = [
             ("width", "幅"), ("height", "高さ"), ("agents", "エージェント"),
             ("spots", "スポット"), ("brands", "系列"), ("days", "日数"),
-            ("seconds", "1日秒数"), ("teams", "チーム"), ("seed", "seed"),
+            ("seconds", "1日秒数（60固定）"), ("teams", "チーム"), ("seed", "seed"),
         ]
         for index, (key, label) in enumerate(fields):
             row, group = divmod(index, 3)
@@ -395,13 +395,18 @@ class SolverGUI(tk.Tk):
             offvalue="0",
         )
         self.random_traffic_check.pack(side=tk.LEFT, padx=6)
+        ttk.Label(
+            frame,
+            text="16×16: 4台・16スポット・10〜14系列 / 24×24: 5台・24スポット・14〜20系列 / 32×32: 7台・32スポット・20〜28系列",
+            wraplength=780,
+        ).grid(row=4, column=0, columnspan=6, sticky=tk.W, padx=6, pady=2)
         generate = ttk.Button(
             frame,
             text="ランダム生成して探索",
             command=self._generate_and_solve_local,
             style="Primary.TButton",
         )
-        generate.grid(row=4, column=0, columnspan=6, sticky=tk.EW, padx=6, pady=(6, 2))
+        generate.grid(row=5, column=0, columnspan=6, sticky=tk.EW, padx=6, pady=(6, 2))
         self.random_generate_button = generate
         self._action_buttons.append(generate)
 

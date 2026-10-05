@@ -5,10 +5,12 @@
 #include "search_state.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <functional>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -26,6 +28,27 @@ struct BrandSearchResult {
 };
 
 using BrandDistances = std::vector<std::vector<std::int32_t>>;
+
+// Brand maximization does not depend on the number of bowls already collected.
+// Once a brand has been collected today, stock/acquisition differences at every
+// spot of that brand cannot affect either component of the brand objective.
+// Erasing those differences from the transposition key is exact (not a
+// relaxation) and makes the exhaustive search substantially smaller.
+inline GameState canonicalBrandSearchState(
+    GameState state, const MatchSetting& setting, bool ignoreFuel) {
+    state = canonicalSearchState(state, ignoreFuel);
+    state.dayUdon = 0;
+    state.score.totalUdon = 0;
+    state.score.sumOfDailyBrandCounts = 0;
+    for (std::size_t s = 0; s < state.spotCount; ++s) {
+        const auto bit = brandBit(setting.field.spots[s].brandIndex);
+        if ((state.dayBrands & bit) == 0) continue;
+        state.remainingStocks[s] = 0;
+        for (AgentIndex a = 0; a < state.agentCount; ++a)
+            state.acquiredSpots[a] &= ~spotBit(s);
+    }
+    return state;
+}
 
 // A local search fixes all other agents to the incumbent's action timeline.
 // Prefix actions include already reserved moves, even if they finish after cut.
@@ -161,6 +184,9 @@ inline BrandSearchResult maximizeDayBrands(
 
     DailyPlan plan = neighborhood ? neighborhood->prefix : DailyPlan(initial.agentCount);
     std::unordered_set<GameState, GameStateHash, GameStateEqual> visited;
+    using FuelVector = std::array<std::int32_t, kMaxAgents>;
+    std::unordered_map<GameState, std::vector<FuelVector>,
+                       GameStateHash, GameStateEqual> brandFrontiers;
     bool reachedUpper = false;
     std::function<void(const GameState&)> visit;
     std::function<void(GameState, AgentIndex)> assign;
@@ -256,7 +282,32 @@ inline BrandSearchResult maximizeDayBrands(
             result.interrupted = true;
             return;
         }
-        if (!visited.insert(canonicalSearchState(state)).second) return;
+        if (maximizeUdon) {
+            if (!visited.insert(canonicalSearchState(state)).second) return;
+        } else {
+            auto key = canonicalBrandSearchState(state, setting, true);
+            FuelVector fuel{};
+            for (AgentIndex a = 0; a < state.agentCount; ++a)
+                if (state.agents[a].isPatrol()) fuel[a] = state.agents[a].fuel;
+            auto& frontier = brandFrontiers[key];
+            const auto dominates = [&](const FuelVector& lhs,
+                                       const FuelVector& rhs) {
+                for (AgentIndex a = 0; a < state.agentCount; ++a)
+                    if (state.agents[a].isPatrol() && lhs[a] < rhs[a])
+                        return false;
+                return true;
+            };
+            if (std::any_of(frontier.begin(), frontier.end(),
+                            [&](const FuelVector& old) {
+                                return dominates(old, fuel);
+                            })) return;
+            frontier.erase(std::remove_if(frontier.begin(), frontier.end(),
+                               [&](const FuelVector& old) {
+                                   return dominates(fuel, old);
+                               }),
+                           frontier.end());
+            frontier.push_back(fuel);
+        }
         ++result.expanded;
         const auto possibleCompletion = neighborhood ? std::make_tuple(
             countBits(state.score.matchBrands | neighborhood->fixedBrands),

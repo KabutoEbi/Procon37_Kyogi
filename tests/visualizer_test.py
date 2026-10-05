@@ -83,17 +83,30 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(
             (defaults.width, defaults.height, defaults.agents,
              defaults.spots, defaults.brands, defaults.days),
-            (32, 32, 8, 32, 20, 10),
+            (32, 32, 7, 32, 28, 10),
         )
-        parameters = RandomSettingParameters(
-            width=8, height=12, agents=3, spots=8, brands=5,
-            days=4, seconds=30, teams=2, seed=99,
-        )
-        self.assertEqual(parameters.arguments()[-2:], ["--seed", "99"])
+        for size, agents, low, high in ((16, 4, 10, 14),
+                                        (24, 5, 14, 20),
+                                        (32, 7, 20, 28)):
+            for brands in (low, high):
+                parameters = RandomSettingParameters(
+                    width=size, height=size, agents=agents, spots=size,
+                    brands=brands, days=4, teams=2, seed=99,
+                )
+                self.assertEqual(parameters.arguments()[-2:], ["--seed", "99"])
+            with self.assertRaisesRegex(WorkflowError, "brands"):
+                RandomSettingParameters(
+                    width=size, height=size, agents=agents, spots=size,
+                    brands=low - 1,
+                ).arguments()
+        with self.assertRaisesRegex(WorkflowError, "width/height"):
+            RandomSettingParameters(width=16, height=24).arguments()
+        with self.assertRaisesRegex(WorkflowError, "agents"):
+            RandomSettingParameters(agents=8).arguments()
         with self.assertRaisesRegex(WorkflowError, "spots"):
-            RandomSettingParameters(agents=5, spots=4).arguments()
-        with self.assertRaisesRegex(WorkflowError, "brands"):
-            RandomSettingParameters(spots=8, brands=9).arguments()
+            RandomSettingParameters(spots=24).arguments()
+        with self.assertRaisesRegex(WorkflowError, "seconds"):
+            RandomSettingParameters(seconds=59).arguments()
         with self.assertRaisesRegex(WorkflowError, "include_congestion"):
             RandomSettingParameters(include_congestion=2).arguments()
         self.assertNotIn(
@@ -446,6 +459,41 @@ result
                 timer.cancel()
 
     @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
+    def test_generator_rejects_non_competition_maps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "invalid.json"
+            solver = os.environ["PROCON_TEST_SOLVER"]
+            for size, agents, brands in ((16, 4, 10), (24, 5, 14),
+                                         (32, 7, 28)):
+                result = subprocess.run(
+                    (solver, "generate", str(output),
+                     "--width", str(size), "--height", str(size),
+                     "--agents", str(agents), "--spots", str(size),
+                     "--brands", str(brands)),
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                setting = read_json(output)
+                self.assertEqual(len(setting["agents"]), agents)
+                self.assertEqual(len(setting["spots"]), size)
+                self.assertEqual(len({spot["brand"] for spot in setting["spots"]}), brands)
+                output.unlink()
+            for options in (
+                ("--width", "8", "--height", "8"),
+                ("--width", "24", "--height", "24"),
+                ("--agents", "8"),
+                ("--spots", "24"),
+                ("--brands", "29"),
+                ("--seconds", "59"),
+            ):
+                result = subprocess.run(
+                    (solver, "generate", str(output), *options),
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0, options)
+                self.assertFalse(output.exists(), options)
+
+    @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
     def test_real_random_setting_generation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
@@ -458,15 +506,17 @@ result
             workflow.generate_random_setting(
                 output,
                 RandomSettingParameters(
-                    width=8, height=9, agents=3, spots=8, brands=5,
-                    days=4, seconds=30, teams=3, seed=123,
+                    width=16, height=16, agents=4, spots=16, brands=10,
+                    days=4, seconds=60, teams=3, seed=123,
                 ),
             )
             setting = read_json(output)
-            self.assertEqual((setting["map"]["width"], setting["map"]["height"]), (8, 9))
-            self.assertEqual(len(setting["agents"]), 3)
-            self.assertEqual(len(setting["spots"]), 8)
+            self.assertEqual((setting["map"]["width"], setting["map"]["height"]), (16, 16))
+            self.assertEqual(len(setting["agents"]), 4)
+            self.assertEqual(len(setting["spots"]), 16)
+            self.assertEqual(len({spot["brand"] for spot in setting["spots"]}), 10)
             self.assertEqual(len(setting["daySteps"]), 4)
+            self.assertEqual(setting["daySeconds"], [60] * 4)
             self.assertEqual(setting["players"], 3)
             workflow.parameters = SearchParameters(
                 beam_width=8, joint_beam_width=32, threads=1,
@@ -474,8 +524,8 @@ result
             )
             for include_congestion in (0, 1):
                 parameters = RandomSettingParameters(
-                    width=8, height=9, agents=3, spots=8, brands=5,
-                    days=4, seconds=30, teams=3, seed=123,
+                    width=16, height=16, agents=4, spots=16, brands=10,
+                    days=4, seconds=60, teams=3, seed=123,
                     include_congestion=include_congestion,
                 )
                 workflow.generate_random_setting(output, parameters)
@@ -485,7 +535,7 @@ result
                 allowed = {0, 1, 2} if include_congestion else {0}
                 self.assertEqual({t["status"] for t in traffic}, allowed)
                 self.assertEqual({t["pos"] for t in traffic}, {
-                    y * 8 + x for y, row in enumerate(generated["map"]["cells"])
+                    y * 16 + x for y, row in enumerate(generated["map"]["cells"])
                     for x, cell in enumerate(row) if cell == 1
                 })
                 workflow.generate_random_setting(output, parameters)

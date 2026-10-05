@@ -380,10 +380,11 @@ inline RouteColumnResult searchRouteColumns(
                         next.push_back(std::move(child));
                     }
                 }
-                std::sort(next.begin(), next.end(), [](const Label& a, const Label& b) {
-                    const auto rank = [](const Label& x) {
-                        return std::make_tuple(countBits(x.brands), x.count,
-                                               -x.time);
+                std::sort(next.begin(), next.end(), [&](const Label& a, const Label& b) {
+                    const auto rank = [&](const Label& x) {
+                        return std::make_tuple(
+                            countBits(x.brands & ~previous.matchBrands),
+                            countBits(x.brands), x.count, -x.time);
                     };
                     return rank(a) > rank(b);
                 });
@@ -391,11 +392,15 @@ inline RouteColumnResult searchRouteColumns(
                     const std::size_t brandQuota = std::max<std::size_t>(
                         1, config.labelWidth / 2);
                     std::sort(next.begin() + brandQuota, next.end(),
-                        [](const Label& a, const Label& b) {
-                            return std::make_tuple(-a.time, a.count,
-                                                   countBits(a.brands)) >
-                                   std::make_tuple(-b.time, b.count,
-                                                   countBits(b.brands));
+                        [&](const Label& a, const Label& b) {
+                            return std::make_tuple(
+                                       -a.time,
+                                       countBits(a.brands & ~previous.matchBrands),
+                                       countBits(a.brands), a.count) >
+                                   std::make_tuple(
+                                       -b.time,
+                                       countBits(b.brands & ~previous.matchBrands),
+                                       countBits(b.brands), b.count);
                         });
                 }
                 if (next.size() > config.labelWidth) next.resize(config.labelWidth);
@@ -418,9 +423,13 @@ inline RouteColumnResult searchRouteColumns(
             const bool hasIncumbent = incumbentIt != pool.end();
             detail::RouteColumn incumbentColumn;
             if (hasIncumbent) incumbentColumn = *incumbentIt;
-            std::sort(pool.begin(), pool.end(), [](const auto& a, const auto& b) {
-                return std::make_tuple(countBits(a.brands), a.udon, a.fuel) >
-                       std::make_tuple(countBits(b.brands), b.udon, b.fuel);
+            std::sort(pool.begin(), pool.end(), [&](const auto& a, const auto& b) {
+                return std::make_tuple(
+                           countBits(a.brands & ~previous.matchBrands),
+                           countBits(a.brands), a.udon, a.fuel) >
+                       std::make_tuple(
+                           countBits(b.brands & ~previous.matchBrands),
+                           countBits(b.brands), b.udon, b.fuel);
             });
             if (pool.size() > config.columnsPerAgent) {
                 std::vector<detail::RouteColumn> selected;
@@ -453,9 +462,15 @@ inline RouteColumnResult searchRouteColumns(
                     take(column);
                     if (selected.size() >= quota) break;
                 }
-                std::sort(pool.begin(), pool.end(), [](const auto& a, const auto& b) {
-                    return std::make_tuple(a.udon, a.fuel, countBits(a.brands)) >
-                           std::make_tuple(b.udon, b.fuel, countBits(b.brands));
+                std::sort(pool.begin(), pool.end(), [&](const auto& a, const auto& b) {
+                    return std::make_tuple(
+                               a.udon, a.fuel,
+                               countBits(a.brands & ~previous.matchBrands),
+                               countBits(a.brands)) >
+                           std::make_tuple(
+                               b.udon, b.fuel,
+                               countBits(b.brands & ~previous.matchBrands),
+                               countBits(b.brands));
                 });
                 for (auto& column : pool) {
                     if (selected.size() >= quota * 2) break;
@@ -468,6 +483,8 @@ inline RouteColumnResult searchRouteColumns(
                             otherUses[spot] < setting.field.spots[spot].maxStock)
                             ++uncovered;
                     return std::make_tuple(
+                        countBits(column.brands &
+                                  ~(previous.matchBrands | otherBrands)),
                         countBits(column.brands & ~otherBrands), uncovered,
                         column.udon, column.fuel);
                 };
@@ -484,7 +501,12 @@ inline RouteColumnResult searchRouteColumns(
                 std::none_of(pool.begin(), pool.end(),
                     [&](const detail::RouteColumn& col) {
                         return col.plan == incumbent[agent];
-                    })) pool.back() = std::move(incumbentColumn);
+                    })) {
+                // The incumbent is a safety column, not part of the search
+                // quota. Replacing the last selected route would remove the
+                // only improvement when columnsPerAgent is small.
+                pool.push_back(std::move(incumbentColumn));
+            }
             if (pool.empty()) { complete = false; break; }
         }
         if (!complete || Clock::now() >= scheduleDeadline) continue;
@@ -550,8 +572,12 @@ inline RouteColumnResult searchRouteColumns(
             std::sort(choices.begin(), choices.end(), [&](const auto* lhs,
                                                            const auto* rhs) {
                 return std::make_tuple(
+                    countBits(lhs->brands &
+                              ~(previous.matchBrands | brands)),
                     countBits(lhs->brands & ~brands), lhs->udon, lhs->fuel) >
                        std::make_tuple(
+                    countBits(rhs->brands &
+                              ~(previous.matchBrands | brands)),
                     countBits(rhs->brands & ~brands), rhs->udon, rhs->fuel);
             });
             for (const auto* choice : choices) {

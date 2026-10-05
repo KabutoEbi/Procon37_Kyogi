@@ -82,9 +82,9 @@ class SearchParameters:
 class RandomSettingParameters:
     width: int = 32
     height: int = 32
-    agents: int = 8
+    agents: int = 7
     spots: int = 32
-    brands: int = 20
+    brands: int = 28
     days: int = 10
     seconds: int = 60
     teams: int = 2
@@ -94,9 +94,7 @@ class RandomSettingParameters:
     def arguments(self) -> list[str]:
         values = vars(self)
         limits = {
-            "width": (8, 32), "height": (8, 32),
-            "agents": (3, 8), "days": (4, 10),
-            "seconds": (1, 2147483647), "teams": (1, 2147483647),
+            "days": (4, 10), "teams": (1, 2147483647),
             "seed": (0, 18446744073709551615),
             "include_congestion": (0, 1),
         }
@@ -104,13 +102,22 @@ class RandomSettingParameters:
             value = values[name]
             if type(value) is not int or not lower <= value <= upper:
                 raise WorkflowError(f"{name}: {lower}〜{upper}で指定してください")
-        maximum_spots = max(self.width, self.height)
-        if type(self.spots) is not int or not self.agents <= self.spots <= maximum_spots:
+        tiers = {16: (4, 16, 10, 14), 24: (5, 24, 14, 20),
+                 32: (7, 32, 20, 28)}
+        if type(self.width) is not int or self.width not in tiers or \
+                type(self.height) is not int or self.height != self.width:
+            raise WorkflowError("width/height: 16×16、24×24、32×32のみ指定できます")
+        agents, spots, minimum_brands, maximum_brands = tiers[self.width]
+        if type(self.agents) is not int or self.agents != agents:
+            raise WorkflowError(f"agents: {self.width}×{self.width}は{agents}台です")
+        if type(self.spots) is not int or self.spots != spots:
+            raise WorkflowError(f"spots: {self.width}×{self.width}は{spots}個です")
+        if type(self.brands) is not int or not minimum_brands <= self.brands <= maximum_brands:
             raise WorkflowError(
-                f"spots: agents以上、マップの長辺{maximum_spots}以下で指定してください"
+                f"brands: {self.width}×{self.width}は{minimum_brands}〜{maximum_brands}系列です"
             )
-        if type(self.brands) is not int or not 1 <= self.brands <= self.spots:
-            raise WorkflowError("brands: 1以上spots以下で指定してください")
+        if type(self.seconds) is not int or self.seconds != 60:
+            raise WorkflowError("seconds: 行動回答時間は60秒です")
         return _option_arguments(values, ("include_congestion",))
 
 

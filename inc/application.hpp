@@ -25,6 +25,25 @@ struct ApplicationConfig {
 
 namespace application_detail {
 
+inline void validateCompetitionMap(const CreateConfig& config) {
+    const bool roundOne = config.width == 16 && config.height == 16 &&
+        config.agentCount == 4 && config.spotCount == 16 &&
+        config.brandCount >= 10 && config.brandCount <= 14;
+    const bool semifinal = config.width == 24 && config.height == 24 &&
+        config.agentCount == 5 && config.spotCount == 24 &&
+        config.brandCount >= 14 && config.brandCount <= 20;
+    const bool final = config.width == 32 && config.height == 32 &&
+        config.agentCount == 7 && config.spotCount == 32 &&
+        config.brandCount >= 20 && config.brandCount <= 28;
+    if ((!roundOne && !semifinal && !final) || config.daySeconds != 60) {
+        throw std::invalid_argument(
+            "map must be 16x16/4 agents/16 spots/10..14 brands, "
+            "24x24/5 agents/24 spots/14..20 brands, or "
+            "32x32/7 agents/32 spots/20..28 brands; "
+            "answer seconds per day must be 60");
+    }
+}
+
 template <class Integer>
 Integer parseInteger(std::string_view text, std::string_view name) {
     Integer val{};
@@ -139,6 +158,7 @@ int createProblem(
     const ApplicationConfig& defaults,
     Writer&& write) {
     const ApplicationConfig options = parseOptions(argc, argv, true, defaults);
+    validateCompetitionMap(options.createConfig);
     const GeneratedProblem problem = ProblemCreator::generate(options.createConfig);
     if (!write(problem, options.outputPath)) {
         std::cerr << "failed to write: " << options.outputPath << '\n';
@@ -156,13 +176,13 @@ inline void printUsage(std::ostream& output, const char* program) {
         << "  " << program << " create [output.json] [options]\n"
         << "  " << program << " solve [options]\n\n"
         << "Problem options:\n"
-        << "  --width N              map width (8..32)\n"
-        << "  --height N             map height (8..32)\n"
-        << "  --agents N             agents per team (3..8)\n"
-        << "  --spots N              number of spots\n"
-        << "  --brands N             number of brands\n"
+        << "  --width N              16, 24 or 32 (square map only)\n"
+        << "  --height N             same as width\n"
+        << "  --agents N             4, 5 or 7 for the respective size\n"
+        << "  --spots N              16, 24 or 32 for the respective size\n"
+        << "  --brands N             10..14, 14..20 or 20..28\n"
         << "  --days N               number of days (4..10)\n"
-        << "  --seconds N            answer seconds per day\n"
+        << "  --seconds N            answer seconds per day (60 only)\n"
         << "  --teams N              number of teams\n"
         << "  --seed N               deterministic random seed\n\n"
         << "Solve options:\n"
@@ -394,6 +414,7 @@ inline int runLocalSolver(
     const ApplicationConfig& defaults = {}) {
     const ApplicationConfig options = application_detail::parseOptions(
         argc, argv, false, defaults);
+    application_detail::validateCompetitionMap(options.createConfig);
     const GeneratedProblem problem =
         ProblemCreator::generate(options.createConfig);
     MatchState state;

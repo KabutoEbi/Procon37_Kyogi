@@ -39,7 +39,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 
 `day_time_limit_ms()`は対象日の`daySeconds`をミリ秒へ変換し、GUIが設定読込時とday変更時に探索時間上限の初期値として使用する。値は実行前に短く変更でき、バックエンドでも対象日の試合時間を超えないよう制限する。
 
-`RandomSettingParameters`の既定値は32×32、8台、32スポット、20系列、10日である。`SearchParameters.time_limit_ms`の設定未読込時の既定値は60000msだが、GUIでは有効な設定を読み込むと対象日の`daySeconds`へ置き換える。
+`RandomSettingParameters`の既定値は32×32、7台、32スポット、28系列、10日である。生成できる寸法・台数・スポット数・系列数の組合せは[`sample_maps/README.md`](../../sample_maps/README.md)の3区分のみで、`seconds`は60固定。条件外はソルバー起動前に`WorkflowError`で拒否し、C++の生成入口でも同じ条件を検査する。`SearchParameters.time_limit_ms`の設定未読込時の既定値は60000msだが、GUIでは有効な設定を読み込むと対象日の`daySeconds`へ置き換える。
 
 ## 同じ日の再探索・回答更新
 

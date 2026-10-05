@@ -42,6 +42,8 @@ make -j3 test
 
 2026-10-05の経路候補組合せ追加後は`make test-core`（C++回帰、Python 36件）と`spot_route_lns_test`のASan/UBSan実行が成功した。今回の変更について`make test`全体やGUI実画面を再実行したという意味ではない。
 
+2026-10-06には本選3区分の生成と条件外の拒否を追加検証し、`make test`（公開3マップとPython 37件を含む）が成功した。公開試合APIに基づく候補保持の比較は[記録](arena-api-results-2026-10-06.md)、AHCを参考にした経路探索の比較は[記録](ahc-inspired-search-2026-10-06.md)を参照する。
+
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 
 ```sh

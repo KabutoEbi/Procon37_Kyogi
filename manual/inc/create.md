@@ -21,6 +21,8 @@ auto problem = benzen::create(config, "problem.json");
 
 同じ`seed`と設定なら同じ問題になる。盤面は8～32、エージェントは3～8、日数は4～10などの制約があり、不正設定は`std::invalid_argument`になる。
 
+この低レベルAPIは小さな人工盤面を使う単体テストにも利用する。ユーザー向けの`create`／`generate`コマンドと`runLocalSolver()`では、さらに[`sample_maps/README.md`](../../sample_maps/README.md)の3区分（16×16・4台・16スポット・10〜14系列、24×24・5台・24スポット・14〜20系列、32×32・7台・32スポット・20〜28系列）と行動回答時間60秒を必須にする。日数など、本選条件が未公開の項目の生成範囲は変更しない。
+
 `ProblemCreator::generateField()`は地形だけ、`generate()`はスポット・開始位置・日設定・チーム情報まで生成する。
 
 ## 公式形式JSON
