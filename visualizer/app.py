@@ -126,6 +126,7 @@ class SolverGUI(tk.Tk):
         self.random_setting_vars = {
             name: tk.StringVar(value=str(value))
             for name, value in vars(RandomSettingParameters()).items()
+            if name != "seed"
         }
 
         self.env_var = tk.StringVar(value=str(PROJECT_ROOT / ".env"))
@@ -372,7 +373,7 @@ class SolverGUI(tk.Tk):
         fields = [
             ("width", "幅"), ("height", "高さ"), ("agents", "エージェント"),
             ("spots", "スポット"), ("brands", "系列"), ("days", "日数"),
-            ("seconds", "1日秒数（60固定）"), ("teams", "チーム"), ("seed", "seed"),
+            ("seconds", "1日秒数（60固定）"), ("teams", "チーム"),
         ]
         for index, (key, label) in enumerate(fields):
             row, group = divmod(index, 3)

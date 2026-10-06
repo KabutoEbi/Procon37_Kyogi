@@ -51,6 +51,7 @@ class GUITest(unittest.TestCase):
             gui.random_traffic_check.invoke()
             parameters = gui._random_setting_parameters()
             self.assertEqual(parameters.include_congestion, 1)
+            self.assertNotIn("seed", gui.random_setting_vars)
             gui.random_traffic_check.invoke()
             self.assertEqual(gui._random_setting_parameters().include_congestion, 0)
             gui._hide_settings_window()

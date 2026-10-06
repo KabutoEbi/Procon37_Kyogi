@@ -90,6 +90,6 @@ POST前に`submission-agents.json`／`submission-dayN.json`と不変の候補`su
 
 ## ランダム生成時の道路状態
 
-`RandomSettingParameters.include_congestion`は0/1で指定し、既定は0。C++の生成引数へは渡さず、0なら全道路を順調、1なら地形生成後にseed付きで順調・混雑・渋滞を道路セルへ割り当て、`localTraffics`へ保存する。
+`RandomSettingParameters.include_congestion`は0/1で指定し、既定は0。C++の生成引数へは渡さず、0なら全道路を順調、1なら地形生成後に順調・混雑・渋滞を道路セルへ割り当て、`localTraffics`へ保存する。`Workflow.generate_random_setting()`は呼出しごとに新しい64bit seedを選び、パラメータの`seed`値より優先する。地形と道路状態は同じ生成seedを使い、実行コマンドとログからそのseedを確認できる。
 
 `solve_local()`は`localTraffics`がある設定について、種別選択後に開始位置・満タン燃料・選択交通から`local-state.json`を作り、その状態で探索する。探索後の`result-state.json`にも交通を保持する。`load_snapshot()`は初期表示に設定の`localTraffics`を使い、当日状態がある場合はその`traffics`を優先する。

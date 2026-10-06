@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import secrets
 import hashlib
 import math
 import os
@@ -834,9 +835,12 @@ class Workflow:
         output.parent.mkdir(parents=True, exist_ok=True)
         temporary = output.with_name(output.name + ".generate")
         temporary.unlink(missing_ok=True)
+        # GUI generation is intentionally fresh on every run. Keep --seed in
+        # the recorded command so a generated map can still be reproduced via CLI.
+        generated_seed = secrets.randbits(64)
         command = [
             str(self.solver), "generate", str(temporary),
-            *parameters.arguments(),
+            *replace(parameters, seed=generated_seed).arguments(),
         ]
         try:
             completed = subprocess.run(
@@ -857,7 +861,7 @@ class Workflow:
             load_snapshot(temporary)
             value = read_json(temporary)
             statuses = [0, 1, 2] if parameters.include_congestion else [0]
-            rng = random.Random(parameters.seed)
+            rng = random.Random(generated_seed)
             width = value["map"]["width"]
             value["localTraffics"] = [
                 {"pos": y * width + x, "status": rng.choice(statuses)}

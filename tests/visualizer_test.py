@@ -503,13 +503,14 @@ result
                 Path(os.environ["PROCON_TEST_SOLVER"]),
                 work,
             )
-            workflow.generate_random_setting(
-                output,
-                RandomSettingParameters(
-                    width=16, height=16, agents=4, spots=16, brands=10,
-                    days=4, seconds=60, teams=3, seed=123,
-                ),
-            )
+            with mock.patch("backend.secrets.randbits", return_value=123):
+                workflow.generate_random_setting(
+                    output,
+                    RandomSettingParameters(
+                        width=16, height=16, agents=4, spots=16, brands=10,
+                        days=4, seconds=60, teams=3, seed=999,
+                    ),
+                )
             setting = read_json(output)
             self.assertEqual((setting["map"]["width"], setting["map"]["height"]), (16, 16))
             self.assertEqual(len(setting["agents"]), 4)
@@ -528,7 +529,8 @@ result
                     days=4, seconds=60, teams=3, seed=123,
                     include_congestion=include_congestion,
                 )
-                workflow.generate_random_setting(output, parameters)
+                with mock.patch("backend.secrets.randbits", return_value=123):
+                    workflow.generate_random_setting(output, parameters)
                 generated = read_json(output)
                 self.assertEqual(generated["map"], setting["map"])
                 traffic = generated["localTraffics"]
@@ -538,7 +540,8 @@ result
                     y * 16 + x for y, row in enumerate(generated["map"]["cells"])
                     for x, cell in enumerate(row) if cell == 1
                 })
-                workflow.generate_random_setting(output, parameters)
+                with mock.patch("backend.secrets.randbits", return_value=123):
+                    workflow.generate_random_setting(output, parameters)
                 self.assertEqual(read_json(output)["localTraffics"], traffic)
                 result = workflow.solve_local(output)
                 self.assertIn(str((work / "local-state.json").resolve()), result.command)
@@ -546,6 +549,26 @@ result
                 self.assertEqual(read_json(work / "result-state.json")["traffics"], traffic)
                 snapshot = load_snapshot(output, work / "result-state.json")
                 self.assertEqual(dict(snapshot.traffics), {t["pos"]: t["status"] for t in traffic})
+
+    @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
+    def test_visualizer_generation_uses_fresh_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            output = work / "random-setting.json"
+            workflow = Workflow(ConnectionConfig("", ""),
+                                Path(os.environ["PROCON_TEST_SOLVER"]), work)
+            parameters = RandomSettingParameters(
+                width=16, height=16, agents=4, spots=16, brands=10,
+                days=4, seed=42, include_congestion=1,
+            )
+            with mock.patch("backend.secrets.randbits", side_effect=(123, 124)):
+                first = workflow.generate_random_setting(output, parameters)
+                first_setting = read_json(output)
+                second = workflow.generate_random_setting(output, parameters)
+                second_setting = read_json(output)
+            self.assertEqual(first.command[-2:], ("--seed", "123"))
+            self.assertEqual(second.command[-2:], ("--seed", "124"))
+            self.assertNotEqual(first_setting["map"], second_setting["map"])
 
     @unittest.skipUnless(os.environ.get("PROCON_TEST_SOLVER"), "PROCON_TEST_SOLVERを指定するとC++連携も検査")
     def test_real_solver_local_result_state(self) -> None:
