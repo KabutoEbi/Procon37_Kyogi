@@ -423,13 +423,27 @@ inline RouteColumnResult searchRouteColumns(
             const bool hasIncumbent = incumbentIt != pool.end();
             detail::RouteColumn incumbentColumn;
             if (hasIncumbent) incumbentColumn = *incumbentIt;
-            std::sort(pool.begin(), pool.end(), [&](const auto& a, const auto& b) {
+            if (pool.empty()) { complete = false; break; }
+            const auto brandRank = [&](const detail::RouteColumn& column) {
                 return std::make_tuple(
-                           countBits(a.brands & ~previous.matchBrands),
-                           countBits(a.brands), a.udon, a.fuel) >
-                       std::make_tuple(
-                           countBits(b.brands & ~previous.matchBrands),
-                           countBits(b.brands), b.udon, b.fuel);
+                    countBits(column.brands & ~previous.matchBrands),
+                    countBits(column.brands), column.udon, column.fuel);
+            };
+            const auto quantityRank = [&](const detail::RouteColumn& column) {
+                return std::make_tuple(
+                    column.udon,
+                    countBits(column.brands & ~previous.matchBrands),
+                    countBits(column.brands), column.fuel);
+            };
+            // Plan each patrol for pickup quantity first. Keep the best brand
+            // route outside that quota so the master can repair a missing
+            // brand after seeing the routes of all patrols together.
+            const auto bestBrand = *std::max_element(pool.begin(), pool.end(),
+                [&](const auto& a, const auto& b) {
+                    return brandRank(a) < brandRank(b);
+                });
+            std::sort(pool.begin(), pool.end(), [&](const auto& a, const auto& b) {
+                return quantityRank(a) > quantityRank(b);
             });
             if (pool.size() > config.columnsPerAgent) {
                 std::vector<detail::RouteColumn> selected;
@@ -456,24 +470,20 @@ inline RouteColumnResult searchRouteColumns(
                     masks.push_back(column.spots);
                     selected.push_back(column);
                 };
-                const std::size_t quota = std::max<std::size_t>(
-                    1, config.columnsPerAgent / 3);
+                const std::size_t quantityQuota = std::max<std::size_t>(
+                    1, config.columnsPerAgent * 2 / 3);
+                const std::size_t brandQuota = std::min(config.columnsPerAgent,
+                    quantityQuota + std::max<std::size_t>(
+                        1, config.columnsPerAgent / 6));
                 for (auto& column : pool) {
                     take(column);
-                    if (selected.size() >= quota) break;
+                    if (selected.size() >= quantityQuota) break;
                 }
                 std::sort(pool.begin(), pool.end(), [&](const auto& a, const auto& b) {
-                    return std::make_tuple(
-                               a.udon, a.fuel,
-                               countBits(a.brands & ~previous.matchBrands),
-                               countBits(a.brands)) >
-                           std::make_tuple(
-                               b.udon, b.fuel,
-                               countBits(b.brands & ~previous.matchBrands),
-                               countBits(b.brands));
+                    return brandRank(a) > brandRank(b);
                 });
                 for (auto& column : pool) {
-                    if (selected.size() >= quota * 2) break;
+                    if (selected.size() >= brandQuota) break;
                     take(column);
                 }
                 const auto marginal = [&](const detail::RouteColumn& column) {
@@ -496,6 +506,12 @@ inline RouteColumnResult searchRouteColumns(
                     take(column);
                 }
                 pool = std::move(selected);
+            }
+            if (std::none_of(pool.begin(), pool.end(),
+                    [&](const detail::RouteColumn& col) {
+                        return col.plan == bestBrand.plan;
+                    })) {
+                pool.push_back(bestBrand);
             }
             if (hasIncumbent && !pool.empty() &&
                 std::none_of(pool.begin(), pool.end(),
@@ -547,6 +563,9 @@ inline RouteColumnResult searchRouteColumns(
                     std::min(maxUdon[index], remainingStock));
             if (optimistic <= scoreOf(result.finalState)) return;
             if (index == patrols.size()) {
+                // A high-pickup column is provisional until every patrol has
+                // a route. The full replay decides whether brand-repair
+                // columns are needed; never accept a brand regression.
                 const auto checked = simulateDay(setting, matchState, combined, previous);
                 if (checked.valid && scoreOf(checked.state) > scoreOf(result.finalState) &&
                     preservesFuture(checked.state)) {
@@ -572,13 +591,15 @@ inline RouteColumnResult searchRouteColumns(
             std::sort(choices.begin(), choices.end(), [&](const auto* lhs,
                                                            const auto* rhs) {
                 return std::make_tuple(
+                    lhs->udon,
                     countBits(lhs->brands &
                               ~(previous.matchBrands | brands)),
-                    countBits(lhs->brands & ~brands), lhs->udon, lhs->fuel) >
+                    countBits(lhs->brands & ~brands), lhs->fuel) >
                        std::make_tuple(
+                    rhs->udon,
                     countBits(rhs->brands &
                               ~(previous.matchBrands | brands)),
-                    countBits(rhs->brands & ~brands), rhs->udon, rhs->fuel);
+                    countBits(rhs->brands & ~brands), rhs->fuel);
             });
             for (const auto* choice : choices) {
                 const auto& col = *choice;

@@ -2305,13 +2305,13 @@ public:
             const auto future = finalDay ? detail::FutureRoutePotential{} :
                 detail::futureRoutePotential(s, ms, state,
                     selectionCache, selectionCached);
+            // Once the combined plan keeps the best known brand counts,
+            // prefer actual pickups. Future position is only a tie-breaker.
             return std::make_tuple(countBits(state.score.matchBrands),
                 state.score.sumOfDailyBrandCounts,
+                state.score.totalUdon,
                 future.reachableBrands,
-                finalDay ? state.score.totalUdon :
-                    8 * state.score.totalUdon - future.distanceSum +
-                        future.patrolFuel / 20,
-                state.score.totalUdon);
+                finalDay ? 0 : -future.distanceSum + future.patrolFuel / 20);
         };
         auto cache = std::make_shared<AssignmentCache>();
         auto timings = std::make_shared<PlanningTimings>();
@@ -3233,11 +3233,9 @@ inline BeamSearchResult brain1Beam(
         return std::make_tuple(
             countBits(result.finalState.score.matchBrands),
             result.finalState.score.sumOfDailyBrandCounts,
+            result.finalState.score.totalUdon,
             future.reachableBrands,
-            finalDay ? result.finalState.score.totalUdon :
-                8 * result.finalState.score.totalUdon - future.distanceSum +
-                    future.patrolFuel / 20,
-            result.finalState.score.totalUdon);
+            finalDay ? 0 : -future.distanceSum + future.patrolFuel / 20);
     };
     auto better = [&](const BeamSearchResult& lhs,
                       const BeamSearchResult& rhs) {

@@ -338,6 +338,41 @@ void checkRouteColumnsKeepSearchSlotBesideIncumbent() {
     assert(replay.valid && replay.state == result.finalState);
 }
 
+void checkRouteColumnsRepairBrandsAfterQuantityRoute() {
+    MatchSetting setting;
+    setting.field.width = 3;
+    setting.field.height = 3;
+    setting.field.cells.assign(9, {CellType::Plain, -1});
+    setting.field.spots = {
+        {0, 0, 1, -1}, {0, 1, 1, -1},
+        {0, 2, 1, -1}, {1, 7, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {4};
+    setting.daySteps = {8};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 8;
+    MatchState state;
+    state.trafficByPos.assign(9, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 4, 8}};
+    const DailyPlan incumbent{{-8}};
+    const DailyPlan quantityOnly{{1, 2, 5, 5}};
+    const auto quantityReplay = simulateDay(setting, state, quantityOnly);
+    assert(quantityReplay.valid);
+    assert(quantityReplay.state.dayUdon == 3);
+    assert(countBits(quantityReplay.state.dayBrands) == 1);
+    RouteColumnConfig config;
+    config.columnsPerAgent = 1;
+    config.supplyRendezvous = false;
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, config,
+        std::chrono::steady_clock::time_point::max());
+    assert(result.generated > 0);
+    assert(countBits(result.finalState.dayBrands) == 2);
+    assert(result.finalState.dayUdon >= 3);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
 void checkRouteColumnsSuffixInsertionWithoutTerminalWait() {
     MatchSetting setting;
     setting.field.width = 3;
@@ -381,5 +416,6 @@ int main() {
     checkRouteColumnsSupplyStation();
     checkRouteColumnsLargePool();
     checkRouteColumnsKeepSearchSlotBesideIncumbent();
+    checkRouteColumnsRepairBrandsAfterQuantityRoute();
     checkRouteColumnsSuffixInsertionWithoutTerminalWait();
 }
