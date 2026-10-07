@@ -118,6 +118,8 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(SearchParameters().time_limit_ms, 60000)
         self.assertEqual(SearchParameters().safety_margin_ms, 5000)
         self.assertEqual(SearchParameters().send_reserve_ms, 5000)
+        self.assertEqual(SearchParameters().trial_candidates, 0)
+        self.assertEqual(SearchParameters().selection_time_ms, 10000)
         self.assertIn("--auto-beam-width", SearchParameters(auto_beam_width=1).arguments())
         with self.assertRaisesRegex(WorkflowError, "auto_beam_width"):
             SearchParameters(auto_beam_width=2).arguments()
@@ -127,6 +129,23 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(day_time_limit_ms(setting, 2), 2147483647)
         with self.assertRaisesRegex(WorkflowError, "当日の試合時間"):
             day_time_limit_ms(setting, 3)
+
+    def test_agent_selection_always_reserves_submission_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            setting = work / "setting.json"
+            agents = work / "agents.json"
+            setting.write_text(json.dumps({"startsAt": 0}), encoding="utf-8")
+            agents.write_text("[0, 0, 0, 1]", encoding="utf-8")
+            workflow = Workflow(
+                ConnectionConfig("http://example", "secret"),
+                Path(sys.executable), work,
+            )
+            completed = mock.Mock(output="")
+            with mock.patch.object(workflow, "_run", return_value=completed) as run:
+                self.assertIs(workflow.select_agents(setting, agents), completed)
+            self.assertTrue(run.call_args.kwargs["reserve_for_submission"])
+            self.assertEqual(run.call_args.kwargs["ends_at"], 0)
 
     def test_map_acquisition_totals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

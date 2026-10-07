@@ -59,10 +59,11 @@ class SearchParameters:
     max_actions: int = 4
     macro_actions: int = 1
     adaptive_beam: int = 1
-    trial_candidates: int = 12
+    # 全自動では種別受付を逃さないことを優先する。
+    trial_candidates: int = 0
     trial_beam_width: int = 32
     trial_joint_beam_width: int = 128
-    selection_time_ms: int = 60000
+    selection_time_ms: int = 10000
     send_reserve_ms: int = 5000
     clock_margin_ms: int = 1000
 
@@ -919,8 +920,11 @@ class Workflow:
         marker = self.work_dir / "selected-agents.json"
         marker.unlink(missing_ok=True)
         self._require_solver()
-        result = self._run(["select", str(setting.resolve()), str(output.resolve())],
-                           ends_at=read_json(setting).get("startsAt", 0))
+        result = self._run(
+            ["select", str(setting.resolve()), str(output.resolve())],
+            ends_at=read_json(setting).get("startsAt", 0),
+            reserve_for_submission=True,
+        )
         atomic_write(marker, json.dumps({
             "setting": file_hash(setting), "agents": file_hash(output), "identity": self.identity(),
         }).encode())
