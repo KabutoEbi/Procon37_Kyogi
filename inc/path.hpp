@@ -49,6 +49,9 @@ struct TimedPathResult {
 struct DijkstraTable {
     CellPos start = kInvalidCell;
     std::vector<std::int32_t> distances;
+    // Patrol fuel along this exact shortest-time predecessor path (not a
+    // minimum-fuel distance). Allows allocation-free placement evaluation.
+    std::vector<std::int32_t> patrolFuelCosts;
     std::vector<CellPos> previous;
     std::vector<Direction> previousDirection;
     std::vector<CellPos> firstHop;

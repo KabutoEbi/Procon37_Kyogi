@@ -15,7 +15,25 @@ struct BrandRepairConfig {
     std::size_t maxAttempts = 16;
     std::size_t nodesPerAttempt = 1000;
     std::size_t maxPatrols = 2;
+    std::size_t maxCutVariants = 2;
 };
+
+// A one-brand miss on the small competition tier dominates any quantity gain.
+// Widen only that rescue neighborhood; the caller's deadline is still the
+// hard bound, and other board sizes retain the established defaults.
+inline BrandRepairConfig strengthenedSmallBoardBrandRepair(
+    const MatchSetting& setting, const GameState& incumbent,
+    BrandRepairConfig config) {
+    if (setting.field.width != 16 || setting.field.height != 16 ||
+        countBits(incumbent.dayBrands) >= setting.field.brands.size()) {
+        return config;
+    }
+    config.maxAttempts = std::max<std::size_t>(config.maxAttempts, 48);
+    config.nodesPerAttempt = std::max<std::size_t>(config.nodesPerAttempt, 3000);
+    config.maxPatrols = std::max<std::size_t>(config.maxPatrols, 3);
+    config.maxCutVariants = std::max<std::size_t>(config.maxCutVariants, 5);
+    return config;
+}
 
 struct BrandRepairResult {
     DailyPlan plan;
@@ -158,10 +176,25 @@ inline BrandRepairResult repairDayBrands(
                 if (latest < 0) continue;
                 // First a short suffix, then a wider rollback. The latter can
                 // exchange responsibilities for brands originally owned by A.
-                std::vector<int> cuts{std::max(0, latest - 4), 0};
-                if (cuts[0] == cuts[1]) cuts.resize(1);
+                std::vector<int> cuts;
+                const auto addCut = [&](int cut) {
+                    cut = std::clamp(cut, 0, latest);
+                    if (std::find(cuts.begin(), cuts.end(), cut) == cuts.end())
+                        cuts.push_back(cut);
+                };
+                addCut(latest - 4);
+                addCut(0);
+                if (config.maxCutVariants > 2) {
+                    addCut(latest - 2);
+                    addCut(latest * 3 / 4);
+                    addCut(latest / 2);
+                }
+                if (cuts.size() > config.maxCutVariants)
+                    cuts.resize(config.maxCutVariants);
                 for (const int cut : cuts) {
-                    for (std::size_t radius = 1; radius <= std::min<std::size_t>(2, config.maxPatrols); ++radius) {
+                    for (std::size_t radius = 1;
+                         radius <= std::min(config.maxPatrols, patrols.size());
+                         ++radius) {
                         if (radius > patrols.size()) continue;
                         if (result.attempts >= config.maxAttempts || stopped()) break;
                         const auto& cp = trace.checkpoints[cut];
@@ -173,11 +206,11 @@ inline BrandRepairResult repairDayBrands(
                         neighborhood.actionsAtStep = &trace.actionsAtStep;
                         neighborhood.actionStarts = &trace.starts;
                         neighborhood.freeAgents[owner.second] = true;
-                        if (radius == 2) {
-                            // Choose B by its ability to cover A's still unearned
-                            // brands, enabling an A->target, B->A's stores chain.
-                            AgentIndex secondary = owner.second;
-                            int best = kImpassableCost;
+                        if (radius > 1) {
+                            // Let the other patrols take over brands from A's
+                            // abandoned suffix. Radius 3 supports a two-step
+                            // responsibility chain on the four-agent tier.
+                            std::vector<std::pair<int, AgentIndex>> substitutes;
                             for (const auto& other : patrols) {
                                 if (other.second == owner.second) continue;
                                 int cost = kImpassableCost - 1;
@@ -187,10 +220,12 @@ inline BrandRepairResult repairDayBrands(
                                         !(cp.state.dayBrands & bit))
                                         cost = std::min(cost, distances[i][cp.state.agents[other.second].pos]);
                                 }
-                                if (cost < best) { best = cost; secondary = other.second; }
+                                substitutes.emplace_back(cost, other.second);
                             }
-                            if (secondary == owner.second) continue;
-                            neighborhood.freeAgents[secondary] = true;
+                            std::sort(substitutes.begin(), substitutes.end());
+                            if (substitutes.size() + 1 < radius) continue;
+                            for (std::size_t i = 0; i + 1 < radius; ++i)
+                                neighborhood.freeAgents[substitutes[i].second] = true;
                         }
                         AgentIndex supply = ms.agents.size();
                         int nearest = kImpassableCost;

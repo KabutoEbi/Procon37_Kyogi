@@ -15,6 +15,7 @@
 | [`beam_width_probe.cpp`](beam-width-tuning-2026-10-04.md) | 固定ビーム幅で日次探索が自然完了するまでの時間計測 |
 | [`agent_selection_benchmark.cpp`](agent_selection_benchmark.md) | ランダム生成マップでの種別選択と全日試走の比較 |
 | [`arena_benchmark.cpp`](arena_benchmark.md) | 公開アリーナ問題JSONを使った全日程・混合交通の再現比較 |
+| [`saved_day_benchmark.cpp`](coordinated-refinement-results-2026-10-07.md) | 保存済みの設定・当日状態・得点から1日を再探索する診断ツール |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
 | [`recovery_test.py`](recovery_test.md) | 永続復旧・同日回答更新・同一候補再送・送信時間確保の回帰テスト |
@@ -25,6 +26,7 @@
 | `spot_route_lns_test.cpp` | スポット単位ビーム、巡回車間の訪問移送・交換、中間日終点変更、経路候補組合せの合法性と非退行 |
 | `brand_repair_test.cpp` | 役割交換・補給・巻き戻し・固定行動の系列救済テスト。詳細は[系列救済](../inc/brand_repair.md) |
 | `udon_alns_test.cpp` | 系列マスク固定、玉数改善、ランダム問題の非退行・合法性テスト |
+| `quantity_search_test.cpp` | 途中取得・時刻付き補給・日跨ぎ候補・比較中断の回帰テスト |
 
 ## 回帰テストをまとめて実行
 
@@ -43,6 +45,8 @@ make -j3 test
 2026-10-05の経路候補組合せ追加後は`make test-core`（C++回帰、Python 36件）と`spot_route_lns_test`のASan/UBSan実行が成功した。今回の変更について`make test`全体やGUI実画面を再実行したという意味ではない。
 
 2026-10-06には本選3区分の生成と条件外の拒否を追加検証し、`make test`（公開3マップとPython 37件を含む）が成功した。公開試合APIに基づく候補保持の比較は[記録](arena-api-results-2026-10-06.md)、AHCを参考にした経路探索の比較は[記録](ahc-inspired-search-2026-10-06.md)を参照する。
+
+2026-10-07には翌日終端配置、在庫再配分、日跨ぎ候補、16×16の適応的系列救済、大盤面の終端固定玉数候補を追加した。`make test`はC++ 11テスト、公開3サイズ、Python 38件が成功。`make test-sanitize`はC++ 10テストがASan/UBSanで成功した。[協調改善](coordinated-refinement-results-2026-10-07.md)と[公開得点追跡改善](arena-score-guided-improvements-2026-10-07.md)に条件と制約を記録している。
 
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 

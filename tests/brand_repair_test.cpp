@@ -143,6 +143,36 @@ void checkRandomValidityAndNonRegression() {
         assert(result.expanded <= repair.maxAttempts * repair.nodesPerAttempt);
     }
 }
+
+void checkSmallBoardStrengthening() {
+    MatchSetting s;
+    s.field.width = s.field.height = 16;
+    s.field.cells.assign(s.field.cellCount(), {CellType::Plain, -1});
+    s.field.spots = {{0, 0, 1, -1}, {1, 255, 1, -1}};
+    assert(s.field.rebuildSpotIndex());
+    GameState incumbent;
+    incumbent.dayBrands = brandBit(0);
+    const BrandRepairConfig ordinary;
+    const auto stronger = strengthenedSmallBoardBrandRepair(s, incumbent, ordinary);
+    assert(stronger.maxAttempts >= 48);
+    assert(stronger.nodesPerAttempt >= 3000);
+    assert(stronger.maxPatrols >= 3);
+    assert(stronger.maxCutVariants >= 5);
+
+    incumbent.dayBrands |= brandBit(1);
+    const auto complete = strengthenedSmallBoardBrandRepair(s, incumbent, ordinary);
+    assert(complete.maxAttempts == ordinary.maxAttempts);
+    assert(complete.nodesPerAttempt == ordinary.nodesPerAttempt);
+    assert(complete.maxPatrols == ordinary.maxPatrols);
+    assert(complete.maxCutVariants == ordinary.maxCutVariants);
+
+    s.field.width = 24;
+    s.field.height = 24;
+    incumbent.dayBrands = brandBit(0);
+    const auto large = strengthenedSmallBoardBrandRepair(s, incumbent, ordinary);
+    assert(large.maxAttempts == ordinary.maxAttempts);
+    assert(large.nodesPerAttempt == ordinary.nodesPerAttempt);
+}
 }  // namespace
 
 int main() {
@@ -150,4 +180,5 @@ int main() {
     checkWaitCutAndPendingMove();
     checkSupplyChain();
     checkRandomValidityAndNonRegression();
+    checkSmallBoardStrengthening();
 }

@@ -61,6 +61,7 @@ void checkRandomMaps() {
                 }
                 assert(pos == spot.pos);
                 assert(steps == path.cost.steps && fuel == path.cost.fuel);
+                assert(table.patrolFuelCosts[spot.pos] == fuel);
             }
         }
 

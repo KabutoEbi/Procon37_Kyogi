@@ -25,6 +25,7 @@ class Brain0 final {
         DijkstraTable res;
         res.start = start;
         res.distances.assign(f.cellCount(), kImpassableCost);
+        res.patrolFuelCosts.assign(f.cellCount(), kImpassableCost);
         res.previous.assign(f.cellCount(), kInvalidCell);
         res.previousDirection.assign(f.cellCount(), Direction::UpperLeft);
         res.firstHop.assign(f.cellCount(), kInvalidCell);
@@ -36,6 +37,7 @@ class Brain0 final {
         DialQueue<CellPos> q;
 
         res.distances[static_cast<std::size_t>(start)] = 0;
+        res.patrolFuelCosts[static_cast<std::size_t>(start)] = 0;
         q.push(0, start);
 
         while (!q.empty()) {
@@ -66,6 +68,8 @@ class Brain0 final {
                 }
 
                 res.distances[i] = next;
+                res.patrolFuelCosts[i] = res.patrolFuelCosts[from] +
+                    moveFuelCost(s, AgentKind::Patrol, from);
                 res.previous[i] = from;
                 res.previousDirection[i] = dir;
                 res.firstHop[i] = from == start ? to : res.firstHop[from];

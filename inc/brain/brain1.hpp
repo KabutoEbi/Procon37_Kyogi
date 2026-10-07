@@ -13,6 +13,8 @@
 #include "../simulator.hpp"
 #include "../spot_route_lns.hpp"
 #include "../route_column_search.hpp"
+#include "../day_beam.hpp"
+#include "../overnight_refinement.hpp"
 
 #include <algorithm>
 #include <array>
@@ -36,6 +38,12 @@
 namespace benzen {
 
 struct BeamSearchConfig {
+    // Experimental portfolio. Enable explicitly until fixed-time match
+    // benchmarks establish a benefit across more than the tuning instances.
+    bool quantityUpgrades = false;
+    // Fuel-aware end placement, anticipatory supply assignment and a reserved
+    // quantity-refinement slice. Independent of the experimental day beam.
+    bool coordinatedRefinement = true;
     // 系列上限未達のとき、枝刈り付き全行動探索で補完する。
     bool refineBrands = true;
     std::size_t brandSearchNodeLimit = 10000;
@@ -43,6 +51,11 @@ struct BeamSearchConfig {
     bool exactBrands = false;
     bool useBrandRepair = true;
     BrandRepairConfig brandRepair{};
+    // On 16x16 reserve a larger post-beam slice and widen repair/exact search
+    // while the daily-brand upper bound is still open.
+    bool adaptiveSmallBoardBrandRescue = true;
+    std::size_t smallBoardBeamBudgetPercent = 85;
+    std::size_t smallBoardBrandSearchNodeLimit = 100000;
     bool useUdonAlns = true;
     UdonAlnsConfig udonAlns{};
     bool useSpotRouteLns = true;
@@ -50,8 +63,15 @@ struct BeamSearchConfig {
     RouteColumnConfig routeColumns{};
     bool compareNextDayPlans = false;
     std::int64_t nextDayProbeMs = 500;
+    // Reserve time for quantity search and a bounded, scenario-based day beam.
+    std::size_t quantityBudgetPercent = 25;
+    bool stopBeamAtBrandUpperBound = true;
+    bool useDayBeam = true;
+    std::size_t dayBeamWidth = 4;
+    std::size_t dayBeamDepth = 2;
+    std::int32_t dayBeamMaxUdonLoss = 2;
     std::size_t beamWidth = 128;
-    // Automatic daily sizing spends more of its capped budget on the beam.
+    // Indicates size-calibrated widths; all modes share refinement reserves.
     bool autoSizedBeam = false;
 
     // 同じステップで複数の待機中でないエージェントへ行動を割り当てる際の幅。
@@ -156,6 +176,12 @@ struct BeamSearchResult {
     std::size_t routeColumnsGenerated = 0;
     std::size_t routeColumnsMasterNodes = 0;
     std::size_t routeColumnsImprovements = 0;
+    bool smallBoardBrandRescue = false;
+    std::size_t dayBeamExpanded = 0;
+    std::size_t overnightAttempts = 0;
+    std::size_t overnightImprovements = 0;
+    std::size_t dayBeamCandidates = 0;
+    bool dayBeamComplete = false;
     bool reusedDistanceTables = false;
     bool success = false;
     DailyPlan plan;
@@ -1586,9 +1612,11 @@ private:
                 }
                 if (!meet.valid) continue;
                 const int wait = std::max(0, meet.supplyArrival - meet.patrolArrival);
+                const bool urgent = meet.required ||
+                    (dist.planning.coordinatedRefinement && standbyFuelShortage > 0);
                 const std::int64_t reward = benefit +
-                    (meet.required ? benefit * (n + 1) : 0) +
-                    (meet.required && targets[p].valid
+                    (urgent ? benefit * (n + 1) : 0) +
+                    (urgent && targets[p].valid
                          ? benefit * (2 - targets[p].priority) : 0) +
                     unit * meet.fuelShortage;
                 edges[p][q] = flow.addEdge(
@@ -2311,6 +2339,7 @@ public:
                 state.score.sumOfDailyBrandCounts,
                 state.score.totalUdon,
                 future.reachableBrands,
+                -future.strandedPatrols, future.readyBrands, future.readyUdon,
                 finalDay ? 0 : -future.distanceSum + future.patrolFuel / 20);
         };
         auto cache = std::make_shared<AssignmentCache>();
@@ -3235,6 +3264,7 @@ inline BeamSearchResult brain1Beam(
             result.finalState.score.sumOfDailyBrandCounts,
             result.finalState.score.totalUdon,
             future.reachableBrands,
+            -future.strandedPatrols, future.readyBrands, future.readyUdon,
             finalDay ? 0 : -future.distanceSum + future.patrolFuel / 20);
     };
     auto better = [&](const BeamSearchResult& lhs,
@@ -3268,6 +3298,13 @@ inline BeamSearchResult brain1Beam(
         const bool timedOut = current.stopReason == SearchStopReason::TimeLimit;
         if (better(current, best)) best = std::move(current);
         if (timedOut) break;
+        if (config.quantityUpgrades && config.stopBeamAtBrandUpperBound && best.success &&
+            (config.useSpotRouteLns || config.useUdonAlns) &&
+            Clock::now() - started >= std::chrono::milliseconds(effectiveMs / 2)) {
+            BrandMask all = 0;
+            for (const auto& spot : setting.field.spots) all |= brandBit(spot.brandIndex);
+            if ((best.finalState.dayBrands & all) == all) break;
+        }
 
         const std::size_t nextBeam = std::min(
             maxBeam, pass.beamWidth > maxBeam / 2
@@ -3334,8 +3371,20 @@ inline BeamSearchResult brain1(
     const MatchSetting& setting,
     const MatchState& matchState,
     ScoreState previousScore = {},
-    const BeamSearchConfig& config = {}) {
+    const BeamSearchConfig& requestedConfig = {}) {
     using Clock = std::chrono::steady_clock;
+    auto config = requestedConfig;
+    if (!config.quantityUpgrades) {
+        config.useDayBeam = false;
+        config.spotRouteLns.reflectTransit = false;
+        config.routeColumns.maxSupplySchedules = 0;
+        config.udonAlns.reallocateStock = false;
+    }
+    if (config.coordinatedRefinement) {
+        config.udonAlns.reallocateStock = true;
+        config.routeColumns.maxSupplySchedules = std::max<std::size_t>(
+            config.routeColumns.maxSupplySchedules, 8);
+    }
     if ((!config.refineBrands && !config.exactBrands) ||
         config.timeLimitMs < 0 || config.safetyMarginMs < 0)
         return brain1Beam(setting, matchState, previousScore, config);
@@ -3354,33 +3403,68 @@ inline BeamSearchResult brain1(
     const bool routeColumnsActive = config.useSpotRouteLns &&
         config.routeColumns.enabled &&
         (!limited || budget >= config.routeColumns.minimumBudgetMs);
-    const auto deadline = limited ? started + std::chrono::milliseconds(budget)
+    const auto hardDeadline = limited ? started + std::chrono::milliseconds(budget)
                                   : Clock::time_point::max();
+    const bool runDayBeam = config.useDayBeam && config.dayBeamWidth > 1 &&
+        config.dayBeamDepth > 0 && matchState.day >= 0 &&
+        static_cast<std::size_t>(matchState.day + 1) < setting.dayCount() &&
+        (!limited || budget >= 5000);
+    const auto dayBeamMs = runDayBeam ? (limited ? budget / 10 : 2000) : 0;
+    const bool overnight = config.coordinatedRefinement && matchState.day >= 0 &&
+        static_cast<std::size_t>(matchState.day + 1) < setting.dayCount();
+    const auto overnightMs = overnight ? (limited ? std::min<std::int64_t>(500, budget / 30) : 500) : 0;
+    const auto deadline = limited ? hardDeadline - std::chrono::milliseconds(dayBeamMs + overnightMs)
+                                  : hardDeadline;
+    const auto searchBudget = limited ? budget - dayBeamMs - overnightMs : budget;
+    const bool smallBoardTier = config.adaptiveSmallBoardBrandRescue &&
+        setting.field.width == 16 && setting.field.height == 16;
+    const auto quantityPercent = static_cast<std::int64_t>(
+        std::clamp<std::size_t>(config.quantityBudgetPercent, 1, 90));
+    const auto brandDeadline = limited && !config.exactBrands && config.quantityUpgrades
+        ? started + std::chrono::milliseconds(searchBudget - searchBudget * quantityPercent / 100)
+        : deadline;
     auto beamConfig = config;
     if (limited && budget > 1) {
         // In exact mode the beam is only an incumbent generator. Keep most of
         // the deadline for the exhaustive proof; otherwise exactBrands could
         // receive only 5--20% of the requested budget.
         beamConfig.timeLimitMs = config.exactBrands
-            ? std::max<std::int64_t>(1, budget / 5)
+            ? std::max<std::int64_t>(1, searchBudget / 5)
+            : !config.quantityUpgrades ? std::max<std::int64_t>(1,
+                  searchBudget * (smallBoardTier && config.autoSizedBeam
+                      ? static_cast<std::int64_t>(std::clamp<std::size_t>(
+                            config.smallBoardBeamBudgetPercent, 50, 95))
+                      : config.autoSizedBeam
+                          ? (config.coordinatedRefinement ? 85 : 95)
+                          : 80) / 100)
             : std::max<std::int64_t>(1,
-                  budget - budget / (config.autoSizedBeam ? 20 : 5));
+                  searchBudget * std::max<std::int64_t>(1, 90 - quantityPercent) / 100);
         beamConfig.safetyMarginMs = 0;
         beamConfig.useStateDeadline = false;
+        if ((config.quantityUpgrades || config.coordinatedRefinement) && config.autoSizedBeam) {
+            // Daily widths were calibrated for the whole budget. Scale them
+            // to the beam's actual slice so its first pass can still finish.
+            const double share = static_cast<double>(beamConfig.timeLimitMs) /
+                                 static_cast<double>(budget);
+            beamConfig.beamWidth = std::max<std::size_t>(1,
+                static_cast<std::size_t>(config.beamWidth * share));
+            beamConfig.jointBeamWidth = std::max<std::size_t>(1,
+                static_cast<std::size_t>(config.jointBeamWidth * share));
+        }
     }
     auto result = brain1Beam(setting, matchState, previousScore, beamConfig);
     if (!result.success) return result;
-    struct FutureCandidate {
-        DailyPlan plan;
-        GameState state;
-    };
-    std::vector<FutureCandidate> futureCandidates;
+    result.smallBoardBrandRescue = smallBoardTier;
+    std::vector<DayPlanCandidate> futureCandidates;
     bool changed = false;
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
     const auto remember = [&] {
-        if (!finalDay && config.compareNextDayPlans)
-            futureCandidates.push_back({result.plan, result.finalState});
+        if (!finalDay && (config.compareNextDayPlans || runDayBeam)) {
+            if (std::none_of(futureCandidates.begin(), futureCandidates.end(),
+                [&](const auto& old) { return old.state == result.finalState; }))
+                futureCandidates.push_back({result.plan, result.finalState});
+        }
     };
     remember();
     const bool runUdonAlns = config.useUdonAlns &&
@@ -3388,20 +3472,40 @@ inline BeamSearchResult brain1(
     const bool runSpotRouteLns = config.useSpotRouteLns &&
         (!config.spotRouteLns.finalDayOnly || finalDay);
     if (config.useBrandRepair && !config.exactBrands) {
-        auto repairDeadline = deadline;
+        const auto repairConfig = smallBoardTier
+            ? strengthenedSmallBoardBrandRepair(
+                  setting, result.finalState, config.brandRepair)
+            : config.brandRepair;
+        auto repairDeadline = brandDeadline;
         if (limited) {
             const auto now = Clock::now();
             const auto remaining =
-                std::max(Clock::duration::zero(), deadline - now);
-            repairDeadline = now +
-                (runUdonAlns ? remaining * 2 / 5 : remaining * 3 / 4);
+                std::max(Clock::duration::zero(), brandDeadline - now);
+            repairDeadline = now + (smallBoardTier
+                ? remaining * 3 / 5
+                : runUdonAlns ? remaining * 2 / 5 : remaining * 3 / 4);
         }
         const auto repair = repairDayBrands(setting, matchState, previousScore,
-            result.plan, config.brandRepair, repairDeadline);
+            result.plan, repairConfig, repairDeadline);
         result.brandRepairAttempts = repair.attempts;
         result.brandRepairExpanded = repair.expanded;
-        result.brandRepairImprovements = repair.improvements;
-        if (repair.improvements) {
+        bool acceptRepair = repair.improvements != 0;
+        if (acceptRepair && smallBoardTier && !finalDay &&
+            countBits(repair.finalState.score.matchBrands) ==
+                countBits(result.finalState.score.matchBrands)) {
+            std::vector<DijkstraTable> futureCache(setting.field.cellCount());
+            std::vector<bool> futureCached(setting.field.cellCount(), false);
+            const auto before = detail::futureRoutePotential(
+                setting, matchState, result.finalState,
+                futureCache, futureCached);
+            const auto after = detail::futureRoutePotential(
+                setting, matchState, repair.finalState,
+                futureCache, futureCached);
+            acceptRepair = after.reachableBrands >= before.reachableBrands &&
+                after.strandedPatrols <= before.strandedPatrols;
+        }
+        result.brandRepairImprovements = acceptRepair ? repair.improvements : 0;
+        if (acceptRepair) {
             result.plan = repair.plan;
             result.finalState = repair.finalState;
             changed = true;
@@ -3411,9 +3515,12 @@ inline BeamSearchResult brain1(
     // Establish the best reachable brand counts before optimizing quantity.
     // The quantity search below treats these counts as hard lower bounds, so a
     // larger udon total can never replace a plan with fewer brands.
+    const auto brandNodeLimit = config.exactBrands ? std::size_t{0} :
+        smallBoardTier ? std::max(config.brandSearchNodeLimit,
+            config.smallBoardBrandSearchNodeLimit) : config.brandSearchNodeLimit;
     const auto refined = maximizeDayBrands(setting, matchState, previousScore,
-        result.plan, config.exactBrands ? 0 : config.brandSearchNodeLimit,
-        deadline);
+        result.plan, brandNodeLimit,
+        brandDeadline);
     result.brandOptimal = refined.optimal;
     result.matchBrandUpperBound = refined.matchUpperBound;
     result.dailyBrandUpperBound = refined.dailyUpperBound;
@@ -3434,7 +3541,10 @@ inline BeamSearchResult brain1(
             routeDeadline = now +
                 std::max(Clock::duration::zero(), deadline - now) * 3 / 4;
         }
-        const auto legacyRouteDeadline = routeDeadline;
+        // Columns get their own share even if team LNS exhausts its budget.
+        const auto legacyRouteDeadline = (config.quantityUpgrades || config.coordinatedRefinement) && limited && routeColumnsActive
+            ? Clock::now() + std::max(Clock::duration::zero(),
+                routeDeadline - Clock::now()) * 2 / 3 : routeDeadline;
         if (config.spotRouteLns.spotPortfolio && Clock::now() < legacyRouteDeadline) {
             const auto now = Clock::now();
             const auto portfolioDeadline = now +
@@ -3444,6 +3554,9 @@ inline BeamSearchResult brain1(
                  pass < hardnessWeights.size() && Clock::now() < portfolioDeadline;
                  ++pass) {
                 auto portfolioConfig = config.spotRouteLns;
+                // Keep the established fast proposal as well as the richer
+                // transit/refuel model: their finite beams explore different routes.
+                portfolioConfig.reflectTransit = pass != 0 && config.spotRouteLns.reflectTransit;
                 portfolioConfig.spotPortfolioHardnessWeight = hardnessWeights[pass];
                 const auto maxPortfolioWidth = setting.field.cellCount() >= 1024
                     ? std::size_t{512} : std::size_t{2048};
@@ -3527,9 +3640,23 @@ inline BeamSearchResult brain1(
         }
     }
     if (runUdonAlns) {
+        const auto normalDeadline = config.quantityUpgrades && limited && finalDay && config.udonAlns.expandedPortfolio
+            ? Clock::now() + std::max(Clock::duration::zero(),
+                deadline - Clock::now()) / 2 : deadline;
         auto improved = improveDayUdon(setting, matchState, previousScore,
-            result.plan, config.udonAlns, deadline);
-        if (finalDay && config.udonAlns.expandedPortfolio &&
+            result.plan, config.udonAlns, normalDeadline);
+        const bool reachedBrandBound =
+            countBits(improved.finalState.score.matchBrands) >=
+                result.matchBrandUpperBound &&
+            countBits(improved.finalState.dayBrands) >=
+                result.dailyBrandUpperBound;
+        // Large-board leaders already saturate both brand objectives. Use any
+        // time left by the bounded normal ALNS for an independent, wider
+        // neighborhood. Both passes start from the same incumbent and the
+        // official lexicographic score chooses the returned plan.
+        const bool expandedQuantityPortfolio = config.udonAlns.expandedPortfolio &&
+            (finalDay || (setting.field.width >= 24 && reachedBrandBound));
+        if (expandedQuantityPortfolio &&
             Clock::now() < deadline) {
             auto expandedConfig = config.udonAlns;
             expandedConfig.maxAttempts = std::max<std::size_t>(
@@ -3538,6 +3665,11 @@ inline BeamSearchResult brain1(
                 expandedConfig.nodesPerAttempt, 1600);
             expandedConfig.maxPatrols = std::max<std::size_t>(
                 expandedConfig.maxPatrols, 3);
+            // A proxy for tomorrow is not strong enough to justify changing
+            // the endpoint in the extra quantity pass. Intermediate-day
+            // alternatives must finish with exactly the incumbent positions
+            // and fuel; the final day has no downstream state to protect.
+            expandedConfig.allowFuturePositionChange = finalDay;
             expandedConfig.expandedPortfolio = false;
             const auto expanded = improveDayUdon(
                 setting, matchState, previousScore, result.plan,
@@ -3567,7 +3699,71 @@ inline BeamSearchResult brain1(
             remember();
         }
     }
-    if (!finalDay && config.compareNextDayPlans &&
+    if (runDayBeam && Clock::now() < hardDeadline) {
+        const auto futureDeadline = limited ? hardDeadline - std::chrono::milliseconds(overnightMs) :
+            Clock::now() + std::chrono::milliseconds(dayBeamMs);
+        auto probe = config;
+        probe.refineBrands = false;
+        probe.exactBrands = false;
+        probe.useDayBeam = false;
+        probe.compareNextDayPlans = false;
+        probe.comparePeriodicReplanPlans = false;
+        probe.iterativeDeepening = false;
+        probe.autoTuneWeights = false;
+        probe.useStateDeadline = false;
+        probe.safetyMarginMs = 0;
+        probe.threadCount = 1;
+        probe.beamWidth = 16;
+        probe.jointBeamWidth = 64;
+        const auto runProbe = [&](const MatchState& state, ScoreState score, int variant,
+                                  Clock::time_point end) {
+            auto p = probe;
+            if (variant == 1) {
+                p.weights.nextDayBrand *= 4;
+                p.weights.nextDayUdon *= 4;
+                p.weights.nextDayBrandApproach *= 4;
+            } else if (variant == 2) {
+                p.weights.remainingFuel *= 100;
+                p.weights.fuelRisk *= 4;
+            }
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(end - Clock::now()).count();
+            if (left <= 0) return BeamSearchResult{};
+            p.timeLimitMs = left;
+            return Brain1::search(setting, state, score, p);
+        };
+        const auto generationDeadline = Clock::now() + (futureDeadline - Clock::now()) / 4;
+        for (int variant = 0; variant < 3 && Clock::now() < generationDeadline; ++variant) {
+            const auto end = Clock::now() + (generationDeadline - Clock::now()) / (3 - variant);
+            auto alternative = runProbe(matchState, previousScore, variant, end);
+            if (alternative.success && brandScore(alternative.finalState) == brandScore(result.finalState))
+                futureCandidates.push_back({std::move(alternative.plan), alternative.finalState});
+        }
+        // The immediate winner must remain a root even when no refiner improved.
+        remember();
+        futureCandidates.erase(std::remove_if(futureCandidates.begin(), futureCandidates.end(),
+            [&](const auto& c) {
+                return brandScore(c.state) != brandScore(result.finalState) ||
+                    static_cast<std::int64_t>(c.state.score.totalUdon) +
+                        std::max(0, config.dayBeamMaxUdonLoss) < result.finalState.score.totalUdon;
+            }),
+            futureCandidates.end());
+        retainDayCandidates(futureCandidates, std::clamp<std::size_t>(config.dayBeamWidth, 2, 8),
+                            setting, matchState);
+        result.dayBeamCandidates = futureCandidates.size();
+        if (futureCandidates.size() > 1) {
+            const auto future = searchFutureDays(setting, matchState, futureCandidates,
+                std::clamp<std::size_t>(config.dayBeamWidth, 2, 8),
+                std::min<std::size_t>(config.dayBeamDepth, 3), futureDeadline, runProbe);
+            result.dayBeamExpanded = future.expanded;
+            result.dayBeamComplete = future.complete;
+            if (future.complete) {
+                result.plan = futureCandidates[future.selected].plan;
+                result.finalState = futureCandidates[future.selected].state;
+                changed = true;
+            }
+        }
+    }
+    if (!runDayBeam && !finalDay && config.compareNextDayPlans &&
         futureCandidates.size() > 1 &&
         deadline - Clock::now() > std::chrono::milliseconds(
             500 + 2 * std::max<std::int64_t>(1, config.nextDayProbeMs) *
@@ -3634,6 +3830,18 @@ inline BeamSearchResult brain1(
         if (haveProbe) {
             result.plan = std::move(futureCandidates[bestIndex].plan);
             result.finalState = futureCandidates[bestIndex].state;
+            changed = true;
+        }
+    }
+    if (overnight && Clock::now() < hardDeadline) {
+        const auto tailDeadline = limited ? hardDeadline : Clock::now() + std::chrono::milliseconds(overnightMs);
+        const auto prepared = improveOvernightPosition(
+            setting, matchState, previousScore, result.plan, tailDeadline);
+        result.overnightAttempts = prepared.attempts;
+        result.overnightImprovements = prepared.improvements;
+        if (prepared.improvements) {
+            result.plan = prepared.plan;
+            result.finalState = prepared.state;
             changed = true;
         }
     }

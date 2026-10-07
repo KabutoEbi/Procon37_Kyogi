@@ -22,6 +22,7 @@ struct RouteColumnConfig {
     std::size_t maxVisits = 14;
     std::size_t maxMasterNodes = 150000;
     bool supplyRendezvous = true;
+    std::size_t maxSupplySchedules = 8;
 };
 
 struct RouteColumnResult {
@@ -134,6 +135,78 @@ inline RouteColumnResult searchRouteColumns(
         }
     }
 
+    // Joint neighbourhood: move a supply to timed patrol meetings, then
+    // regenerate every patrol's columns under that new fuel timeline.
+    if (config.supplyRendezvous && !supplies.empty() &&
+        supplySchedules.size() < config.maxSupplySchedules) {
+        const auto trace = detail::repairTrace(setting, matchState, previous, incumbent,
+            [&] { return Clock::now() >= deadline; });
+        struct Meeting { CellPos pos; int time; int demand; };
+        std::vector<Meeting> meetings;
+        for (std::size_t t = 1; t < trace.checkpoints.size(); t += 2) {
+            const auto& state = trace.checkpoints[t].state;
+            for (const auto p : patrols) {
+                const auto pos = state.agents[p].pos;
+                int demand = 0;
+                for (const auto q : patrols)
+                    if (state.agents[q].pos == pos)
+                        demand += setting.fuelLimit - state.agents[q].fuel;
+                if (demand > 0) meetings.push_back({pos, static_cast<int>(t), demand});
+            }
+        }
+        // Prefer fuel delivered while there is still useful working time.
+        // Sorting only by missing fuel repeatedly targeted late, stranded cars.
+        std::stable_sort(meetings.begin(), meetings.end(), [steps](const auto& a, const auto& b) {
+            return std::make_tuple(1LL * a.demand * (steps - a.time + 1), -a.time) >
+                   std::make_tuple(1LL * b.demand * (steps - b.time + 1), -b.time);
+        });
+        for (const auto supply : supplies) {
+            if (Clock::now() >= deadline) break;
+            const auto table = Brain0::dijkstra(setting, matchState, matchState.agents[supply].pos);
+            for (const auto& first : meetings) for (int keepPrefix = 0; keepPrefix < 2; ++keepPrefix) {
+                if (supplySchedules.size() >= config.maxSupplySchedules || Clock::now() >= deadline) break;
+                AgentPlan plan;
+                const int cut = keepPrefix ? first.time / 2 : 0;
+                const auto& cp = trace.checkpoints[static_cast<std::size_t>(cut)];
+                const auto& pending = cp.state.pendingActions[supply];
+                if (pending.isMove()) continue;
+                if (cut > 0) {
+                    plan.assign(incumbent[supply].begin(), incumbent[supply].begin() + cp.cursors[supply]);
+                    if (pending.isWait()) {
+                        const int elapsed = -plan.back() - pending.remainingSteps;
+                        if (elapsed > 0) plan.back() = -elapsed;
+                        else plan.pop_back();
+                    }
+                }
+                const auto prefixTable = cut > 0 ? Brain0::dijkstra(setting, matchState,
+                    cp.state.agents[supply].pos) : table;
+                const auto path = Brain0::restorePath(setting, prefixTable, first.pos, AgentKind::Supply);
+                if (!path.reachable || cut + path.cost.steps > first.time || first.time >= steps) continue;
+                for (const auto d : path.directions) plan.push_back(static_cast<int>(d));
+                int time = std::min(steps, first.time + 1);
+                if (time > cut + path.cost.steps) plan.push_back(cut + path.cost.steps - time);
+                const auto onward = Brain0::dijkstra(setting, matchState, first.pos);
+                for (const auto& second : meetings) {
+                    if (second.pos == first.pos || second.time <= time) continue;
+                    const auto next = Brain0::restorePath(setting, onward, second.pos, AgentKind::Supply);
+                    if (!next.reachable || time + next.cost.steps > second.time) continue;
+                    for (const auto d : next.directions) plan.push_back(static_cast<int>(d));
+                    time += next.cost.steps;
+                    const int leave = std::min(steps, second.time + 1);
+                    if (leave > time) plan.push_back(time - leave);
+                    time = leave;
+                    break;
+                }
+                if (time < steps) plan.push_back(time - steps);
+                if (std::any_of(supplySchedules.begin(), supplySchedules.end(),
+                    [&](const auto& old) { return old[supply] == plan; })) continue;
+                auto schedule = incumbent;
+                schedule[supply] = std::move(plan);
+                supplySchedules.push_back(std::move(schedule));
+            }
+        }
+    }
+
     const auto scoreOf = [&](const GameState& state) {
         return detail::columnScore(previous.matchBrands, state.dayBrands,
                                    state.score.totalUdon);
@@ -161,6 +234,7 @@ inline RouteColumnResult searchRouteColumns(
             candidate, futureCache, futureCached);
         const int extra = candidate.score.totalUdon - initial.state.score.totalUdon;
         return future.reachableBrands >= initialFuture.reachableBrands &&
+            future.strandedPatrols <= initialFuture.strandedPatrols &&
             future.distanceSum <= initialFuture.distanceSum + 16 + 8 * extra &&
             future.patrolFuel >= initialFuture.patrolFuel - 20 - 30 * extra;
     };

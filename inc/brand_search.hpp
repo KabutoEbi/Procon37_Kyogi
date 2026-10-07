@@ -69,6 +69,7 @@ struct BrandNeighborhood {
     bool maximizeUdon = false;
     bool exactBrandMasks = false;
     bool preserveBrandCounts = false;
+    bool jointSupplyPriorities = false;
     const std::vector<std::vector<int>>* actionsAtStep = nullptr;
     const std::vector<std::vector<int>>* actionStarts = nullptr;
 };
@@ -252,12 +253,29 @@ inline BrandSearchResult maximizeDayBrands(
             } else if (neighborhood) {
                 // Let the supply approach the rescue car. A unit
                 // wait at a shared cell preserves the next refuel opportunity.
-                const auto& patrol = state.agents[neighborhood->primary];
                 const auto coord = setting.field.toCoord(pos);
-                const auto patrolCoord = setting.field.toCoord(patrol.pos);
-                priority = 4 * (std::abs(coord.x - patrolCoord.x) +
-                                std::abs(coord.y - patrolCoord.y));
-                if (pos == patrol.pos && action == -1) priority = -1;
+                if (!neighborhood->jointSupplyPriorities) {
+                    const auto& patrol = state.agents[neighborhood->primary];
+                    const auto patrolCoord = setting.field.toCoord(patrol.pos);
+                    priority = 4 * (std::abs(coord.x - patrolCoord.x) +
+                                    std::abs(coord.y - patrolCoord.y));
+                    if (pos == patrol.pos && action == -1) priority = -1;
+                } else {
+                    for (AgentIndex p = 0; p < state.agentCount; ++p) {
+                        if (!state.agents[p].isPatrol() || !neighborhood->freeAgents[p])
+                            continue;
+                        const auto& patrol = state.agents[p];
+                        const auto& pending = state.pendingActions[p];
+                        const auto target = pending.isMove() ? pending.destination : patrol.pos;
+                        const auto patrolCoord = setting.field.toCoord(target);
+                        const int distance = std::abs(coord.x - patrolCoord.x) +
+                                             std::abs(coord.y - patrolCoord.y);
+                        const int need = setting.fuelLimit - patrol.fuel;
+                        int value = 4 * distance - 8 * need / std::max(1, setting.fuelLimit);
+                        if (pos == patrol.pos && action == -1 && need > 0) value -= 8;
+                        priority = std::min(priority, value);
+                    }
+                }
             }
             actions.emplace_back(priority, action);
         }

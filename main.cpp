@@ -125,6 +125,19 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " safety-margin-ms=" << config.safetyMarginMs
               << " auto-beam-width=" << (config.autoSizedBeam ? 1 : 0)
               << " route-columns=" << (config.routeColumns.enabled ? 1 : 0)
+              << " quantity-budget-percent=" << config.quantityBudgetPercent
+              << " quantity-upgrades=" << (config.quantityUpgrades ? 1 : 0)
+              << " coordinated-refinement=" << (config.coordinatedRefinement ? 1 : 0)
+              << " small-board-brand-rescue="
+              << (config.adaptiveSmallBoardBrandRescue ? 1 : 0)
+              << " small-board-beam-budget-percent="
+              << config.smallBoardBeamBudgetPercent
+              << " small-board-brand-node-limit="
+              << config.smallBoardBrandSearchNodeLimit
+              << " day-beam=" << (config.quantityUpgrades && config.useDayBeam ? 1 : 0)
+              << " day-beam-width=" << config.dayBeamWidth
+              << " day-beam-depth=" << config.dayBeamDepth
+              << " day-beam-max-udon-loss=" << config.dayBeamMaxUdonLoss
               << '\n';
 
     const auto result = solveDay(setting, state, score, config);

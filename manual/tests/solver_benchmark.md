@@ -2,6 +2,21 @@
 
 対象: [`tests/solver_benchmark.cpp`](../../tests/solver_benchmark.cpp)
 
+`--no-coordinated-refinement` で終端再配置・先回り補給・時間配分の追加を切り分けられる。共通の燃料付き翌日評価は残るので、完全な旧版比較には変更前のバイナリを使用する。
+
+## 保存済みの日次状態を再探索
+
+`saved_day_benchmark` は過去の `endsAt` だけを無効化して、保存時点の位置・燃料・交通・得点から探索する。`runtime` への書込みやサーバー送信は行わない。出力計画はシミュレータで再検証する。
+
+```sh
+make .build/tools/saved_day_benchmark
+.build/tools/saved_day_benchmark \
+  runtime/logs/20261003-140003-405057000-get-setting.json \
+  runtime/state-day3.json runtime/score-day3.json 50000
+```
+
+引数は設定、開始状態、前日までの得点（初日は `-` 可）、時間上限ms（省略時50000）、追加改善の有効化0/1（省略時既定値）。設定は現在の `runtime/setting.json` ではなく、その試合の保存設定を指定すること。
+
 複数サイズ・複数シード・複数回の実行で、探索改善の有無による全日程の得点と速度を比較する。種別は巡回車と補給車1台に固定し、種別選択の差を混ぜない。
 
 2026-09-27の計測結果は[比較記録](benchmark-results-2026-09-27.md)を参照。
@@ -53,8 +68,11 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `repair_attempts`, `repair_expanded`, `repair_improvements`: 系列救済の試行数、状態展開数、採用数。採用数は全車探索前のビーム計画に対する改善数であり、従来の全車探索より勝った試合数とは異なる
 - `alns_attempts`, `alns_expanded`, `alns_improvements`: 系列マスク固定ALNSの試行数、状態展開数、玉数改善の採用数
 - `route_columns_generated`, `route_columns_master_nodes`, `route_columns_improvements`: 巡回車別の経路候補数、在庫制約付き組合せ探索の訪問ノード数、採用改善数
+- `day_beam_candidates`, `day_beam_expanded`, `day_beam_complete`: 日跨ぎ候補数、将来の日次探索回数、全候補比較完了
 
 `no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流、拡張ALNSポートフォリオをまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`、`no-expanded-alns`は各機能のアブレーションに使う。
+
+`--quantity-upgrades`で新しい5項目を有効化する（CLI本体と違い値なしのベンチ用フラグ）。`--no-day-beam`は日跨ぎ先読みを無効化する。`--keep-beam-iterations`は系列上限での早期終了を無効化する。`--quantity-budget-percent N`（1〜90）は玉数用の予約割合を変更し、時間配分の切り分けに使う。これら3つの調整は`--quantity-upgrades`と併用する。
 
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 

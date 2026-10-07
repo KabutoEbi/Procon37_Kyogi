@@ -30,6 +30,8 @@
 - [`spot_route_lns.hpp`](spot_route_lns.md): スポット単位ビームと複数巡回車の訪問列再編
 - [`route_column_search.hpp`](route_column_search.md): 巡回車別の経路候補生成と在庫制約付き組合せ探索
 - [`udon_alns.hpp`](udon_alns.md): 系列を固定して玉数を増やす適応的大規模近傍探索
+- [`overnight_refinement.hpp`](overnight_refinement.md): 当日得点を保った翌日向け終端再配置
+- [`day_beam.hpp`](day_beam.md): 当日候補の多様性保持と限定的な複数日先読み
 - [`agent_selector.hpp`](agent_selector.md): 中心補給台数・交通シナリオを使うエージェント種別の自動選択
 - [`evaluation.hpp`](evaluation.md): 状態評価
 - [`search_state.hpp`](search_state.md): 探索状態の正規化と優越判定

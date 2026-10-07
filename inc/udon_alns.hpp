@@ -19,6 +19,7 @@ struct UdonAlnsConfig {
     std::size_t improvementBonusAttempts = 4;
     std::size_t nodesPerAttempt = 800;
     std::size_t maxPatrols = 2;
+    bool reallocateStock = true;
     // 中間日は系列マスクを固定し、終端位置・燃料を翌日到達性で制限する。
     bool finalDayOnly = false;
     bool preserveIntermediateState = true;
@@ -69,6 +70,7 @@ inline UdonAlnsResult improveDayUdon(
                 s, ms, candidate, futureCache, futureCached);
             const int extra = candidate.score.totalUdon - result.finalState.score.totalUdon;
             return future.reachableBrands >= initialFuture.reachableBrands &&
+                future.strandedPatrols <= initialFuture.strandedPatrols &&
                 future.distanceSum <= initialFuture.distanceSum + 16 + 8 * extra &&
                 future.patrolFuel >= initialFuture.patrolFuel - 20 - 30 * extra;
         }
@@ -137,7 +139,10 @@ inline UdonAlnsResult improveDayUdon(
 
         const AgentIndex primary = patrols[
             (result.attempts + opIndex) % patrols.size()];
-        const std::array<int, 4> cutNumerators{{3, 2, 1, 0}};
+        // Joint reallocation needs an early cut before either car consumes stock.
+        const std::array<int, 4> cutNumerators = config.reallocateStock && op.patrolCount > 1
+            ? std::array<int, 4>{{0, 2, 3, 1}}
+            : std::array<int, 4>{{3, 2, 1, 0}};
         const int cutStep = result.finalState.dayStepLimit *
             cutNumerators[(op.uses - 1) % cutNumerators.size()] / 4;
         const auto& cp = trace.checkpoints[static_cast<std::size_t>(std::min(
@@ -159,6 +164,9 @@ inline UdonAlnsResult improveDayUdon(
         neighborhood.actionsAtStep = &trace.actionsAtStep;
         neighborhood.actionStarts = &trace.starts;
         neighborhood.freeAgents[primary] = true;
+        neighborhood.jointSupplyPriorities = config.reallocateStock;
+
+        const auto& targetState = config.reallocateStock ? cp.state : result.finalState;
 
         if (op.patrolCount > 1) {
             std::vector<std::pair<int, AgentIndex>> opportunities;
@@ -166,8 +174,8 @@ inline UdonAlnsResult improveDayUdon(
                 if (other == primary) continue;
                 int opportunity = 0;
                 for (std::size_t spot = 0; spot < s.field.spots.size(); ++spot) {
-                    if (result.finalState.remainingStocks[spot] > 0 &&
-                        !(result.finalState.acquiredSpots[other] & spotBit(spot)))
+                    if (targetState.remainingStocks[spot] > 0 &&
+                        !(targetState.acquiredSpots[other] & spotBit(spot)))
                         ++opportunity;
                 }
                 opportunities.emplace_back(-opportunity, other);
@@ -209,8 +217,10 @@ inline UdonAlnsResult improveDayUdon(
             }
             if (neighborhood.freeAgents[a] && ms.agents[a].isPatrol()) {
                 for (std::size_t spot = 0; spot < s.field.spots.size(); ++spot) {
-                    if (!(result.finalState.acquiredSpots[a] & spotBit(spot)) &&
-                        result.finalState.remainingStocks[spot] > 0)
+                    // start already contains the stock at the cut: do not add
+                    // stock again. Freed suffix acquisitions can change owner.
+                    if (!(targetState.acquiredSpots[a] & spotBit(spot)) &&
+                        targetState.remainingStocks[spot] > 0)
                         neighborhood.targetSpots |= spotBit(spot);
                 }
             } else if (!neighborhood.freeAgents[a]) {

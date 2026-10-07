@@ -506,6 +506,9 @@ public:
         beam.iterativeDeepening = false;
         // 種別候補の比較では経路方式を増やさず、配置間へ同じ探索量を使う。
         beam.comparePeriodicReplanPlans = false;
+        // Trials already simulate all days/scenarios; nested forecasting would
+        // spend the assignment budget twice and bias partially completed trials.
+        beam.useDayBeam = false;
         auto scenarios = cfg.trialScenarios.empty()
             ? makeTrialScenarios(s, cfg.trialScenarioCount)
             : cfg.trialScenarios;

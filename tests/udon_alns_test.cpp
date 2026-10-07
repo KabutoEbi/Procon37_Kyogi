@@ -159,7 +159,27 @@ void checkRandomValidityAndPreservedBrandCounts() {
 }
 }  // namespace
 
+void checkReassignConsumedStock() {
+    const auto s = line(6, 6, {2, 4},
+        {{0, 0, 1, -1}, {0, 3, 1, -1}, {0, 5, 1, -1}});
+    const auto ms = stateFor(s, {AgentKind::Patrol, AgentKind::Patrol});
+    const DailyPlan incumbent{{2, 2, 2}, {-6}};
+    const auto before = simulateDay(s, ms, incumbent);
+    assert(before.valid && before.state.dayUdon == 2);
+    UdonAlnsConfig cfg;
+    cfg.nodesPerAttempt = 12000;
+    cfg.maxAttempts = 24;
+    const auto result = improveDayUdon(s, ms, {}, incumbent, cfg,
+        std::chrono::steady_clock::time_point::max());
+    assert(result.finalState.dayUdon == 3);
+    assert(result.finalState.dayBrands == before.state.dayBrands);
+    assert((result.finalState.acquiredSpots[1] & spotBit(1)) != 0);
+    const auto replay = simulateDay(s, ms, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
 int main() {
+    checkReassignConsumedStock();
     checkSameBrandExtraUdon();
     checkBrainMaximizesBrandsBeforeUdon();
     checkIntermediateDayPreservesFutureState();

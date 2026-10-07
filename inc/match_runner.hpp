@@ -39,6 +39,9 @@ struct MatchDayResult {
     std::size_t spotRouteLnsAttempts = 0, spotRouteLnsImprovements = 0;
     std::size_t routeColumnsGenerated = 0, routeColumnsMasterNodes = 0;
     std::size_t routeColumnsImprovements = 0;
+    std::size_t dayBeamExpanded = 0, dayBeamCandidates = 0;
+    std::size_t overnightAttempts = 0, overnightImprovements = 0;
+    bool dayBeamComplete = false;
     std::int64_t assignmentTimeNs = 0, flowTimeNs = 0, rendezvousTimeNs = 0;
     SearchStopReason stopReason = SearchStopReason::NoValidPlan;
 };
@@ -211,6 +214,11 @@ public:
             record.routeColumnsGenerated = search.routeColumnsGenerated;
             record.routeColumnsMasterNodes = search.routeColumnsMasterNodes;
             record.routeColumnsImprovements = search.routeColumnsImprovements;
+            record.dayBeamExpanded = search.dayBeamExpanded;
+            record.overnightAttempts = search.overnightAttempts;
+            record.overnightImprovements = search.overnightImprovements;
+            record.dayBeamCandidates = search.dayBeamCandidates;
+            record.dayBeamComplete = search.dayBeamComplete;
             record.assignmentTimeNs = search.assignmentTimeNs;
             record.flowTimeNs = search.flowTimeNs;
             record.rendezvousTimeNs = search.rendezvousTimeNs;

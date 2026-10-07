@@ -18,6 +18,11 @@ int main(int argc, char** argv) {
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
     bool compareBrandRepair = false, compareUdonAlns = false, compareSpotRouteLns = false;
     bool compareRouteColumns = false;
+    bool noDayBeam = false;
+    bool quantityUpgrades = false;
+    bool noCoordinatedRefinement = false;
+    bool keepBeamIterations = false;
+    int quantityBudgetPercent = -1;
     std::string variant = "improved";
     try {
         for (int i = 1; i < argc; ++i) {
@@ -26,6 +31,10 @@ int main(int argc, char** argv) {
             if (option == "--tight-fuel") { tightFuel = true; continue; }
             if (option == "--no-completion") { noCompletion = true; continue; }
             if (option == "--current-only") { currentOnly = true; continue; }
+            if (option == "--no-day-beam") { noDayBeam = true; continue; }
+            if (option == "--quantity-upgrades") { quantityUpgrades = true; continue; }
+            if (option == "--no-coordinated-refinement") { noCoordinatedRefinement = true; continue; }
+            if (option == "--keep-beam-iterations") { keepBeamIterations = true; continue; }
             if (option == "--single-day") { singleDay = true; continue; }
             if (option == "--mixed-traffic") { mixedTraffic = true; continue; }
             if (option == "--fixed-work") { fixedWork = true; continue; }
@@ -50,6 +59,7 @@ int main(int argc, char** argv) {
             else if (option == "--spots") spotOnly = number;
             else if (option == "--brands") brandOnly = number;
             else if (option == "--days") dayOnly = number;
+            else if (option == "--quantity-budget-percent" && number <= 90) quantityBudgetPercent = number;
             else throw std::invalid_argument("unknown option");
         }
         if (seedStart > std::numeric_limits<int>::max() - seeds)
@@ -101,7 +111,7 @@ int main(int argc, char** argv) {
         std::map<std::string, Summary> summaries;
         using Score = std::tuple<int, int, int>;
         int wins = 0, ties = 0, losses = 0;
-        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements\n";
+        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements,day_beam_candidates,day_beam_expanded,day_beam_complete\n";
         for (const int size : {8, 16, 24, 32}) {
             if (sizeOnly != 0 && size != sizeOnly) continue;
             for (int seed = seedStart; seed - seedStart < seeds; ++seed) {
@@ -127,6 +137,11 @@ int main(int argc, char** argv) {
                     for (const auto& name : order) {
                         MatchRunnerConfig config;
                         auto& beam = config.beam;
+                        beam.quantityUpgrades = quantityUpgrades;
+                        beam.coordinatedRefinement = !noCoordinatedRefinement;
+                        beam.useDayBeam = !noDayBeam;
+                        beam.stopBeamAtBrandUpperBound = !keepBeamIterations;
+                        if (quantityBudgetPercent > 0) beam.quantityBudgetPercent = quantityBudgetPercent;
                         beam.useBrandRepair = name != "no-brand-repair" && name != "baseline";
                         beam.useUdonAlns = name != "no-udon-alns" && name != "baseline";
                         beam.coordinatedAssignments = name != "baseline" && name != "no-coordination";
@@ -231,7 +246,9 @@ int main(int argc, char** argv) {
                                 << day.udonAlnsImprovements << ','
                                 << day.routeColumnsGenerated << ','
                                 << day.routeColumnsMasterNodes << ','
-                                << day.routeColumnsImprovements << '\n';
+                                << day.routeColumnsImprovements << ','
+                                << day.dayBeamCandidates << ',' << day.dayBeamExpanded << ','
+                                << day.dayBeamComplete << '\n';
                             if (!valid) return 1;
                             previous = day.endState.score;
                             elapsed += day.elapsedMs;

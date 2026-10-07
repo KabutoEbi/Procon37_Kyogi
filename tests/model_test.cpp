@@ -266,6 +266,7 @@ void testBeamSearch() {
     iterativeCfg.minimumJointBeamWidth = 1;
     iterativeCfg.adaptiveBeamWidth = false;
     iterativeCfg.comparePeriodicReplanPlans = false;
+    iterativeCfg.stopBeamAtBrandUpperBound = false;
     const auto onePass = brain1Pass(s, st, {}, iterativeCfg);
     iterativeCfg.timeLimitMs = 100;
     iterativeCfg.safetyMarginMs = 0;

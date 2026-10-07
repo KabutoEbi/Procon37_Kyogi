@@ -14,12 +14,12 @@ TEST_DIR := $(BUILD_DIR)/tests
 SAN_DIR := $(BUILD_DIR)/sanitize
 TOOL_DIR := $(BUILD_DIR)/tools
 COMMON_FLAGS := -std=c++17 -pthread -Iinc
-CORE_TESTS := model_test algorithm_test solver_options_test brand_search_test brand_repair_test udon_alns_test spot_route_lns_test
+CORE_TESTS := model_test algorithm_test solver_options_test brand_search_test brand_repair_test udon_alns_test spot_route_lns_test quantity_search_test
 CPP_TESTS := $(CORE_TESTS) official_qa_test property_test sample_maps_test
 TEST_BINS := $(addprefix $(TEST_DIR)/,$(CPP_TESTS))
 SAN_TESTS := $(CORE_TESTS) official_qa_test property_test
 SAN_BINS := $(addprefix $(SAN_DIR)/,$(SAN_TESTS))
-TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark agent_selection_benchmark tune_weights arena_benchmark beam_width_probe)
+TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark agent_selection_benchmark tune_weights arena_benchmark beam_width_probe saved_day_benchmark)
 PY_ENV = PYTHONPYCACHEPREFIX="$(abspath $(BUILD_DIR)/pycache)" PROCON_TEST_SOLVER="$(abspath main)"
 
 .PHONY: all release tools test test-core test-cpp test-python test-samples test-property test-official-qa \
@@ -48,8 +48,12 @@ $(BUILD_DIR) $(TEST_DIR) $(SAN_DIR) $(TOOL_DIR):
 
 # Normal regression suite: no GUI, real server, or external network.
 test: test-cpp test-python
-test-core: test-model test-algorithm test-options test-brands test-brand-repair test-udon-alns test-spot-route-lns test-official-qa test-property test-python
-test-cpp: test-model test-algorithm test-options test-brands test-brand-repair test-udon-alns test-spot-route-lns test-official-qa test-property test-samples
+test-core: test-model test-algorithm test-options test-brands test-brand-repair test-udon-alns test-spot-route-lns test-quantity-search test-official-qa test-property test-python
+test-cpp: test-model test-algorithm test-options test-brands test-brand-repair test-udon-alns test-spot-route-lns test-quantity-search test-official-qa test-property test-samples
+
+.PHONY: test-quantity-search
+test-quantity-search: $(TEST_DIR)/quantity_search_test
+	$(TEST_DIR)/quantity_search_test
 
 test-model: $(TEST_DIR)/model_test
 	$(TEST_DIR)/model_test
@@ -97,6 +101,7 @@ test-sanitize: $(SAN_BINS)
 	$(SAN_DIR)/brand_repair_test
 	$(SAN_DIR)/udon_alns_test
 	$(SAN_DIR)/spot_route_lns_test
+	$(SAN_DIR)/quantity_search_test
 	$(SAN_DIR)/official_qa_test
 	$(SAN_DIR)/property_test
 test-all: test test-gui test-server test-sanitize

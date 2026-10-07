@@ -17,11 +17,12 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 | `make` / `make release` | ソルバーの最適化ビルド |
 | `make test` | C++モデル・探索・引数・3サイズサンプル、Pythonバックエンド・復旧・起動環境。実ソルバーとの4日間連携も実行 |
 | `make test-core` | サンプルJSONを必要としないC++・Pythonテスト |
-| `make test-cpp` | C++9テスト（系列最大化・連鎖再計画・玉数ALNS・公式Q&A・プロパティ・サンプルを含む） |
+| `make test-cpp` | C++11テスト（系列最大化・連鎖再計画・玉数ALNS・日跨ぎ候補・公式Q&A・プロパティ・サンプルを含む） |
 | `make test-brands` | 系列最大化を独立した全列挙と照合し、ビームの取りこぼし補完を検証 |
 | `make test-brand-repair` | 役割交換、補給、固定行動、巻き戻しの系列救済を検証 |
 | `make test-udon-alns` | 系列マスクを固定したALNSの玉数改善と非退行を検証 |
-| `make test-python` | Python 36テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
+| `make test-quantity-search` | 途中取得、時刻付き補給、日跨ぎ候補と中断時の元計画保持を検証 |
+| `make test-python` | Python 38テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |
 | `make test-sanitize` | モデル・探索・引数・公式Q&A・プロパティテストをASan/UBSanでビルド・実行 |
@@ -34,6 +35,8 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 2026-10-04時点で`make test`、`make test-sanitize`、`make test-python`の成功を確認している。`make test-python`はPython 36件を実行する。`make test-gui`はデスクトップと対応Tkを持つ環境で別途実行し、同日時点で1件の成功を確認している。
 
 2026-10-05の経路候補組合せ追加後には`make test-core`が成功した。追加した`spot_route_lns_test`の経路候補組合せテストはASan/UBSanでも通過した。この変更について`make test`・`make test-sanitize`全体やGUI実画面を再実行したという意味ではない。
+
+2026-10-07の協調改善と公開得点追跡改善後に、`make test`（C++ 11テスト、公開3サイズ、Python 38件）、`make test-sanitize`（C++ 10テスト）、`git diff --check`が成功した。GUI実画面と簡易サーバーはこの変更後に再実行していない。
 
 ## コンパイラ等の指定
 

@@ -12,6 +12,36 @@ benzen::SolverOptions parse(std::vector<std::string> values) {
 }
 
 int main() {
+    assert(parse({"main"}).beam.coordinatedRefinement);
+    assert(!parse({"main", "--coordinated-refinement", "0"}).beam.coordinatedRefinement);
+    assert(parse({"main"}).beam.adaptiveSmallBoardBrandRescue);
+    const auto smallRescue = parse({"main", "--small-board-brand-rescue", "0",
+        "--small-board-beam-budget-percent", "80",
+        "--small-board-brand-node-limit", "150000"});
+    assert(!smallRescue.beam.adaptiveSmallBoardBrandRescue);
+    assert(smallRescue.beam.smallBoardBeamBudgetPercent == 80);
+    assert(smallRescue.beam.smallBoardBrandSearchNodeLimit == 150000);
+    assert(!parse({"main"}).beam.quantityUpgrades);
+    assert(parse({"main", "--quantity-upgrades", "1"}).beam.quantityUpgrades);
+    assert(parse({"main", "--day-beam", "1"}).beam.quantityUpgrades);
+    const auto quantity = parse({"main", "--day-beam", "0", "--day-beam-width", "6",
+        "--day-beam-depth", "3", "--quantity-budget-percent", "30",
+        "--day-beam-max-udon-loss", "0"});
+    assert(!quantity.beam.useDayBeam && quantity.beam.dayBeamWidth == 6);
+    assert(quantity.beam.dayBeamDepth == 3 && quantity.beam.quantityBudgetPercent == 30);
+    assert(quantity.beam.dayBeamMaxUdonLoss == 0);
+    for (const auto& args : std::vector<std::vector<std::string>>{
+        {"main", "--coordinated-refinement", "2"},
+        {"main", "--small-board-brand-rescue", "2"},
+        {"main", "--small-board-beam-budget-percent", "49"},
+        {"main", "--small-board-beam-budget-percent", "96"},
+        {"main", "--small-board-brand-node-limit", "999"},
+        {"main", "--day-beam", "2"}, {"main", "--day-beam-width", "1"},
+        {"main", "--day-beam-depth", "4"}, {"main", "--quantity-budget-percent", "91"}}) {
+        bool rejected = false;
+        try { (void)parse(args); } catch (const std::invalid_argument&) { rejected = true; }
+        assert(rejected);
+    }
     const auto options = parse({"main", "solve", "setting.json", "state.json",
         "--beam-width", "17", "--joint-beam-width", "53", "--threads", "2",
         "--time-limit-ms", "300", "--safety-margin-ms", "25",

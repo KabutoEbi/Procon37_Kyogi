@@ -49,7 +49,9 @@ private:
              name == "--exact-brands" || name == "--brand-repair" ||
              name == "--udon-alns" || name == "--spot-route-lns" ||
              name == "--route-columns" ||
-             name == "--next-day-probe" || name == "--auto-beam-width") &&
+             name == "--next-day-probe" || name == "--day-beam" || name == "--quantity-upgrades" || name == "--coordinated-refinement" ||
+             name == "--small-board-brand-rescue" ||
+             name == "--auto-beam-width") &&
             value > 1) {
             throw std::invalid_argument(
                 "expected 0 or 1: " + std::string(name));
@@ -77,6 +79,35 @@ private:
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
+        else if (name == "--quantity-upgrades") beam.quantityUpgrades = value != 0;
+        else if (name == "--coordinated-refinement") beam.coordinatedRefinement = value != 0;
+        else if (name == "--small-board-brand-rescue") {
+            beam.adaptiveSmallBoardBrandRescue = value != 0;
+        } else if (name == "--small-board-beam-budget-percent") {
+            if (value < 50 || value > 95)
+                throw std::invalid_argument("small-board beam budget must be 50..95");
+            beam.smallBoardBeamBudgetPercent = value;
+        } else if (name == "--small-board-brand-node-limit") {
+            if (value < 1000)
+                throw std::invalid_argument("small-board brand node limit must be at least 1000");
+            beam.smallBoardBrandSearchNodeLimit = value;
+        }
+        else if (name == "--day-beam") {
+            beam.useDayBeam = value != 0;
+            if (value) beam.quantityUpgrades = true;
+        }
+        else if (name == "--day-beam-width") {
+            if (value < 2 || value > 8) throw std::invalid_argument("day beam width must be 2..8");
+            beam.dayBeamWidth = value;
+        } else if (name == "--day-beam-depth") {
+            if (value < 1 || value > 3) throw std::invalid_argument("day beam depth must be 1..3");
+            beam.dayBeamDepth = value;
+        } else if (name == "--day-beam-max-udon-loss") {
+            beam.dayBeamMaxUdonLoss = value;
+        } else if (name == "--quantity-budget-percent") {
+            if (value < 1 || value > 90) throw std::invalid_argument("quantity budget must be 1..90");
+            beam.quantityBudgetPercent = value;
+        }
         else if (name == "--auto-beam-width") {
             autoBeamWidth = value != 0;
             hasAutoBeamOption = true;

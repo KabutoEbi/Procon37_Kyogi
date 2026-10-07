@@ -29,6 +29,7 @@ struct SpotRouteLnsConfig {
     std::size_t spotPortfolioBeamWidth = 256;
     std::size_t spotPortfolioCandidatesPerDepth = 12;
     std::int32_t spotPortfolioHardnessWeight = 4;
+    bool reflectTransit = true;
 };
 
 struct SpotRouteLnsResult {
@@ -44,6 +45,47 @@ struct SpotRouteLnsResult {
 };
 
 namespace detail {
+
+// Follow reflection phases, including pickups on the departure cell of a
+// slow move and refuelling before that move completes. The supply timeline is
+// fixed here; interactions between patrols are checked by the final replay.
+template<class Pickup>
+inline bool walkPatrolPath(const MatchSetting& s, const MatchState& ms,
+    const std::vector<Direction>& directions, CellPos& pos, int& fuel, int& time,
+    const RepairTrace* supplyTrace, Pickup pickup) {
+    const int limit = s.daySteps[static_cast<std::size_t>(ms.day)];
+    const auto reflect = [&] {
+        pickup(pos);
+        if (!supplyTrace || static_cast<std::size_t>(time) >= supplyTrace->checkpoints.size())
+            return;
+        const auto& frame = supplyTrace->checkpoints[static_cast<std::size_t>(time)].state;
+        for (AgentIndex a = 0; a < frame.agentCount; ++a)
+            if (frame.agents[a].isSupply() && frame.agents[a].pos == pos)
+                fuel = s.fuelLimit;
+    };
+    if (directions.empty()) {
+        if (time >= limit) return false;
+        ++time;
+        reflect();
+    }
+    for (const auto direction : directions) {
+        const int duration = moveStepCost(s, ms, pos);
+        const int cost = moveFuelCost(s, AgentKind::Patrol, pos);
+        const auto target = s.field.neighbor(pos, direction);
+        if (!s.field.contains(target) || !s.field.at(target).isPassable() ||
+            duration > limit - time) return false;
+        for (int step = 1; step <= duration; ++step) {
+            ++time;
+            if (step == duration) {
+                if (fuel < cost) return false;
+                fuel -= cost;
+                pos = target;
+            }
+            reflect();
+        }
+    }
+    return true;
+}
 
 inline std::vector<std::size_t> acquiredSpotSequence(
     const RepairTrace& trace, const GameState& finalState,
@@ -68,7 +110,7 @@ inline bool rebuildSpotSuffix(
     const RepairCheckpoint& checkpoint, AgentIndex agent,
     const std::vector<std::size_t>& visits, CellPos endAnchor,
     AgentPlan& plan, std::vector<DijkstraTable>& pathCache,
-    std::vector<bool>& cached) {
+    std::vector<bool>& cached, const RepairTrace* supplyTrace = nullptr) {
     const GameState& state = checkpoint.state;
     if (state.pendingActions[agent].active) return false;
     CellPos pos = state.agents[agent].pos;
@@ -86,11 +128,25 @@ inline bool rebuildSpotSuffix(
         auto path = Brain0::restorePath(setting,
             pathCache[static_cast<std::size_t>(current)], goal,
             AgentKind::Patrol);
-        if (path.reachable && path.cost.fuel > remainingFuel)
+        if (path.reachable && path.cost.fuel > remainingFuel && !supplyTrace)
             path = Brain0::shortestFuelConstrainedPath(
                 setting, matchState, current, goal, AgentKind::Patrol,
                 remainingFuel);
         if (!path.reachable || path.cost.steps > remainingSteps) return false;
+        if (supplyTrace && (acquire || !path.directions.empty())) {
+            int time = state.dayStepLimit - remainingSteps;
+            auto nextPos = current;
+            int nextFuel = remainingFuel;
+            if (!walkPatrolPath(setting, matchState, path.directions,
+                nextPos, nextFuel, time, supplyTrace, [](CellPos) {})) return false;
+            for (const auto direction : path.directions)
+                output.push_back(static_cast<int>(direction));
+            if (path.directions.empty()) output.push_back(-1);
+            current = nextPos;
+            remainingFuel = nextFuel;
+            remainingSteps = state.dayStepLimit - time;
+            return true;
+        }
         for (const Direction direction : path.directions)
             output.push_back(static_cast<std::int32_t>(direction));
         remainingSteps -= path.cost.steps;
@@ -119,6 +175,9 @@ struct FutureRoutePotential {
     std::int32_t reachableBrands = 0;
     std::int32_t distanceSum = 0;
     std::int32_t patrolFuel = 0;
+    std::int32_t strandedPatrols = 0;
+    std::int32_t readyBrands = 0;
+    std::int32_t readyUdon = 0;
 };
 
 // Current traffic is the only known traffic. This is a conservative placement
@@ -131,14 +190,51 @@ inline FutureRoutePotential futureRoutePotential(
     const auto nextDay = static_cast<std::size_t>(matchState.day + 1);
     if (nextDay >= setting.dayCount()) return result;
     const int steps = setting.daySteps[nextDay];
+    BrandMask ready = 0;
+    std::array<int, kMaxSpots> readyUses{};
     for (AgentIndex a = 0; a < state.agentCount; ++a) {
-        if (!state.agents[a].isPatrol()) continue;
-        result.patrolFuel += state.agents[a].fuel;
+        if (state.agents[a].isPatrol()) {
+            result.patrolFuel += std::min(state.agents[a].fuel, steps);
+            const int index = setting.field.at(state.agents[a].pos).spotIndex;
+            if (steps > 0 && index >= 0 && readyUses[index] < setting.field.spots[index].maxStock) {
+                ++readyUses[index];
+                ++result.readyUdon;
+                ready |= brandBit(setting.field.spots[index].brandIndex);
+            }
+        }
         const auto pos = static_cast<std::size_t>(state.agents[a].pos);
         if (!cached[pos]) {
             cache[pos] = Brain0::dijkstra(setting, matchState, state.agents[a].pos);
             cached[pos] = true;
         }
+    }
+    result.readyBrands = static_cast<int>(countBits(ready));
+    // Only count a concrete fuel-feasible path. A parked supply can refuel at
+    // step 1 (never step 0); this is a placement proxy, not a traffic forecast.
+    const auto arrival = [&](AgentIndex a, CellPos goal) {
+        const auto& patrol = state.agents[a];
+        const auto& direct = cache[patrol.pos];
+        int best = direct.patrolFuelCosts[goal] <= patrol.fuel
+            ? std::max(1, direct.distances[goal]) : kImpassableCost;
+        for (AgentIndex q = 0; q < state.agentCount; ++q) {
+            if (!state.agents[q].isSupply()) continue;
+            const auto station = state.agents[q].pos;
+            const auto& second = cache[station];
+            if (direct.patrolFuelCosts[station] <= patrol.fuel &&
+                second.patrolFuelCosts[goal] <= setting.fuelLimit)
+                best = std::min(best, std::max(1, direct.distances[station]) + second.distances[goal]);
+        }
+        return best;
+    };
+    for (AgentIndex a = 0; a < state.agentCount; ++a) {
+        if (!state.agents[a].isPatrol()) continue;
+        bool mobile = false;
+        for (const auto& spot : setting.field.spots)
+            if (spot.pos != state.agents[a].pos && arrival(a, spot.pos) <= steps) {
+                mobile = true;
+                break;
+            }
+        if (!mobile && setting.field.spots.size() > 1) ++result.strandedPatrols;
     }
     for (std::size_t brand = 0; brand < setting.field.brands.size(); ++brand) {
         int nearest = kImpassableCost;
@@ -146,14 +242,14 @@ inline FutureRoutePotential futureRoutePotential(
             if (spot.brandIndex != static_cast<int>(brand)) continue;
             for (AgentIndex a = 0; a < state.agentCount; ++a) {
                 if (!state.agents[a].isPatrol()) continue;
-                const auto pos = static_cast<std::size_t>(state.agents[a].pos);
-                nearest = std::min(nearest,
-                    cache[pos].distances[static_cast<std::size_t>(spot.pos)]);
+                nearest = std::min(nearest, arrival(a, spot.pos));
             }
         }
         if (nearest <= steps) {
             ++result.reachableBrands;
             result.distanceSum += nearest;
+        } else {
+            result.distanceSum += steps + 1;
         }
     }
     return result;
@@ -211,6 +307,7 @@ inline SpotRouteLnsResult improveSpotRoutes(
                 setting, matchState, candidate, pathCache, cached);
             const int extra = candidate.score.totalUdon - incumbentState.score.totalUdon;
             return future.reachableBrands >= incumbentFuture.reachableBrands &&
+                future.strandedPatrols <= incumbentFuture.strandedPatrols &&
                 future.distanceSum <= incumbentFuture.distanceSum + 16 + 8 * extra &&
                 future.patrolFuel >= incumbentFuture.patrolFuel - 20 - 30 * extra;
         }
@@ -369,6 +466,7 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
                 setting, matchState, candidate, pathCache, cached);
             const int extra = candidate.score.totalUdon - initial.state.score.totalUdon;
             return future.reachableBrands >= initialFuture.reachableBrands &&
+                future.strandedPatrols <= initialFuture.strandedPatrols &&
                 future.distanceSum <= initialFuture.distanceSum + 16 + 8 * extra &&
                 future.patrolFuel >= initialFuture.patrolFuel - 20 - 30 * extra;
         }
@@ -546,6 +644,13 @@ inline SpotRouteLnsResult searchSpotPortfolio(
     if (patrols.empty()) return result;
     const std::size_t spots = setting.field.spots.size();
     const std::size_t starts = matchState.agents.size();
+    detail::RepairTrace supplyTrace;
+    if (config.reflectTransit) {
+        supplyTrace = detail::repairTrace(setting, matchState, previous, incumbent,
+            [&] { return Clock::now() >= deadline; });
+        if (supplyTrace.checkpoints.empty()) return result;
+        supplyTrace.checkpoints.push_back({original.state, {}});
+    }
     std::vector<DijkstraTable> paths(setting.field.cellCount());
     std::vector<bool> cached(setting.field.cellCount(), false);
     std::vector<CellPos> sources(starts + spots);
@@ -555,6 +660,8 @@ inline SpotRouteLnsResult searchSpotPortfolio(
         sources[starts + i] = setting.field.spots[i].pos;
     std::vector<std::vector<RouteCost>> costs(
         sources.size(), std::vector<RouteCost>(spots));
+    std::vector<std::vector<std::vector<Direction>>> directions(
+        config.reflectTransit ? sources.size() : 0, std::vector<std::vector<Direction>>(spots));
     for (std::size_t from = 0; from < sources.size(); ++from) {
         if (Clock::now() >= deadline) { result.interrupted = true; return result; }
         const auto pos = static_cast<std::size_t>(sources[from]);
@@ -565,7 +672,10 @@ inline SpotRouteLnsResult searchSpotPortfolio(
         for (std::size_t to = 0; to < spots; ++to) {
             const auto path = Brain0::restorePath(setting, paths[pos],
                 setting.field.spots[to].pos);
-            if (path.reachable) costs[from][to] = path.cost;
+            if (path.reachable) {
+                costs[from][to] = path.cost;
+                if (config.reflectTransit) directions[from][to] = path.directions;
+            }
         }
     }
     std::vector<int> brandDifficulty(setting.field.brands.size(), 0);
@@ -638,21 +748,34 @@ inline SpotRouteLnsResult searchSpotPortfolio(
                     const auto cost = costs[static_cast<std::size_t>(node.locations[a])][i];
                     const int duration = std::max(1, cost.steps);
                     if (!cost.reachable() || node.spent[a] + duration > daySteps ||
-                        cost.fuel > node.fuel[a]) continue;
+                        (!config.reflectTransit && cost.fuel > node.fuel[a])) continue;
                     Node child = node;
                     child.visits[a][child.lengths[a]++] = static_cast<std::uint8_t>(i);
-                    child.acquired[a] |= spotBit(i);
+                    auto position = sources[static_cast<std::size_t>(node.locations[a])];
+                    const auto pickup = [&](CellPos pos) {
+                        const int spot = setting.field.at(pos).spotIndex;
+                        if (spot < 0 || child.stock[spot] <= 0 ||
+                            (child.acquired[a] & spotBit(spot))) return;
+                        child.acquired[a] |= spotBit(spot);
+                        --child.stock[spot];
+                        const auto brand = setting.field.spots[spot].brandIndex;
+                        const auto bit = brandBit(brand);
+                        if (!(child.brands & bit)) child.hardness += brandDifficulty[brand];
+                        child.brands |= bit;
+                        ++child.udon;
+                    };
+                    if (config.reflectTransit) {
+                        if (!detail::walkPatrolPath(setting, matchState,
+                            directions[static_cast<std::size_t>(node.locations[a])][i],
+                            position, child.fuel[a], child.spent[a], &supplyTrace, pickup)) continue;
+                    } else {
+                        // A cheap visit-only proposal remains useful alongside
+                        // transit-aware proposals; neither bypasses replay.
+                        pickup(setting.field.spots[i].pos);
+                        child.spent[a] += duration;
+                        child.fuel[a] -= cost.fuel;
+                    }
                     child.locations[a] = static_cast<int>(starts + i);
-                    child.spent[a] += duration;
-                    child.fuel[a] -= cost.fuel;
-                    --child.stock[i];
-                    const auto brand = static_cast<std::size_t>(
-                        setting.field.spots[i].brandIndex);
-                    const BrandMask bit = brandBit(brand);
-                    if (!(child.brands & bit))
-                        child.hardness += brandDifficulty[brand];
-                    child.brands |= bit;
-                    ++child.udon;
                     child.totalTravel += duration;
                     next.push_back(std::move(child));
                 }
@@ -707,7 +830,8 @@ inline SpotRouteLnsResult searchSpotPortfolio(
                 const CellPos anchor = finalDay || config.allowFuturePositionChange
                     ? kInvalidCell : original.state.agents[a].pos;
                 if (!detail::rebuildSpotSuffix(setting, matchState, checkpoint,
-                    a, visits, anchor, trial[a], paths, cached)) {
+                    a, visits, anchor, trial[a], paths, cached,
+                    config.reflectTransit ? &supplyTrace : nullptr)) {
                     viable = false;
                     break;
                 }
@@ -730,6 +854,7 @@ inline SpotRouteLnsResult searchSpotPortfolio(
                     const int extra = replay.state.score.totalUdon -
                         original.state.score.totalUdon;
                     if (future.reachableBrands < initialFuture.reachableBrands ||
+                        future.strandedPatrols > initialFuture.strandedPatrols ||
                         future.distanceSum > initialFuture.distanceSum + 16 + 8 * extra ||
                         future.patrolFuel < initialFuture.patrolFuel - 20 - 30 * extra)
                         continue;
