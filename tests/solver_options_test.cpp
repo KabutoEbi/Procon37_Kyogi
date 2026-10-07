@@ -12,6 +12,7 @@ benzen::SolverOptions parse(std::vector<std::string> values) {
 }
 
 int main() {
+    assert(parse({"main"}).beam.safetyMarginMs == 5000);
     assert(parse({"main"}).beam.coordinatedRefinement);
     assert(!parse({"main", "--coordinated-refinement", "0"}).beam.coordinatedRefinement);
     assert(parse({"main"}).beam.adaptiveSmallBoardBrandRescue);
@@ -70,11 +71,11 @@ int main() {
     state.agents.resize(5);
     auto automatic = parse({"main"});
     auto autoConfig = automatic.beam;
-    autoConfig.timeLimitMs = 50000;
-    autoConfig.safetyMarginMs = 0;
+    autoConfig.timeLimitMs = 60000;
+    autoConfig.safetyMarginMs = 5000;
     const auto first = automatic.beamFor(setting, state, autoConfig);
-    assert(first.beamWidth == 13000 && first.jointBeamWidth == 52000);
-    assert(!first.adaptiveBeamWidth && first.timeLimitMs == 50000);
+    assert(first.beamWidth == 14300 && first.jointBeamWidth == 57200);
+    assert(!first.adaptiveBeamWidth && first.timeLimitMs == 60000);
     state.day = 1;
     const auto second = automatic.beamFor(setting, state, autoConfig);
     state.day = 2;
@@ -85,7 +86,7 @@ int main() {
     const auto shortRun = automatic.beamFor(setting, state, autoConfig);
     assert(shortRun.beamWidth < third.beamWidth);
     autoConfig.timeLimitMs = 90000;
-    assert(automatic.beamFor(setting, state, autoConfig).timeLimitMs == 50000);
+    assert(automatic.beamFor(setting, state, autoConfig).timeLimitMs == 60000);
     assert(options.beamFor(setting, state, options.beam).beamWidth == 17);
     const auto unlimited = parse({"main", "--time-limit-ms", "0"});
     assert(unlimited.beamFor(setting, state, unlimited.beam).timeLimitMs == 0);
@@ -97,15 +98,15 @@ int main() {
     setting.daySteps = {32, 48};
     state.day = 0;
     state.agents.resize(4);
-    assert(automatic.beamFor(setting, state, autoConfig).beamWidth == 40000);
+    assert(automatic.beamFor(setting, state, autoConfig).beamWidth == 44000);
     state.day = 1;
-    assert(automatic.beamFor(setting, state, autoConfig).beamWidth < 40000);
+    assert(automatic.beamFor(setting, state, autoConfig).beamWidth < 44000);
     setting.field.width = 32;
     setting.field.height = 32;
     setting.daySteps = {64};
     state.day = 0;
     state.agents.resize(8);
-    assert(automatic.beamFor(setting, state, autoConfig).beamWidth == 5400);
+    assert(automatic.beamFor(setting, state, autoConfig).beamWidth == 5940);
     assert(parse({"main", "--exact-brands", "1"}).beam.exactBrands);
     assert(!parse({"main", "--brand-repair", "0"}).beam.useBrandRepair);
     assert(parse({"main", "--brand-repair", "1"}).beam.useBrandRepair);

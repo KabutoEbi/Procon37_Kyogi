@@ -55,7 +55,7 @@ class SearchParameters:
     threads: int = 0
     # GUIでは設定読込時に対象日のdaySecondsで上書きする。
     time_limit_ms: int = 60000
-    safety_margin_ms: int = 1000
+    safety_margin_ms: int = 5000
     max_actions: int = 4
     macro_actions: int = 1
     adaptive_beam: int = 1
@@ -63,7 +63,7 @@ class SearchParameters:
     trial_beam_width: int = 32
     trial_joint_beam_width: int = 128
     selection_time_ms: int = 60000
-    send_reserve_ms: int = 12000
+    send_reserve_ms: int = 5000
     clock_margin_ms: int = 1000
 
     def arguments(self) -> list[str]:
@@ -126,7 +126,7 @@ class RandomSettingParameters:
 class ConnectionConfig:
     url: str
     token: str
-    timeout: float = 10.0
+    timeout: float = 3.0
 
     def validate(self) -> None:
         if not self.url.strip():
@@ -479,7 +479,7 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def connection_from_env(path: Path, timeout: float = 10.0) -> ConnectionConfig:
+def connection_from_env(path: Path, timeout: float = 3.0) -> ConnectionConfig:
     values = read_env_file(path)
     # シェルから一時的に上書きできるよう、実環境を優先する。
     url = os.environ.get("PROCON_URL", values.get("PROCON_URL", ""))

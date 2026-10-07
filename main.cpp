@@ -110,9 +110,9 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
 
     auto config = options.beam;
     if (state.endsAt == 0 && !options.hasTimeLimit && !config.exactBrands) {
-        // オフライン実行も無制限にしない。自動幅は50秒を目標にする。
+        // オフライン実行も無制限にしない。60秒枠の5秒前を目標にする。
         config.timeLimitMs = std::min<std::int64_t>(
-            options.autoBeamWidth ? 50000 : 5000,
+            options.autoBeamWidth ? 60000 : 5000,
             static_cast<std::int64_t>(setting.daySeconds[
                 static_cast<std::size_t>(state.day)]) * 1000);
     }

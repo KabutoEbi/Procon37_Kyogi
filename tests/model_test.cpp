@@ -634,6 +634,32 @@ void testSelectorTrialsPreferredSupplyCountFirst() {
     assert(budgeted.trialAssignments > cfg.trialCandidateLimit);
 }
 
+void testSelectorDeadlineFallbackUsesCentralSupply() {
+    MatchSetting s;
+    s.daySteps = {12, 12};
+    s.daySeconds = {60, 60};
+    s.fuelLimit = 8;
+    s.playerCount = 10;
+    s.field.width = 5;
+    s.field.height = 5;
+    s.field.cells.assign(25, Cell{CellType::Plain, -1});
+    s.field.spots = {{1, 12, 3, -1}};
+    s.agentStarts = {0, 4, 20, 12};
+    assert(s.field.rebuildSpotIndex());
+
+    AgentSelectorConfig cfg;
+    cfg.trialCandidateLimit = 0;
+    cfg.timeLimitMs = 1;
+    cfg.safetyMarginMs = 1;
+    const auto selected = selectAgentKinds(s, cfg);
+    assert(selected.success);
+    assert(selected.timedOut);
+    assert(selected.supplyCount == 1);
+    assert(selected.kinds[3] == AgentKind::Supply);
+    assert(std::count(selected.kinds.begin(), selected.kinds.end(),
+                      AgentKind::Patrol) == 3);
+}
+
 void testPersistentJsonAndFallback() {
     std::ostringstream kinds;
     printAgentKinds(kinds, {AgentKind::Patrol, AgentKind::Supply});
@@ -879,6 +905,7 @@ int main() {
     testSelectorValuesParallelPatrols();
     testSelectorKeepsAtLeastHalfPatrolsByDefault();
     testSelectorTrialsPreferredSupplyCountFirst();
+    testSelectorDeadlineFallbackUsesCentralSupply();
     testPersistentJsonAndFallback();
     testMatchRunner();
     testProblemCreator();

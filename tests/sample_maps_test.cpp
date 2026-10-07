@@ -13,8 +13,10 @@ int main() {
         "sample_maps/sample_24.json",
         "sample_maps/sample_32.json",
     };
+    constexpr std::array<std::int32_t, 3> expectedSupplyCounts = {1, 2, 2};
 
-    for (const char* path : paths) {
+    for (std::size_t index = 0; index < paths.size(); ++index) {
+        const char* path = paths[index];
         const MatchSetting setting = readMatchSettingJson(path);
         AgentSelectorConfig selector;
         selector.trialCandidateLimit = 0;
@@ -23,7 +25,7 @@ int main() {
         const AgentSelectionResult selected =
             selectAgentKinds(setting, selector);
         assert(selected.success);
-        assert(selected.supplyCount >= 1);
+        assert(selected.supplyCount == expectedSupplyCounts[index]);
         assert(std::count(
                    selected.kinds.begin(),
                    selected.kinds.end(),

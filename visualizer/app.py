@@ -132,7 +132,7 @@ class SolverGUI(tk.Tk):
         self.env_var = tk.StringVar(value=str(PROJECT_ROOT / ".env"))
         self.url_var = tk.StringVar()
         self.token_var = tk.StringVar()
-        self.timeout_var = tk.StringVar(value="10")
+        self.timeout_var = tk.StringVar(value="3")
         self.solver_var = tk.StringVar(value=str(PROJECT_ROOT / "main"))
         self.work_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime"))
         self.setting_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/setting.json"))
@@ -416,7 +416,7 @@ class SolverGUI(tk.Tk):
         notebook.add(frame, text="探索パラメータ")
         self.parameters_frame = frame
         fields = [
-            ("auto_beam_width", "ビーム幅の自動選択", "1: 盤面・当日のステップ数に応じ約50秒 / 0: 下の手動幅"),
+            ("auto_beam_width", "ビーム幅の自動選択", "1: 盤面・当日のステップ数に応じ約55秒 / 0: 下の手動幅"),
             ("beam_width", "ビーム幅", "各展開で保持する状態数"),
             ("joint_beam_width", "同時行動ビーム幅", "複数台への行動割当の幅"),
             ("threads", "スレッド数", "0: 自動 / 1: 直列"),

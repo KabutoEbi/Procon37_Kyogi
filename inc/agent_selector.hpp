@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
@@ -66,6 +67,8 @@ private:
         std::uint32_t supplyMask = 0;
         std::int64_t supplySpread = 0;
         std::int32_t reachableBrandCount = 0;
+        std::int64_t reachableDailyBrandCount = 0;
+        std::int64_t theoreticalMatchUdon = 0;
     };
 
     static std::int32_t maximumSupplyCount(
@@ -76,6 +79,9 @@ private:
                    : cfg.maxSupplyCount;
     }
 
+    // 公開試合の上位結果から推定した中心構成は、4台で3巡回+1補給、
+    // 5台で3+2、7台で5+2。個別の盤面評価で前後の
+    // 台数へ動かせるよう、ここではハードコードせず比率として表す。
     // 補給車1台で巡回車およそ2台を受け持つ構成を中心に比較する。
     // std::clampを使わず、C++標準設定が古い補完環境でも解析できる形にする。
     static std::int32_t preferredSupplyCount(
@@ -176,12 +182,64 @@ private:
         return lhs.supplyMask < rhs.supplyMask;
     }
 
+    static std::int32_t geometricDistance(
+        const Field& field, CellPos lhs, CellPos rhs) noexcept {
+        const Coord a = field.toCoord(lhs);
+        const Coord b = field.toCoord(rhs);
+        if (!field.contains(a) || !field.contains(b)) return kImpassableCost;
+
+        // 行の偶奇で半マスずれる盤面を、横座標を2倍した座標へ写す。
+        const std::int32_t ax = 2 * a.x + ((a.y & 1) == 0 ? 1 : 0);
+        const std::int32_t bx = 2 * b.x + ((b.y & 1) == 0 ? 1 : 0);
+        return std::abs(ax - bx) + 2 * std::abs(a.y - b.y);
+    }
+
+    // Dijkstra 中に締切を迎えても、添字順で補給車を決めない。
+    // スポットと他の開始位置への近さを使う軽量な k-median 評価なら、
+    // 探索時間をほぼ使わず中央・広域配置の補給車を選べる。
     static std::vector<AgentKind> fallbackKinds(
-        std::size_t agentCount,
-        std::int32_t minSupplyCount) {
-        std::vector<AgentKind> kinds(agentCount, AgentKind::Patrol);
-        for (std::int32_t i = 0; i < minSupplyCount; ++i) {
-            kinds[static_cast<std::size_t>(i)] = AgentKind::Supply;
+        const MatchSetting& s,
+        const AgentSelectorConfig& cfg,
+        std::int32_t maxSupply) {
+        const std::size_t n = s.agentCount();
+        const std::int32_t supplyN =
+            preferredSupplyCount(n, cfg, maxSupply);
+        const std::uint32_t masks =
+            std::uint32_t{1} << static_cast<std::uint32_t>(n);
+        std::uint32_t bestMask = 0;
+        std::int64_t bestCost = std::numeric_limits<std::int64_t>::max();
+        for (std::uint32_t mask = 0; mask < masks; ++mask) {
+            if (countBits(mask) != supplyN) continue;
+            std::int64_t cost = 0;
+            for (const Spot& spot : s.field.spots) {
+                std::int32_t near = kImpassableCost;
+                for (std::size_t q = 0; q < n; ++q) {
+                    if ((mask & (std::uint32_t{1} << q)) == 0) continue;
+                    near = std::min(near, geometricDistance(
+                        s.field, s.agentStarts[q], spot.pos));
+                }
+                cost += near;
+            }
+            for (std::size_t p = 0; p < n; ++p) {
+                if ((mask & (std::uint32_t{1} << p)) != 0) continue;
+                std::int32_t near = kImpassableCost;
+                for (std::size_t q = 0; q < n; ++q) {
+                    if ((mask & (std::uint32_t{1} << q)) == 0) continue;
+                    near = std::min(near, geometricDistance(
+                        s.field, s.agentStarts[q], s.agentStarts[p]));
+                }
+                cost += near;
+            }
+            if (cost < bestCost || (cost == bestCost && mask < bestMask)) {
+                bestCost = cost;
+                bestMask = mask;
+            }
+        }
+
+        std::vector<AgentKind> kinds(n, AgentKind::Patrol);
+        for (std::size_t i = 0; i < n; ++i) {
+            if ((bestMask & (std::uint32_t{1} << i)) != 0)
+                kinds[i] = AgentKind::Supply;
         }
         return kinds;
     }
@@ -220,7 +278,8 @@ public:
 
         const std::size_t n = s.agentCount();
         const std::int32_t maxSupply = maximumSupplyCount(n, cfg);
-        const std::int32_t steps = s.daySteps.front();
+        const std::int32_t maxDaySteps = *std::max_element(
+            s.daySteps.begin(), s.daySteps.end());
         const std::uint32_t masks =
             std::uint32_t{1} << static_cast<std::uint32_t>(n);
 
@@ -234,8 +293,10 @@ public:
                 AgentSelectionResult fallback;
                 fallback.success = true;
                 fallback.timedOut = true;
-                fallback.kinds = fallbackKinds(n, cfg.minSupplyCount);
-                fallback.supplyCount = cfg.minSupplyCount;
+                fallback.kinds = fallbackKinds(s, cfg, maxSupply);
+                fallback.supplyCount = static_cast<std::int32_t>(std::count(
+                    fallback.kinds.begin(), fallback.kinds.end(),
+                    AgentKind::Supply));
                 return fallback;
             }
             dist.push_back(Brain0::dijkstra(
@@ -248,10 +309,15 @@ public:
             std::array<double, 3> nearest{};
             for (const Spot& spot : s.field.spots) {
                 const std::int32_t d = distanceTo(dist[p], spot.pos);
-                if (d > steps || d >= kImpassableCost) continue;
-                const double value =
-                    static_cast<double>(steps + 1 - d) /
-                    static_cast<double>(steps + 1);
+                if (d > maxDaySteps || d >= kImpassableCost) continue;
+                double value = 0.0;
+                for (const std::int32_t steps : s.daySteps) {
+                    if (d <= steps) {
+                        value += static_cast<double>(steps + 1 - d) /
+                                 static_cast<double>(steps + 1);
+                    }
+                }
+                value /= static_cast<double>(s.dayCount());
                 if (value > nearest[0]) {
                     nearest[2] = nearest[1];
                     nearest[1] = nearest[0];
@@ -288,8 +354,10 @@ public:
             }
 
             std::vector<bool> brands(s.field.brands.size(), false);
+            std::vector<std::vector<bool>> dailyBrands(
+                s.dayCount(), std::vector<bool>(s.field.brands.size(), false));
+            std::vector<std::int32_t> dailyStockCaps(s.dayCount(), 0);
             std::int32_t spots = 0;
-            std::int32_t theoreticalUdon = 0;
             std::int64_t distSum = 0;
             const std::int32_t patrolN =
                 static_cast<std::int32_t>(n) - supplyN;
@@ -301,26 +369,41 @@ public:
                     }
                     near = std::min(near, distanceTo(dist[i], spot.pos));
                 }
-                if (near > steps || near >= kImpassableCost) {
+                if (near > maxDaySteps || near >= kImpassableCost) {
                     continue;
                 }
                 ++spots;
-                // 同じ巡回車は同じスポットから1日に一度だけ取得できる。
-                // 補給車を増やした候補へ、利用不能な在庫分まで加点しない。
-                theoreticalUdon += std::min(spot.maxStock, patrolN);
-                distSum += near;
                 if (spot.brandIndex >= 0 &&
                     static_cast<std::size_t>(spot.brandIndex) <
                         brands.size()) {
                     brands[static_cast<std::size_t>(spot.brandIndex)] = true;
                 }
+                for (std::size_t day = 0; day < s.dayCount(); ++day) {
+                    const std::int32_t steps = s.daySteps[day];
+                    if (near > steps) continue;
+                    // 同じ巡回車は同じスポットから1日に一度だけ取得できる。
+                    dailyStockCaps[day] += std::min(spot.maxStock, patrolN);
+                    distSum += near;
+                    if (spot.brandIndex >= 0 &&
+                        static_cast<std::size_t>(spot.brandIndex) <
+                            brands.size()) {
+                        dailyBrands[day][static_cast<std::size_t>(
+                            spot.brandIndex)] = true;
+                    }
+                }
             }
 
             const auto brandN = static_cast<std::int32_t>(
                 std::count(brands.begin(), brands.end(), true));
-            theoreticalUdon = std::min(
-                theoreticalUdon, patrolN * steps);
             c.reachableBrandCount = brandN;
+            for (std::size_t day = 0; day < s.dayCount(); ++day) {
+                c.reachableDailyBrandCount += static_cast<std::int64_t>(
+                    std::count(dailyBrands[day].begin(),
+                               dailyBrands[day].end(), true));
+                c.theoreticalMatchUdon += std::min<std::int64_t>(
+                    dailyStockCaps[day],
+                    static_cast<std::int64_t>(patrolN) * s.daySteps[day]);
+            }
 
             // 到達可能なスポットの和集合だけでは、巡回車1台で全地点に
             // 届く配置と、複数台で並行して回れる配置を区別できない。
@@ -362,16 +445,28 @@ public:
             }
 
             const double maxFuel =
-                3.0 * static_cast<double>(std::max(1, steps));
+                3.0 * static_cast<double>(std::max(1, maxDaySteps));
             const double fuelPressure = std::max(
                 0.0,
                 (maxFuel - s.fuelLimit) / maxFuel);
+            // 公開上位結果で安定していた中心構成を弱い事前分布として使う。
+            // ブランド到達性は決して上書きせず、同等の候補間だけで補給不足を
+            // 避ける程度の重みにする。玉数上限の差が大きければ巡回寄りも選べる。
+            const std::int32_t preferredSupply =
+                preferredSupplyCount(n, cfg, maxSupply);
+            const double compositionPrior =
+                -5.0e5 * (1.0 + fuelPressure) *
+                std::abs(supplyN - preferredSupply);
             c.heuristicScore =
-                1.0e9 * brandN + 1.0e6 * spots +
-                1.0e4 * theoreticalUdon -
+                // 最大10日・32系列・8台・32スポットでも、上位の評価軸
+                // 1点を下位評価軸の総和が逆転しない大きさにする。
+                2.0e10 * brandN +
+                5.0e7 * static_cast<double>(c.reachableDailyBrandCount) +
+                1.0e6 * spots +
+                1.0e4 * static_cast<double>(c.theoreticalMatchUdon) -
                 100.0 * static_cast<double>(distSum) -
                 10.0 * fuelPressure * static_cast<double>(supplyDist) +
-                1.0e5 * patrolCapacity;
+                1.0e5 * patrolCapacity + compositionPrior;
             cs.push_back(std::move(c));
         }
 
@@ -382,8 +477,9 @@ public:
             if (expired()) {
                 res.success = true;
                 res.timedOut = true;
-                res.kinds = fallbackKinds(n, cfg.minSupplyCount);
-                res.supplyCount = cfg.minSupplyCount;
+                res.kinds = fallbackKinds(s, cfg, maxSupply);
+                res.supplyCount = static_cast<std::int32_t>(std::count(
+                    res.kinds.begin(), res.kinds.end(), AgentKind::Supply));
             }
             return res;
         }
@@ -401,8 +497,6 @@ public:
         std::int32_t preferredSupply = cfg.minSupplyCount;
         bool supplyPressure = false;
         if (trialLimit > 0) {
-            const std::int32_t maxDaySteps = *std::max_element(
-                s.daySteps.begin(), s.daySteps.end());
             supplyPressure = s.fuelLimit <= maxDaySteps;
             // 短い締切で最低台数の候補だけを評価して終わらないよう、
             // 巡回車との比率がよい中心台数から近い順に比較する。

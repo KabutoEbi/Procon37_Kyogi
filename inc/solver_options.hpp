@@ -22,6 +22,11 @@ struct SolverOptions {
     bool hasAutoBeamOption = false;
     bool hasManualBeamWidth = false;
 
+    SolverOptions() {
+        // CLIの標準60秒枠では約55秒を探索へ使う。
+        beam.safetyMarginMs = 5000;
+    }
+
 private:
     static std::int64_t parseValue(
         std::string_view name, std::string_view text) {
@@ -153,7 +158,8 @@ public:
             return config;
 
         // Preserve a hard time bound even for offline states without endsAt.
-        const std::int64_t targetMs = 50000;
+        // 60秒枠の5秒前までを標準探索予算とする。
+        const std::int64_t targetMs = 55000;
         const std::int64_t cappedLimit = targetMs + config.safetyMarginMs;
         if (config.timeLimitMs == 0 || config.timeLimitMs > cappedLimit)
             config.timeLimitMs = cappedLimit;
@@ -162,24 +168,24 @@ public:
 
         const double size = static_cast<double>(std::max(
             setting.field.width, setting.field.height));
-        double base = 40000.0;
+        double base = 44000.0;
         double referenceAgents = 4.0;
-        double ceiling = 40000.0;
+        double ceiling = 44000.0;
         if (size > 16.0 && size <= 24.0) {
             const double share = (size - 16.0) / 8.0;
-            base = 40000.0 * std::pow(13000.0 / 40000.0, share);
+            base = 44000.0 * std::pow(14300.0 / 44000.0, share);
             referenceAgents = 4.0 + share;
-            ceiling = 30000.0;
+            ceiling = 33000.0;
         } else if (size > 24.0 && size <= 32.0) {
             const double share = (size - 24.0) / 8.0;
-            base = 13000.0 * std::pow(5400.0 / 13000.0, share);
+            base = 14300.0 * std::pow(5940.0 / 14300.0, share);
             referenceAgents = 5.0 + 3.0 * share;
-            ceiling = 12000.0;
+            ceiling = 13200.0;
         } else if (size > 32.0) {
-            base = 5400.0 * 32.0 * 32.0 /
+            base = 5940.0 * 32.0 * 32.0 /
                 std::max(1.0, static_cast<double>(setting.field.cellCount()));
             referenceAgents = 8.0;
-            ceiling = 12000.0;
+            ceiling = 13200.0;
         }
 
         const auto agents = std::max<std::size_t>(1, state.agents.size());
@@ -202,7 +208,7 @@ public:
                         std::min<std::size_t>(day, 3));
             }
         }
-        const double timeFactor = effectiveMs >= 40000 ? 1.0 :
+        const double timeFactor = effectiveMs >= targetMs ? 1.0 :
             std::clamp(static_cast<double>(effectiveMs) / targetMs, 0.01, 1.0);
         const double desired = base * agentFactor * dayFactor * timeFactor;
         config.beamWidth = static_cast<std::size_t>(std::clamp(

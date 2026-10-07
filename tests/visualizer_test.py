@@ -116,6 +116,8 @@ class BackendTest(unittest.TestCase):
 
     def test_day_time_limit_ms(self) -> None:
         self.assertEqual(SearchParameters().time_limit_ms, 60000)
+        self.assertEqual(SearchParameters().safety_margin_ms, 5000)
+        self.assertEqual(SearchParameters().send_reserve_ms, 5000)
         self.assertIn("--auto-beam-width", SearchParameters(auto_beam_width=1).arguments())
         with self.assertRaisesRegex(WorkflowError, "auto_beam_width"):
             SearchParameters(auto_beam_width=2).arguments()
@@ -668,7 +670,7 @@ result
             logs = "\n".join(value for kind, value in events if kind == "log")
             self.assertIn(
                 "beam-width=16 joint-beam-width=64 threads=1 "
-                "time-limit-ms=12400 safety-margin-ms=12200",
+                "time-limit-ms=5400 safety-margin-ms=5200",
                 logs,
             )
             current_day = 2

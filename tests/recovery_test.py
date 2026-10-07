@@ -144,7 +144,7 @@ class RecoveryTest(unittest.TestCase):
     def test_solver_reserves_timeout_without_erasing_relative_budget(self):
         with tempfile.TemporaryDirectory() as directory:
             w = Workflow(ConnectionConfig("http://example", "secret", 10), Path(sys.executable),
-                         Path(directory), SearchParameters(time_limit_ms=5000, send_reserve_ms=0))
+                         Path(directory), SearchParameters(time_limit_ms=10000, send_reserve_ms=0))
             process = mock.Mock(returncode=0)
             process.communicate.return_value = ("", "")
             with mock.patch("backend.subprocess.Popen", return_value=process) as spawn:
@@ -153,7 +153,7 @@ class RecoveryTest(unittest.TestCase):
             margin = int(command[command.index("--safety-margin-ms") + 1])
             limit = int(command[command.index("--time-limit-ms") + 1])
             self.assertEqual(margin, 12200)
-            self.assertEqual(limit - margin, 4000)
+            self.assertEqual(limit - margin, 5000)
             with mock.patch("backend.subprocess.Popen") as spawn:
                 with self.assertRaises(WorkflowError):
                     w._run([], ends_at=time.time() + 1)

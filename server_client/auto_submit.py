@@ -23,14 +23,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--work-dir", type=Path, default=Path("runtime"))
     result.add_argument("--wait", type=float, default=3600.0)
     result.add_argument("--interval", type=float, default=0.5)
-    result.add_argument("--timeout", type=float, default=10.0)
+    result.add_argument("--timeout", type=float, default=3.0)
     result.add_argument("--resume", action="store_true",
                         help="送信結果不明の場合は同じ日・同じ回答だけを再送")
     result.add_argument("--start-day", type=int)
     result.add_argument("--checkpoint", type=Path)
-    result.add_argument("--time-limit-ms", type=int, default=50000)
+    result.add_argument("--time-limit-ms", type=int, default=60000)
     result.add_argument("--auto-beam-width", type=int, choices=(0, 1), default=1)
-    result.add_argument("--send-reserve-ms", type=int, default=12000)
+    result.add_argument("--send-reserve-ms", type=int, default=5000)
     result.add_argument("--clock-margin-ms", type=int, default=1000)
     return result
 
