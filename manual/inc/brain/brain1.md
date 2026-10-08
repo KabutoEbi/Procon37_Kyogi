@@ -51,6 +51,7 @@ if (result.success) {
 - `threadCount`: 0で自動、1で並列無効
 - `maxActionsPerAgent`: 各台で残す合法行動数。0で全候補
 - `useMacroActions`: スポットや合流点への経路をまとめて生成
+- `futureFuelDivisor` / `tightFuelFutureDivisor`: 同一の公式得点を持つ中間日終端で、翌日まで残す巡回車燃料を距離と比較する尺度。既定20/10。燃料上限が当日ステップ数の半分以下のときだけ後者を使い、厳燃料日では残燃料を強く評価する
 - `macroReplanInterval`: マクロ継続と別経路を併せて検討する間隔。既定0は定期再検討なし。在庫切れの目的スポットは間隔によらず再検討する
 - `comparePeriodicReplanPlans`: 盤面サイズ・台数によらず、十分な探索時間がある最終日に既定経路と4イベントごとの定期再計画経路を比較し、公式得点を優先して高い方を採用。公式得点が同じ場合は終端評価で比較。既定true
 - `routePortfolioMinTimeMs`: 経路方式を比較する最小相対時間。既定5000ms

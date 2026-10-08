@@ -14,6 +14,7 @@
 - [`inc/overnight_refinement.md`](inc/overnight_refinement.md): 翌日の到達性・燃料を保護する終盤再配置
 - [`inc/day_beam.md`](inc/day_beam.md): 複数の当日終端候補を将来日の限定探索で比較する実験機能
 - [`tests/arena-score-analysis-1671.md`](tests/arena-score-analysis-1671.md): 公開試合1539～1671の得点差と5台時の種別構成分析
+- [`tests/ahc-inspired-search-2026-10-08.md`](tests/ahc-inspired-search-2026-10-08.md): AHC上位解を参考にした厳燃料終端評価と、不採用案の比較
 - [`server_client/`](server_client/): 回答システムとの取得・送信・自動実行方法
 - [`visualizer/`](visualizer.md): GUIでの取得・探索・送信とマップ表示
 

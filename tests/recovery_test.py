@@ -214,6 +214,26 @@ class RecoveryTest(unittest.TestCase):
                 post.assert_not_called()
             self.assertFalse((work / "score-day1.json").exists())
 
+    def test_tls_timeout_reports_safe_resume_guidance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            w, runner, *_ = self.prepare(work)
+            with mock.patch(
+                "backend.send",
+                side_effect=ApiError(
+                    0, "connection failed: _ssl.c:1064: "
+                       "The handshake operation timed out"),
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowError, "timeout\\(s\\).*10〜15.*同一回答"
+                ):
+                    runner.run()
+            self.assertEqual(runner.phase, "send_answer")
+            self.assertFalse(runner.retryable)
+            self.assertTrue((work / "automatic-progress.json").is_file())
+            self.assertEqual(
+                read_json(work / "submission-day0.json")["status"], "pending")
+
     def test_kind_submission_receipt_survives_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)

@@ -44,6 +44,9 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 /tmp/solver_benchmark --fixed-work --seeds 3 --repeats 2 > fixed.csv
 # ボトルネックの計測（速度比較とは分けて実行）
 /tmp/solver_benchmark --fixed-work --profile --seeds 2 --repeats 1 > profile.csv
+# 厳燃料日の残燃料評価（除数10対20）だけを交互比較
+/tmp/solver_benchmark --compare-tight-future-fuel --tight-fuel \
+  --size 24 --seeds 16 --repeats 1 --time-ms 300
 ```
 
 出力は次のCSV形式である。
@@ -99,6 +102,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。
 - `--no-completion`: 途中解の未実行マクロ経路の完了を無効にする。
 - `--tight-fuel`: 燃料上限を初日ステップ数の半分にする。
+- `--compare-tight-future-fuel`: 厳燃料日の残燃料評価だけを切り替え、除数10の既定版と従来相当の20を交互に比較する。`tight-future-fuel-5/10/20/40`は係数調整用variant。
 
 ```sh
 .build/tools/solver_benchmark --current-only --seed-start 3001 --seeds 3 \

@@ -18,6 +18,7 @@ int main(int argc, char** argv) {
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
     bool compareBrandRepair = false, compareUdonAlns = false, compareSpotRouteLns = false;
     bool compareRouteColumns = false;
+    bool compareTightFutureFuel = false;
     bool noDayBeam = false;
     bool quantityUpgrades = false;
     bool noCoordinatedRefinement = false;
@@ -43,6 +44,10 @@ int main(int argc, char** argv) {
             if (option == "--compare-udon-alns") { compareUdonAlns = true; continue; }
             if (option == "--compare-spot-route-lns") { compareSpotRouteLns = true; continue; }
             if (option == "--compare-route-columns") { compareRouteColumns = true; continue; }
+            if (option == "--compare-tight-future-fuel") {
+                compareTightFutureFuel = true;
+                continue;
+            }
             if (++i == argc) throw std::invalid_argument("missing option value");
             const std::string value = argv[i];
             if (option == "--variant") { variant = value; continue; }
@@ -74,7 +79,8 @@ int main(int argc, char** argv) {
         if (static_cast<int>(compareBrandRepair) +
                 static_cast<int>(compareUdonAlns) +
                 static_cast<int>(compareSpotRouteLns) +
-                static_cast<int>(compareRouteColumns) > 1)
+                static_cast<int>(compareRouteColumns) +
+                static_cast<int>(compareTightFutureFuel) > 1)
             throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
@@ -92,11 +98,19 @@ int main(int argc, char** argv) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
             variant = "improved";
         }
+        if (compareTightFutureFuel) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "tight-future-fuel-10";
+        }
         const std::string baselineName = compareBrandRepair ? "no-brand-repair" :
             (compareUdonAlns ? "no-udon-alns" :
              (compareSpotRouteLns ? "no-spot-route-lns" :
-              (compareRouteColumns ? "no-route-columns" : "baseline")));
-        const std::vector<std::string> allowed = {"improved", "no-route-columns", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
+              (compareRouteColumns ? "no-route-columns" :
+               (compareTightFutureFuel ? "tight-future-fuel-20" :
+                "baseline"))));
+        const std::vector<std::string> allowed = {"improved", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -168,6 +182,14 @@ int main(int argc, char** argv) {
                             name != "baseline" && name != "no-hard-nextday";
                         beam.assignmentCacheLimit = name == "baseline" || name == "no-cache" ? 0 : 4096;
                         beam.useMacroActions = name != "no-macros";
+                        if (name == "tight-future-fuel-5")
+                            beam.tightFuelFutureDivisor = 5;
+                        if (name == "tight-future-fuel-10")
+                            beam.tightFuelFutureDivisor = 10;
+                        if (name == "tight-future-fuel-20")
+                            beam.tightFuelFutureDivisor = 20;
+                        if (name == "tight-future-fuel-40")
+                            beam.tightFuelFutureDivisor = 40;
                         beam.reassignStalePatrolRoutes =
                             name != "baseline" && name != "no-patrol-replan";
                         beam.simplifySupplyRoutes = name != "no-supply-cleanup";

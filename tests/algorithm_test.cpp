@@ -975,6 +975,19 @@ void testConsoleReport() {
     assert(jammed.str().find(" 5 ") != std::string::npos);
 }
 
+void testFutureFuelDivisorValidation() {
+    const auto s = line(3, {4, 4}, 2, {0}, {{1, 2, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol});
+    auto cfg = smallBeam();
+    cfg.futureFuelDivisor = 0;
+    auto result = Brain1::search(s, ms, {}, cfg);
+    assert(!result.success && result.stopReason == SearchStopReason::NoValidPlan);
+    cfg.futureFuelDivisor = 20;
+    cfg.tightFuelFutureDivisor = 0;
+    result = Brain1::search(s, ms, {}, cfg);
+    assert(!result.success && result.stopReason == SearchStopReason::NoValidPlan);
+}
+
 } // namespace
 
 int main() {
@@ -996,5 +1009,6 @@ int main() {
     testDistanceCache();
     testDetourRendezvousAndTwoSpots();
     testTrialsAndTuning();
+    testFutureFuelDivisorValidation();
     testConsoleReport();
 }

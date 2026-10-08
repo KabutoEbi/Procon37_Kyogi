@@ -1260,6 +1260,19 @@ class AutomaticMatch:
         self._started = True
         try:
             self._run_loop()
+        except WorkflowError as error:
+            if str(error).startswith("connection failed:"):
+                guidance = (
+                    "通信timeout(s)を10〜15へ増やし、作業フォルダを消さずに"
+                    "「試合終了まで全自動」をもう一度押してください。"
+                )
+                if not self.retryable:
+                    guidance += (
+                        " 送信結果が不明なため自動再送はしていません。再開時は"
+                        "保存済みの同一回答だけを検査して送信します。"
+                    )
+                raise WorkflowError(f"{error}\n{guidance}") from error
+            raise
         finally:
             self._save()
 
