@@ -40,6 +40,10 @@ Windowsでは実行ファイル名が`main.exe`になり、GUIと通信クライ
 既定で使用する。ASan/UBSan用の`make test-sanitize`はGCC/Clang系Unix環境向けで、
 MSVCではCMakeの通常回帰テストを使用する。
 
+Windowsの実行ファイルとテストには16MBのスタック予約を設定する。終了コード
+`3221225725`（`0xC00000FD`）が出た場合は古い`main.exe`が残っているため、
+`build-windows.ps1`またはGUIの「mainをビルド」で再ビルドする。
+
 既定ビルドはC++17、`-O2 -pthread -Wall -Wextra -Wpedantic -Werror`。ヘッダー依存関係を自動記録するので、ヘッダー変更も次のビルドへ反映される。テストは`-UNDEBUG`でassertを有効にする。ビルド成果物とPythonキャッシュはGit管理外の`.build/`へ置き、ソルバーだけはGUI・CLIの既定パス`./main`へ出力する。ビルド・テスト中に本番の自動実行を同時に動かさない。
 
 CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの

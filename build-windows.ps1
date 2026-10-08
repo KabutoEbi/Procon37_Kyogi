@@ -10,7 +10,13 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Build = Join-Path $Root ".build/windows"
 
-$Configure = @("-S", $Root, "-B", $Build, "-DCMAKE_BUILD_TYPE=$Configuration")
+$BuildTests = if ($Test) { "ON" } else { "OFF" }
+$Configure = @(
+    "-S", $Root,
+    "-B", $Build,
+    "-DCMAKE_BUILD_TYPE=$Configuration",
+    "-DPROCON_BUILD_TESTS=$BuildTests"
+)
 if ($Generator) {
     $Configure += @("-G", $Generator)
 }
@@ -18,12 +24,10 @@ if ($Generator) {
 & cmake @Configure
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-& cmake --build $Build --config $Configuration --target procon_solver
+& cmake --build $Build --config $Configuration
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if ($Test) {
-    & cmake --build $Build --config $Configuration
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & ctest --test-dir $Build -C $Configuration --output-on-failure
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

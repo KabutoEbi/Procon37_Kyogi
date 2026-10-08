@@ -41,6 +41,7 @@ from backend import (  # noqa: E402
     parse_solver_result,
     default_solver_path,
     solver_build_command,
+    process_exit_detail,
     trace_answer_routes,
     simple_server_teams,
 )
@@ -56,17 +57,22 @@ class BackendTest(unittest.TestCase):
                 self.assertIn("/std:c++17", command)
                 self.assertIn("/Fe:main.exe", command)
                 self.assertIn("/utf-8", command)
+                self.assertIn("/STACK:16777216", command)
                 self.assertNotIn("-pthread", command)
             with mock.patch.dict("backend.os.environ", {"CXX": "g++.exe"}, clear=False):
                 command = solver_build_command(Path("main.exe"))
                 self.assertEqual(command[0], "g++.exe")
                 self.assertIn("-std=c++17", command)
+                self.assertIn("-Wl,--stack,16777216", command)
                 self.assertNotIn("-pthread", command)
 
         with mock.patch("backend.platform.system", return_value="Darwin"), \
              mock.patch.dict("backend.os.environ", {"CXX": "c++"}, clear=False):
             self.assertEqual(default_solver_path(Path("work")), Path("work/main"))
             self.assertIn("-pthread", solver_build_command(Path("main")))
+
+        self.assertIn("0xC00000FD", process_exit_detail(3221225725))
+        self.assertEqual(process_exit_detail(7), "終了コード 7")
 
     def test_app_icon_assets(self) -> None:
         svg = ROOT / "visualizer/assets/app_icon.svg"

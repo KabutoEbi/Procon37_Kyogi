@@ -298,12 +298,25 @@ def solver_build_command(output: Path) -> list[str]:
             str(source), f"/Fe:{output}",
             f"/Fo:{artifact_dir / 'main.obj'}",
             f"/Fd:{artifact_dir / 'main.pdb'}",
+            "/link", "/STACK:16777216",
         ]
     command = [compiler, "-std=c++17", "-O2", "-Wall", "-Wextra",
                "-Wpedantic", "-Werror"]
     if platform.system() != "Windows":
         command.append("-pthread")
+    else:
+        command.append("-Wl,--stack,16777216")
     return [*command, str(source), "-o", str(output)]
+
+
+def process_exit_detail(returncode: int) -> str:
+    unsigned = returncode & 0xFFFFFFFF
+    if unsigned == 0xC00000FD:
+        return (
+            f"終了コード {returncode} (0xC00000FD: Windowsスタックオーバーフロー。"
+            "16MBスタック設定でmain.exeを再ビルドしてください)"
+        )
+    return f"終了コード {returncode}"
 
 
 def simple_server_teams(config: Path) -> tuple[tuple[str, str], ...]:
@@ -816,7 +829,7 @@ class Workflow:
             raise WorkflowError(f"ソルバーを起動できません: {error}") from error
         result = CommandResult(tuple(command), stdout, stderr)
         if process.returncode != 0:
-            detail = result.output or f"終了コード {process.returncode}"
+            detail = result.output or process_exit_detail(process.returncode)
             raise WorkflowError(f"ソルバーが失敗しました\n{detail}")
         return result
 
