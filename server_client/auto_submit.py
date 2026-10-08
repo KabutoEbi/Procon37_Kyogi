@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "visualizer"))
 from backend import (AutomaticMatch, ConnectionConfig, SearchParameters,
-                     Workflow, WorkflowError, read_json)
+                     Workflow, WorkflowError, default_solver_path, read_json)
 from get_problem import load_configured_dotenv
 
 
@@ -19,7 +19,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--env-file", type=Path, default=Path(".env"))
     result.add_argument("--url", default=os.environ.get("PROCON_URL"))
     result.add_argument("--token", default=os.environ.get("PROCON_TOKEN"))
-    result.add_argument("--solver", type=Path, default=Path("./main"))
+    result.add_argument("--solver", type=Path,
+                        default=default_solver_path(Path(".")))
     result.add_argument("--work-dir", type=Path, default=Path("runtime"))
     result.add_argument("--wait", type=float, default=3600.0)
     result.add_argument("--interval", type=float, default=0.5)

@@ -29,6 +29,15 @@ c++ -std=c++17 -O2 -pthread main.cpp -o main
 python3 server_client/get_problem.py --help
 ```
 
+Windowsでは`./build-windows.ps1`で`main.exe`を作り、次のように実行する。
+`auto_prepare.py`と`auto_submit.py`もWindowsでは`./main.exe`を既定値にする。
+
+```powershell
+./build-windows.ps1
+py -3 server_client/get_problem.py --help
+py -3 server_client/auto_prepare.py select
+```
+
 既定では生成物と通信ログを`runtime/`へ置く。どちらもGit管理対象外である。
 
 ## 安全な確認順序

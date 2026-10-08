@@ -1,6 +1,7 @@
 #include "application.hpp"
 
 #include <cassert>
+#include <filesystem>
 #include <cstddef>
 #include <sstream>
 #include <unordered_set>
@@ -783,7 +784,13 @@ void testProblemCreator() {
     assert(json.find("\"agentStarts\"") != std::string::npos);
     assert(json.find("\"fuelLimits\"") != std::string::npos);
     assert(json.find("\"teams\"") != std::string::npos);
-    assert(ProblemCreator::writeJson(first, "/tmp/procon37-generated-problem-test.json"));
+    const auto temporary = std::filesystem::temp_directory_path();
+    const auto generatedPath = temporary / "procon37-generated-problem-test.json";
+    const auto settingPath = temporary / "procon37-match-setting-test.json";
+    const auto statePath = temporary / "procon37-match-state-test.json";
+    const auto directStatePath = temporary / "procon37-match-state-direct-test.json";
+    const auto dayOneStatePath = temporary / "procon37-match-state-day1-test.json";
+    assert(ProblemCreator::writeJson(first, generatedPath.string()));
 
     MatchSetting s = first.setting;
     s.startsAt = 1'800'000'000;
@@ -794,7 +801,7 @@ void testProblemCreator() {
     assert(setJson.find("\"agents\"") != std::string::npos);
     assert(setJson.find("\"players\": 2") != std::string::npos);
     assert(setJson.find("\"problem\"") == std::string::npos);
-    assert(createMatchSettingJson(s, "/tmp/procon37-match-setting-test.json"));
+    assert(createMatchSettingJson(s, settingPath.string()));
 
     const MatchSetting parsedSetting = parseMatchSettingJson(setJson);
     assert(parsedSetting.startsAt == s.startsAt);
@@ -805,7 +812,7 @@ void testProblemCreator() {
     assert(parsedSetting.field.height == s.field.height);
     assert(parsedSetting.field.spots.size() == s.field.spots.size());
     assert(ProblemCreator::toMatchSettingJson(parsedSetting) == setJson);
-    const MatchSetting fileSetting = readMatchSettingJson("/tmp/procon37-match-setting-test.json");
+    const MatchSetting fileSetting = readMatchSettingJson(settingPath.string());
     assert(fileSetting.agentStarts == s.agentStarts);
 
     CreateMatchStateConfig stateCfg;
@@ -833,7 +840,7 @@ void testProblemCreator() {
     assert(stateJson.find("\"day\": 0") != std::string::npos);
     assert(stateJson.find("\"others\"") != std::string::npos);
     assert(stateJson.find("\"traffics\"") != std::string::npos);
-    assert(createMatchStateJson(st, s.field, "/tmp/procon37-match-state-test.json"));
+    assert(createMatchStateJson(st, s.field, statePath.string()));
 
     const MatchState parsedState = parseMatchStateJson(stateJson, s);
     assert(parsedState.endsAt == st.endsAt);
@@ -847,16 +854,16 @@ void testProblemCreator() {
         assert(parsedState.agents[i].pos == st.agents[i].pos);
         assert(parsedState.agents[i].fuel == st.agents[i].fuel);
     }
-    const MatchState fileState = readMatchStateJson("/tmp/procon37-match-state-test.json", s);
+    const MatchState fileState = readMatchStateJson(statePath.string(), s);
     assert(fileState.trafficByPos == st.trafficByPos);
 
     const MatchState direct =
-        createMatchStateJson(s, stateCfg, "/tmp/procon37-match-state-direct-test.json");
+        createMatchStateJson(s, stateCfg, directStatePath.string());
     assert(ProblemCreator::toMatchStateJson(direct, s.field) == stateJson);
 
     stateCfg.day = 1;
     const MatchState later = ProblemCreator::generateMatchState(s, stateCfg);
-    assert(createMatchStateJson(later, s.field, "/tmp/procon37-match-state-day1-test.json"));
+    assert(createMatchStateJson(later, s.field, dayOneStatePath.string()));
     for (const Agent& agent : later.agents) {
         assert(s.field.contains(agent.pos));
         assert(s.field.at(agent.pos).isPassable());

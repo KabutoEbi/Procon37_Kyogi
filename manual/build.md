@@ -8,7 +8,43 @@ make -j3 test        # 通常の回帰テスト一式（実サーバー通信な
 make test-sanitize   # ASan/UBSanによるC++テスト
 ```
 
+## Windows
+
+Windows 10/11ではCMake 3.20以降と、次のいずれかのC++17環境を使用する。
+
+- Visual Studio 2022 Build Toolsの「C++によるデスクトップ開発」
+- MinGW-w64 GCC
+- Windows向けClang
+
+PowerShellから次を実行すると、`.build/windows/`へビルド構成を作り、リポジトリ
+直下へ`main.exe`を出力する。
+
+```powershell
+./build-windows.ps1
+./build-windows.ps1 -Test
+py -3 visualizer/app.py
+```
+
+Visual Studioを使う場合はDeveloper PowerShell、MinGW/Clangを使う場合は
+コンパイラとCMakeへPATHが通ったPowerShellで実行する。ジェネレータを明示する
+場合は、たとえば`./build-windows.ps1 -Generator "Visual Studio 17 2022"`とする。
+スクリプトを使わない場合の同等コマンドは次のとおり。
+
+```powershell
+cmake -S . -B .build/windows
+cmake --build .build/windows --config Release --target procon_solver
+ctest --test-dir .build/windows -C Release --output-on-failure
+```
+
+Windowsでは実行ファイル名が`main.exe`になり、GUIと通信クライアントもこの名前を
+既定で使用する。ASan/UBSan用の`make test-sanitize`はGCC/Clang系Unix環境向けで、
+MSVCではCMakeの通常回帰テストを使用する。
+
 既定ビルドはC++17、`-O2 -pthread -Wall -Wextra -Wpedantic -Werror`。ヘッダー依存関係を自動記録するので、ヘッダー変更も次のビルドへ反映される。テストは`-UNDEBUG`でassertを有効にする。ビルド成果物とPythonキャッシュはGit管理外の`.build/`へ置き、ソルバーだけはGUI・CLIの既定パス`./main`へ出力する。ビルド・テスト中に本番の自動実行を同時に動かさない。
+
+CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの
+`/W4 /EHsc /utf-8`、GCC/Clangでは従来の警告エラー化オプションを選択する。MSVCの
+警告体系はGCC/Clangと異なるため、移植時の追加警告をビルド失敗にはしない。
 
 ## ターゲット
 

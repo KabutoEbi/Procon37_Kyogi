@@ -4,6 +4,7 @@ sample_maps/
 PROBLEM_OVERVIEW.md
 *.json
 /main
+/main.exe
 /.build/
 __pycache__/
 *.py[cod]

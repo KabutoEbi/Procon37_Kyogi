@@ -12,6 +12,20 @@
 python3 visualizer/app.py
 ```
 
+WindowsではPowerShellから`py -3 visualizer/app.py`で起動する。GUIの
+ソルバー既定パスは`main.exe`であり、「mainをビルド」は`CXX`指定を優先し、
+未指定なら`g++`、`clang++`、`cl`の順に利用可能なコンパイラを探す。
+`cl`を使う場合はVisual StudioのDeveloper PowerShellから起動する。
+GUI外で先にビルドする場合は、リポジトリ直下で次を実行する。
+
+```powershell
+./build-windows.ps1
+```
+
+PowerShellの実行ポリシーでローカルスクリプトが禁止されている場合は、現在の
+プロセスだけ許可して`Set-ExecutionPolicy -Scope Process Bypass`を実行するか、
+後述のCMakeコマンドを直接使用する。
+
 Python 3.9以降とTkを使用する。`tkinter`がない場合は、使用するPythonに対応するTkパッケージを追加する。新しい探索オプションを使用するため、最初にGUIの「mainをビルド」で実行ファイルを更新する。
 
 macOSではTk 8.6以降を使用する。`python3`が古いシステムTk 8.5を使っている場合は、起動時にインストール済みのHomebrew版／python.org版Pythonを探し、対応するTkを持つPythonへ自動的に切り替える。新たなパッケージのインストールは行わない。
@@ -96,6 +110,8 @@ GUI上のdayは1始まり。API・JSON・`state-dayN.json`などのファイル�
 - `app.py`: Tk GUI、バックグラウンド実行、マップ描画
 - `backend.py`: 通信、ソルバー起動、簡易サーバー管理、チェックポイント確定、JSON表示モデル
 - `runtime.py`: macOSの対応Tkを持つPythonの検出と起動切り替え
+- Windowsでは現在のPython/Tkをそのまま使用し、ソルバーと簡易サーバーに
+  `.exe`を自動選択する。
 - リポジトリ直下の`runtime/`: 取得JSON、回答、通信ログ、探索結果の照合記録。Git管理対象外
 
 実行設定と使用ファイルは専用ウィンドウに分離し、メイン画面のボタンで表示を切り替える。実行ログは画面最下部へ横幅いっぱいに表示する。左側にはワークフローと探索結果を置き、マップ右側ではエージェントとスポットの状態を一覧できる。ワークフローと探索パラメータは固定パネルで、マップは領域に合わせて縮小する。JSONは単純な配列とオブジェクトを1行にまとめ、入れ子配列を配列単位で改行する。マップ、JSON、実行ログのスクロールバーは内容が枠を超えた場合だけ表示する。

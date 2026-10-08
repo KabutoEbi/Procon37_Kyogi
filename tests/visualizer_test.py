@@ -39,12 +39,35 @@ from backend import (  # noqa: E402
     match_acquisition_theoretical,
     map_acquisition_totals,
     parse_solver_result,
+    default_solver_path,
+    solver_build_command,
     trace_answer_routes,
     simple_server_teams,
 )
 
 
 class BackendTest(unittest.TestCase):
+    def test_windows_solver_name_and_build_commands(self) -> None:
+        with mock.patch("backend.platform.system", return_value="Windows"):
+            self.assertEqual(default_solver_path(Path("work")), Path("work/main.exe"))
+            with mock.patch.dict("backend.os.environ", {"CXX": "cl.exe"}, clear=False):
+                command = solver_build_command(Path("main.exe"))
+                self.assertEqual(command[0], "cl.exe")
+                self.assertIn("/std:c++17", command)
+                self.assertIn("/Fe:main.exe", command)
+                self.assertIn("/utf-8", command)
+                self.assertNotIn("-pthread", command)
+            with mock.patch.dict("backend.os.environ", {"CXX": "g++.exe"}, clear=False):
+                command = solver_build_command(Path("main.exe"))
+                self.assertEqual(command[0], "g++.exe")
+                self.assertIn("-std=c++17", command)
+                self.assertNotIn("-pthread", command)
+
+        with mock.patch("backend.platform.system", return_value="Darwin"), \
+             mock.patch.dict("backend.os.environ", {"CXX": "c++"}, clear=False):
+            self.assertEqual(default_solver_path(Path("work")), Path("work/main"))
+            self.assertIn("-pthread", solver_build_command(Path("main")))
+
     def test_app_icon_assets(self) -> None:
         svg = ROOT / "visualizer/assets/app_icon.svg"
         png = ROOT / "visualizer/assets/app_icon.png"

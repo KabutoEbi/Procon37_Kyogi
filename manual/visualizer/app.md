@@ -9,6 +9,10 @@ Tkで取得・探索・送信を操作するGUIの入口である。リポジト
 python3 visualizer/app.py
 ```
 
+Windowsでは`py -3 visualizer/app.py`で起動する。ソルバーの既定パスは
+`main.exe`となり、GUIビルドはMinGW、Clang、Developer PowerShellのMSVCに
+対応する。CMakeを使う場合はリポジトリ直下の`build-windows.ps1`を実行する。
+
 ## 同梱簡易サーバーでの確認
 
 1. 「mainをビルド」で現在の`main.cpp`から実行ファイルを作る。

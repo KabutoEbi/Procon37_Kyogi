@@ -22,7 +22,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | メソッド | 処理 |
 |---|---|
 | `check_connection()` | `GET /setting`で到達・認証・形式を確認 |
-| `build_solver()` | C++17、`-O2`、`-pthread`で`main.cpp`をビルド |
+| `build_solver()` | C++17・`-O2`で`main.cpp`をビルド。Windowsは`main.exe`を使い、MinGW/Clang/MSVCを判別。それ以外では`-pthread`を追加 |
 | `generate_random_setting()` | C++の`generate`モードで公式設定形式を一時生成し、検査後に保存 |
 | `fetch_setting()` / `fetch_state()` | 公式JSONを安全に保存し、dayを検査 |
 | `select_agents()` / `solve_day()` | C++の`select` / `solve`モードを実行 |

@@ -18,6 +18,17 @@
 python3 visualizer/app.py
 ```
 
+WindowsではPowerShellから次のように起動する。ソルバーの既定名は
+`main.exe`になり、同梱簡易サーバーもWindows版が自動選択される。
+
+```powershell
+py -3 visualizer/app.py
+```
+
+事前にCMakeとVisual Studio Build Tools（Desktop development with C++）または
+MinGW-w64を導入する。PowerShellでのビルドは
+`./build-windows.ps1`、テスト込みは`./build-windows.ps1 -Test`で実行できる。
+
 1. 「mainをビルド」を手動で実行する。
 2. 全工程を任せる場合は「試合終了まで全自動」を押す。問題公開待ちから最終日の回答送信までを継続し、「停止」後も保存済みの段階から再開できる。
 3. 個別に操作する場合は「設定取得・種別選択・送信」で試合設定の取得、種別選択、種別送信をまとめて実行する。
@@ -35,6 +46,8 @@ python3 visualizer/app.py
 ./main solve setting.json state-day0.json
 ./main solve setting.json state-day1.json score-day1.json
 ```
+
+Windowsでは`./main`を`./main.exe`へ読み替える。
 
 `select`は`POST /agent`用の種別配列を、`solve`は`POST /`用の`answer.json`と次日用の`score-next.json`を生成する。`main`自体は送信しない。day 1以降の探索には、前日の回答が受理された後に確定した得点チェックポイントが必要である。通信CLIの使い方は[クライアントの説明](manual/server_client/README.md)を参照する。
 

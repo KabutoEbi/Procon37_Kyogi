@@ -274,6 +274,38 @@ SIMPLE_SERVER_ROOT = (
 DEFAULT_SIMPLE_CONFIG = SIMPLE_SERVER_ROOT / "試合設定用JSONファイル/example.json"
 
 
+def default_solver_path(root: Path = PROJECT_ROOT) -> Path:
+    """Return the native solver filename for the current platform."""
+    return root / ("main.exe" if platform.system() == "Windows" else "main")
+
+
+def solver_build_command(output: Path) -> list[str]:
+    """Build command for GCC/Clang, MinGW, or an initialized MSVC shell."""
+    configured = os.environ.get("CXX")
+    if configured:
+        compiler = configured
+    else:
+        candidates = ("g++", "clang++", "cl") \
+            if platform.system() == "Windows" else ("c++",)
+        compiler = next((path for name in candidates
+                         if (path := shutil.which(name))), candidates[0])
+    source = PROJECT_ROOT / "main.cpp"
+    compiler_name = Path(compiler).name.lower()
+    if compiler_name in ("cl", "cl.exe"):
+        artifact_dir = PROJECT_ROOT / ".build" / "gui"
+        return [
+            compiler, "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4", "/utf-8",
+            str(source), f"/Fe:{output}",
+            f"/Fo:{artifact_dir / 'main.obj'}",
+            f"/Fd:{artifact_dir / 'main.pdb'}",
+        ]
+    command = [compiler, "-std=c++17", "-O2", "-Wall", "-Wextra",
+               "-Wpedantic", "-Werror"]
+    if platform.system() != "Windows":
+        command.append("-pthread")
+    return [*command, str(source), "-o", str(output)]
+
+
 def simple_server_teams(config: Path) -> tuple[tuple[str, str], ...]:
     """簡易サーバー設定から（表示名, token）を取り出す。"""
     value = read_json(config)
@@ -759,6 +791,8 @@ class Workflow:
                 command,
                 cwd=cwd or self.work_dir,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -804,22 +838,21 @@ class Workflow:
     def build_solver(self) -> CommandResult:
         output = self.solver
         output.parent.mkdir(parents=True, exist_ok=True)
-        command = [
-            os.environ.get("CXX", "c++"),
-            "-std=c++17",
-            "-O2",
-            "-pthread",
-            str(PROJECT_ROOT / "main.cpp"),
-            "-o",
-            str(output),
-        ]
-        completed = subprocess.run(
-            command,
-            cwd=PROJECT_ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        (PROJECT_ROOT / ".build" / "gui").mkdir(parents=True, exist_ok=True)
+        command = solver_build_command(output)
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=PROJECT_ROOT,
+                text=True,
+                errors="replace",
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            raise WorkflowError(
+                f"C++コンパイラを起動できません: {command[0]} ({error})"
+            ) from error
         result = CommandResult(tuple(command), completed.stdout, completed.stderr)
         if completed.returncode != 0:
             raise WorkflowError(f"ビルドに失敗しました\n{result.output}")
@@ -848,6 +881,8 @@ class Workflow:
                 command,
                 cwd=self.work_dir,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 capture_output=True,
                 check=False,
             )

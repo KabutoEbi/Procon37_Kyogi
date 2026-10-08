@@ -13,6 +13,10 @@ from pathlib import Path
 from get_problem import ApiError, load_configured_dotenv, wait_and_fetch
 
 
+def default_solver() -> Path:
+    return Path("./main.exe" if os.name == "nt" else "./main")
+
+
 def run_solver(solver: Path, arguments: list[str], work_dir: Path) -> None:
     completed = subprocess.run(
         [str(solver), *arguments], cwd=work_dir, check=False)
@@ -26,7 +30,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--env-file", type=Path, default=Path(".env"))
     result.add_argument("--url", default=os.environ.get("PROCON_URL"))
     result.add_argument("--token", default=os.environ.get("PROCON_TOKEN"))
-    result.add_argument("--solver", type=Path, default=Path("./main"))
+    result.add_argument("--solver", type=Path, default=default_solver())
     result.add_argument("--work-dir", type=Path, default=Path("runtime"))
     result.add_argument("--score", type=Path)
     result.add_argument("--expected-day", type=int)

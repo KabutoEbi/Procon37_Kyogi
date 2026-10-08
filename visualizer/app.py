@@ -52,6 +52,7 @@ from backend import (
     match_acquisition_theoretical,
     map_acquisition_totals,
     parse_solver_result,
+    default_solver_path,
     read_json,
     simple_server_teams,
 )
@@ -133,7 +134,7 @@ class SolverGUI(tk.Tk):
         self.url_var = tk.StringVar()
         self.token_var = tk.StringVar()
         self.timeout_var = tk.StringVar(value="3")
-        self.solver_var = tk.StringVar(value=str(PROJECT_ROOT / "main"))
+        self.solver_var = tk.StringVar(value=str(default_solver_path()))
         self.work_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime"))
         self.setting_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/setting.json"))
         self.state_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/state-day0.json"))
