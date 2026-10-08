@@ -13,7 +13,7 @@ int main() {
         "sample_maps/sample_24.json",
         "sample_maps/sample_32.json",
     };
-    constexpr std::array<std::int32_t, 3> expectedSupplyCounts = {1, 2, 2};
+    constexpr std::array<std::int32_t, 3> expectedSupplyCounts = {1, 1, 2};
 
     for (std::size_t index = 0; index < paths.size(); ++index) {
         const char* path = paths[index];

@@ -13,10 +13,10 @@ namespace {
 std::vector<benzen::AgentKind> kindsFor(
     std::size_t agentCount,
     std::uint64_t supplyMask) {
-    if (supplyMask == 0 || (supplyMask >> agentCount) != 0 ||
+    if ((supplyMask >> agentCount) != 0 ||
         supplyMask + 1 == (UINT64_C(1) << agentCount)) {
         throw std::invalid_argument(
-            "supply mask must select some but not all agents");
+            "supply mask must not select all agents");
     }
     std::vector<benzen::AgentKind> kinds(
         agentCount, benzen::AgentKind::Patrol);
@@ -72,8 +72,9 @@ int main(int argc, char** argv) {
 
         const int timeMs = argc >= 3 ? std::stoi(argv[2]) : 1000;
         const int supplyMask = argc >= 4 ? std::stoi(argv[3]) : 1;
-        if (timeMs <= 0 || supplyMask <= 0) {
-            throw std::invalid_argument("time and supply mask must be positive");
+        if (timeMs <= 0 || supplyMask < 0) {
+            throw std::invalid_argument(
+                "time must be positive and supply mask must be non-negative");
         }
 
         MatchRunnerConfig config;
@@ -95,7 +96,6 @@ int main(int argc, char** argv) {
             config.beam.prioritizeHardNextDayTargets = enabled != 0;
         }
         const bool details = argc >= 9 && std::stoi(argv[8]) != 0;
-
         const auto match = runMatch(
             setting,
             kindsFor(setting.agentCount(), static_cast<std::uint64_t>(supplyMask)),

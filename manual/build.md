@@ -38,6 +38,8 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 
 2026-10-07の協調改善と公開得点追跡改善後に、`make test`（C++ 11テスト、公開3サイズ、Python 38件）、`make test-sanitize`（C++ 10テスト）、`git diff --check`が成功した。GUI実画面と簡易サーバーはこの変更後に再実行していない。
 
+2026-10-08の5台時エージェント構成改善後に、`make test-core`（C++コアテストとPython 39件）、`make test-sanitize`（C++ 10テスト）、公開3サイズの`sample_maps_test`、`git diff --check`が成功した。GUI実画面、簡易サーバー、公式実サーバーへの回答送信はこの変更後に実行していない。
+
 ## コンパイラ等の指定
 
 ```sh

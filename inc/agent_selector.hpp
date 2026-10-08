@@ -80,16 +80,18 @@ private:
                    : cfg.maxSupplyCount;
     }
 
-    // 公開試合の上位結果から推定した中心構成は、4台で3巡回+1補給、
-    // 5台で3+2、7台で5+2。個別の盤面評価で前後の
-    // 台数へ動かせるよう、ここではハードコードせず比率として表す。
-    // 補給車1台で巡回車およそ2台を受け持つ構成を中心に比較する。
+    // 公開試合1539～1671の上位結果から推定した中心構成は、
+    // 4台で3巡回+1補給、5台で4+1、7台で5+2。特に5台盤面では
+    // 補給2台だと在庫上限だけで上位の玉数へ届かない試合がある。
+    // 個別の盤面評価で前後の台数へ動かせるよう、これは候補順の中心に
+    // だけ使い、最終決定は距離評価と試走比較に委ねる。
     // std::clampを使わず、C++標準設定が古い補完環境でも解析できる形にする。
     static std::int32_t preferredSupplyCount(
         std::size_t agentCount, const AgentSelectorConfig& cfg,
         std::int32_t maxSupply) noexcept {
-        const std::int32_t center =
-            static_cast<std::int32_t>((agentCount + 1) / 3);
+        const std::int32_t center = agentCount == 5
+            ? 1
+            : static_cast<std::int32_t>((agentCount + 1) / 3);
         return std::max(cfg.minSupplyCount, std::min(center, maxSupply));
     }
 

@@ -601,6 +601,29 @@ void testSelectorKeepsAtLeastHalfPatrolsByDefault() {
 }
 
 void testSelectorTrialsPreferredSupplyCountFirst() {
+    MatchSetting five;
+    five.daySteps = {2};
+    five.daySeconds = {60};
+    five.fuelLimit = 2;
+    five.playerCount = 2;
+    five.field.width = 6;
+    five.field.height = 1;
+    five.field.cells.assign(6, Cell{CellType::Plain, -1});
+    five.field.spots = {{0, 5, 1, -1}};
+    five.agentStarts = {0, 1, 2, 3, 4};
+    assert(five.field.rebuildSpotIndex());
+
+    AgentSelectorConfig fiveCfg;
+    fiveCfg.trialCandidateLimit = 1;
+    fiveCfg.trialBeamWidth = 4;
+    fiveCfg.trialJointBeamWidth = 16;
+    fiveCfg.trialScenarioCount = 1;
+    const auto fiveSelected = selectAgentKinds(five, fiveCfg);
+    assert(fiveSelected.success);
+    assert(fiveSelected.trialAssignments == 1);
+    // 公開試合の在庫上限を満たせる4巡回+1補給を最初に試す。
+    assert(fiveSelected.supplyCount == 1);
+
     MatchSetting s;
     s.daySteps = {2};
     s.daySeconds = {60};

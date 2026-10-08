@@ -48,6 +48,8 @@ make -j3 test
 
 2026-10-07には翌日終端配置、在庫再配分、日跨ぎ候補、16×16の適応的系列救済、大盤面の終端固定玉数候補を追加した。`make test`はC++ 11テスト、公開3サイズ、Python 38件が成功。`make test-sanitize`はC++ 10テストがASan/UBSanで成功した。[協調改善](coordinated-refinement-results-2026-10-07.md)と[公開得点追跡改善](arena-score-guided-improvements-2026-10-07.md)に条件と制約を記録している。
 
+2026-10-08には公開試合1539～1671を再集計し、5台問題の中心候補を4巡回+1補給へ変更した。公開設定2件と生成24×24の3シードで補給2台構成を上回り、`make test-core`と`make test-sanitize`が成功した。集計方法、比較値、補給0台を既定化しなかった理由は[公開試合1671までの分析](arena-score-analysis-1671.md)を参照する。
+
 GUIバックエンドはPython標準の`unittest`で個別に実行する。
 
 ```sh
