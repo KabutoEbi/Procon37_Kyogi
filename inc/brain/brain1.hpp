@@ -158,6 +158,44 @@ struct BeamSearchConfig {
     double diversityFraction = 0.25;
 };
 
+namespace detail {
+
+inline bool isFuelRiskDay(const MatchSetting& setting,
+                          const MatchState& matchState) {
+    if (matchState.day < 0 ||
+        static_cast<std::size_t>(matchState.day) >= setting.daySteps.size())
+        return false;
+    if (static_cast<std::int64_t>(setting.fuelLimit) * 2 <=
+        setting.daySteps[static_cast<std::size_t>(matchState.day)])
+        return true;
+    const int lowFuel = std::max(2, setting.fuelLimit / 10);
+    std::int64_t totalFuel = 0;
+    std::int64_t patrols = 0;
+    for (const Agent& agent : matchState.agents) {
+        if (!agent.isPatrol()) continue;
+        ++patrols;
+        totalFuel += agent.fuel;
+        if (agent.fuel <= lowFuel) return true;
+        bool canMove = false;
+        for (int raw = 0; raw < 6; ++raw) {
+            const CellPos next = setting.field.neighbor(
+                agent.pos, static_cast<Direction>(raw));
+            if (!setting.field.contains(next) ||
+                !setting.field.at(next).isPassable()) continue;
+            if (moveFuelCost(setting, AgentKind::Patrol, agent.pos) <=
+                agent.fuel) {
+                canMove = true;
+                break;
+            }
+        }
+        if (!canMove) return true;
+    }
+    return patrols > 0 && totalFuel * 3 <
+        patrols * static_cast<std::int64_t>(setting.fuelLimit);
+}
+
+} // namespace detail
+
 enum class SearchStopReason : std::uint8_t {
     Completed,
     TimeLimit,
@@ -2356,10 +2394,7 @@ public:
         BeamSearchResult routeBest;
         const bool finalDay = ms.day >= 0 &&
             static_cast<std::size_t>(ms.day + 1) >= s.dayCount();
-        const bool tightFuelDay = ms.day >= 0 &&
-            static_cast<std::size_t>(ms.day) < s.daySteps.size() &&
-            static_cast<std::int64_t>(s.fuelLimit) * 2 <=
-                s.daySteps[static_cast<std::size_t>(ms.day)];
+        const bool tightFuelDay = detail::isFuelRiskDay(s, ms);
         const int futureFuelDivisor = tightFuelDay
             ? cfg.tightFuelFutureDivisor : cfg.futureFuelDivisor;
         const auto officialScore = [](const GameState& state) {
@@ -3305,10 +3340,7 @@ inline BeamSearchResult brain1Beam(
 
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
-    const bool tightFuelDay = matchState.day >= 0 &&
-        static_cast<std::size_t>(matchState.day) < setting.daySteps.size() &&
-        static_cast<std::int64_t>(setting.fuelLimit) * 2 <=
-            setting.daySteps[static_cast<std::size_t>(matchState.day)];
+    const bool tightFuelDay = detail::isFuelRiskDay(setting, matchState);
     const int futureFuelDivisor = tightFuelDay
         ? config.tightFuelFutureDivisor : config.futureFuelDivisor;
     std::vector<DijkstraTable> selectionCache(setting.field.cellCount());

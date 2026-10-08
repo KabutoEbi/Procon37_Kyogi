@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 from backend import (
     PROJECT_ROOT,
+    DEFAULT_TIMEOUT_SECONDS,
     AutomaticMatch,
     CommandResult,
     ConnectionConfig,
@@ -58,6 +59,161 @@ from backend import (
 
 
 APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
+
+
+def duration_text(seconds: float) -> str:
+    """経過・残り時間を、長時間でも桁落ちしない時分秒で表示する。"""
+    value = max(0, int(seconds))
+    hours, remainder = divmod(value, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def automatic_phase_is_waiting(label: str) -> bool:
+    """サーバー側の公開時刻を待つだけで、処理時間を計らない段階か返す。"""
+    return "公開待ち" in label
+
+
+def compact_clock_status(values: dict[str, str], automatic_phase: str) -> str:
+    """時計上段を、幅が変わりにくい日程進捗と短い状態へまとめる。"""
+    automatic_labels = (
+        ("問題情報", "設定取得"),
+        ("エージェント種別選択", "エージェント選択"),
+        ("種別送信", "エージェント送信"),
+        ("当日マップ", "状態取得"),
+        ("探索", "探索中"),
+        ("回答送信", "回答送信"),
+        ("全日程", "完了"),
+    )
+    state = ""
+    if automatic_phase not in ("", "未実行"):
+        if automatic_phase_is_waiting(automatic_phase):
+            state = "待機中"
+        elif automatic_phase in ("完了", "一時停止", "停止"):
+            state = automatic_phase
+        else:
+            state = next(
+                (short for marker, short in automatic_labels
+                 if marker in automatic_phase),
+                "処理中",
+            )
+    if not state:
+        phase = values["phase"]
+        if "エージェント選択" in phase:
+            state = "エージェント選択"
+        elif "試合待機" in phase:
+            state = "開始待ち"
+        elif phase.endswith("日目"):
+            state = "待機中"
+        elif "終了" in phase:
+            state = "完了"
+        else:
+            state = "時刻待ち"
+    return f"{values['progress']} {state}"
+
+
+def match_clock_values(
+    starts_at: float,
+    day_seconds: tuple[int, ...],
+    now: float,
+    selection_ends_at: float = 0.0,
+    current_day: int | None = None,
+    day_ends_at: float = 0.0,
+) -> dict[str, str]:
+    """設定の絶対時刻から、GUI用の試合経過表示を作る。"""
+    total = sum(day_seconds)
+    if not day_seconds:
+        return {
+            "phase": "時刻未確定",
+            "selection": "受付期限はサーバー依存",
+            "match": "-",
+            "day": "-",
+            "progress": "0/0日",
+            "timer": "--:--:--",
+        }
+
+    if starts_at <= 0:
+        if (current_day is not None and 0 <= current_day < len(day_seconds)
+                and day_ends_at > 0):
+            seconds = day_seconds[current_day]
+            remaining = day_ends_at - now
+            if remaining > 0:
+                elapsed = max(0.0, seconds - remaining)
+                day_text = (f"経過 {duration_text(elapsed)} / {duration_text(seconds)}"
+                            f"（残り {duration_text(remaining)}）")
+                timer = duration_text(remaining)
+                phase = f"{current_day + 1}日目"
+            else:
+                day_text = f"終了後 {duration_text(-remaining)}"
+                timer = duration_text(-remaining)
+                phase = f"{current_day + 1}日目終了"
+            return {
+                "phase": phase,
+                "selection": "終了",
+                "match": f"開始時刻不明 / 予定 {duration_text(total)}",
+                "day": day_text,
+                "progress": f"{current_day + 1}/{len(day_seconds)}日",
+                "timer": timer,
+            }
+        return {
+            "phase": "時刻情報待ち",
+            "selection": "受付期限はサーバー依存",
+            "match": f"予定 {duration_text(total)}",
+            "day": "-",
+            "progress": f"0/{len(day_seconds)}日",
+            "timer": "--:--:--",
+        }
+
+    if selection_ends_at > 0:
+        selection = (f"残り {duration_text(selection_ends_at - now)}"
+                     if now < selection_ends_at else "終了")
+    elif now < starts_at:
+        selection = f"試合開始まで {duration_text(starts_at - now)}"
+    else:
+        selection = "終了"
+
+    elapsed = now - starts_at
+    if elapsed < 0:
+        if selection_ends_at > now:
+            phase = "開始前（エージェント選択）"
+            timer = duration_text(selection_ends_at - now)
+        else:
+            phase = "開始前（試合待機）"
+            timer = duration_text(-elapsed)
+        return {
+            "phase": phase,
+            "selection": selection,
+            "match": f"開始まで {duration_text(-elapsed)} / 予定 {duration_text(total)}",
+            "day": "-",
+            "progress": f"0/{len(day_seconds)}日",
+            "timer": timer,
+        }
+    if elapsed >= total:
+        return {
+            "phase": "全日程終了",
+            "selection": selection,
+            "match": f"経過 {duration_text(elapsed)} / 予定 {duration_text(total)}",
+            "day": f"終了後 {duration_text(elapsed - total)}",
+            "progress": f"{len(day_seconds)}/{len(day_seconds)}日",
+            "timer": duration_text(elapsed - total),
+        }
+
+    day_start = 0
+    for index, seconds in enumerate(day_seconds):
+        day_end = day_start + seconds
+        if elapsed < day_end:
+            day_elapsed = elapsed - day_start
+            return {
+                "phase": f"{index + 1}日目",
+                "selection": selection,
+                "match": f"経過 {duration_text(elapsed)} / 予定 {duration_text(total)}",
+                "day": (f"経過 {duration_text(day_elapsed)} / {duration_text(seconds)}"
+                        f"（残り {duration_text(day_end - elapsed)}）"),
+                "progress": f"{index + 1}/{len(day_seconds)}日",
+                "timer": duration_text(day_end - elapsed),
+            }
+        day_start = day_end
+    raise AssertionError("unreachable match clock state")
 
 
 class AutoScrollbar(ttk.Scrollbar):
@@ -115,6 +271,13 @@ class SolverGUI(tk.Tk):
         self._selected_kinds: list[int] = []
         self._logged_schedule: tuple[int, tuple[int, ...]] | None = None
         self._milestones: dict[str, tuple[float, str]] = {}
+        self._clock_starts_at = 0.0
+        self._clock_day_seconds: tuple[int, ...] = ()
+        self._clock_selection_ends_at = 0.0
+        self._clock_current_day: int | None = None
+        self._clock_day_ends_at = 0.0
+        self._automatic_phase = "未実行"
+        self._automatic_phase_started = 0.0
         self._simple_server = SimpleServer(PROJECT_ROOT / "runtime/simple-server")
         self._simple_teams: tuple[tuple[str, str], ...] = ()
         self.mode_var = tk.StringVar(value="manual")
@@ -132,7 +295,7 @@ class SolverGUI(tk.Tk):
         self.env_var = tk.StringVar(value=str(PROJECT_ROOT / ".env"))
         self.url_var = tk.StringVar()
         self.token_var = tk.StringVar()
-        self.timeout_var = tk.StringVar(value="3")
+        self.timeout_var = tk.StringVar(value=f"{DEFAULT_TIMEOUT_SECONDS:g}")
         self.solver_var = tk.StringVar(value=str(PROJECT_ROOT / "main"))
         self.work_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime"))
         self.setting_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/setting.json"))
@@ -141,6 +304,16 @@ class SolverGUI(tk.Tk):
         # GUI表示は1始まり。API・JSON・ファイル名へ渡す直前に0始まりへ戻す。
         self.day_var = tk.IntVar(value=1)
         self.status_var = tk.StringVar(value="準備完了")
+        self.match_clock_vars = {
+            "status": tk.StringVar(value="0/0日 時刻待ち"),
+            "phase": tk.StringVar(value="時刻未確定"),
+            "selection": tk.StringVar(value="-"),
+            "match": tk.StringVar(value="-"),
+            "day": tk.StringVar(value="-"),
+            "progress": tk.StringVar(value="0/0日"),
+            "automatic": tk.StringVar(value="未実行"),
+            "timer": tk.StringVar(value="--:--:--"),
+        }
         self.map_info_var = tk.StringVar(value="試合設定を取得または読み込んでください")
         self.search_result_vars = {
             "status": tk.StringVar(value="未実行"),
@@ -257,6 +430,19 @@ class SolverGUI(tk.Tk):
         self.stop_button = ttk.Button(mode, text="停止", command=self._request_stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=6)
         ttk.Label(mode, text="dayは1始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
+
+        clock = ttk.Frame(mode, width=210, height=52, padding=(10, 0, 0, 0))
+        self.match_clock_frame = clock
+        clock.pack(side=tk.RIGHT)
+        clock.pack_propagate(False)
+        ttk.Label(
+            clock, textvariable=self.match_clock_vars["status"],
+            anchor=tk.CENTER, width=24,
+        ).pack(fill=tk.X)
+        ttk.Label(
+            clock, textvariable=self.match_clock_vars["timer"],
+            anchor=tk.CENTER, font=("TkDefaultFont", 18, "bold"),
+        ).pack(fill=tk.X)
 
         content = ttk.Panedwindow(self, orient=tk.VERTICAL)
         content.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
@@ -769,6 +955,8 @@ class SolverGUI(tk.Tk):
                         except Exception as error:
                             self._log(f"表示更新エラー: {error}")
                     self._log(f"✓ {label} 完了")
+                    if label == "試合終了まで全自動":
+                        self._finish_automatic_phase("完了")
                     self._set_busy(False, f"{label} 完了")
                 else:
                     label, callback = context
@@ -778,6 +966,10 @@ class SolverGUI(tk.Tk):
                             callback(payload)
                         except Exception as error:
                             self._log(f"表示更新エラー: {error}")
+                    if label == "試合終了まで全自動":
+                        self._finish_automatic_phase(
+                            "一時停止" if isinstance(payload, Paused) else "停止"
+                        )
                     self._set_busy(False, "停止しました" if isinstance(payload, Paused) else f"{label} 失敗")
                     if not isinstance(payload, Paused) and not self._closing:
                         messagebox.showerror(label, self._redact(str(payload)), parent=self)
@@ -786,6 +978,7 @@ class SolverGUI(tk.Tk):
         except Exception as error:
             self._log(f"画面更新エラー: {error}")
         self._emit_due_milestones()
+        self._update_match_clock()
         self._advance_finished_day()
         if self._closing and not self._busy:
             self._simple_server.stop()
@@ -898,6 +1091,12 @@ class SolverGUI(tk.Tk):
     def _stop_simple_server(self) -> None:
         stopped = self._simple_server.stop()
         self._milestones.clear()
+        self._clock_starts_at = 0.0
+        self._clock_day_seconds = ()
+        self._clock_selection_ends_at = 0.0
+        self._clock_current_day = None
+        self._clock_day_ends_at = 0.0
+        self._update_match_clock()
         self._log("簡易サーバーを停止しました" if stopped else "簡易サーバーは停止済みです")
         self.status_var.set("簡易サーバー停止")
         self._sync_simple_server_buttons()
@@ -928,6 +1127,12 @@ class SolverGUI(tk.Tk):
         self._current_snapshot = None
         self._logged_schedule = None
         self._milestones.clear()
+        self._clock_starts_at = 0.0
+        self._clock_day_seconds = ()
+        self._clock_selection_ends_at = 0.0
+        self._clock_current_day = None
+        self._clock_day_ends_at = 0.0
+        self._update_match_clock()
         self._clear_answer_route()
         self._clear_search_result()
         self.map_canvas.delete("all")
@@ -952,6 +1157,9 @@ class SolverGUI(tk.Tk):
 
     def _set_simple_server_milestones(self, info: SimpleServerInfo) -> None:
         self._milestones.clear()
+        self._clock_selection_ends_at = info.selection_ends_at
+        self._clock_starts_at = info.match_starts_at
+        self._clock_day_seconds = tuple(info.day_seconds)
         if info.selection_ends_at > 0:
             self._milestones["selection-end"] = (
                 info.selection_ends_at, "選択時間終了"
@@ -969,6 +1177,16 @@ class SolverGUI(tk.Tk):
     def _set_setting_milestones(
         self, starts_at: int, day_seconds: tuple[int, ...]
     ) -> None:
+        # 簡易サーバーは開始前のsettingでstartsAt=0を返す。起動時に得た
+        # 実時刻を未確定値で上書きしない。
+        preserve_simple_server_clock = (
+            starts_at <= 0 and self._clock_selection_ends_at > 0
+        )
+        if not preserve_simple_server_clock and self._clock_starts_at != float(starts_at):
+            self._clock_selection_ends_at = 0.0
+        if not preserve_simple_server_clock:
+            self._clock_starts_at = float(starts_at)
+        self._clock_day_seconds = day_seconds
         if starts_at <= 0:
             return
         self._milestones["match-start"] = (float(starts_at), "試合開始")
@@ -989,6 +1207,59 @@ class SolverGUI(tk.Tk):
         for _when, key, label in due:
             self._milestones.pop(key, None)
             self._log(f"⏰ {label}")
+
+    def _update_match_clock(self) -> None:
+        values = match_clock_values(
+            self._clock_starts_at,
+            self._clock_day_seconds,
+            time.time(),
+            self._clock_selection_ends_at,
+            self._clock_current_day,
+            self._clock_day_ends_at,
+        )
+        for key, value in values.items():
+            if self.match_clock_vars[key].get() != value:
+                self.match_clock_vars[key].set(value)
+        automatic = self._automatic_phase
+        waiting = (
+            automatic_phase_is_waiting(automatic)
+            or values["phase"] == "開始前（試合待機）"
+        )
+        if waiting:
+            values["timer"] = "--:--:--"
+            self.match_clock_vars["timer"].set(values["timer"])
+        elif values["timer"] == "--:--:--" and self._automatic_phase_started > 0:
+            values["timer"] = duration_text(
+                time.monotonic() - self._automatic_phase_started
+            )
+            self.match_clock_vars["timer"].set(values["timer"])
+        status = compact_clock_status(values, automatic)
+        if self.match_clock_vars["status"].get() != status:
+            self.match_clock_vars["status"].set(status)
+
+    def _set_automatic_phase(self, label: str) -> None:
+        now = time.monotonic()
+        if self._automatic_phase_started > 0 and label != self._automatic_phase:
+            self._log(
+                f"⏱ {self._automatic_phase}: "
+                f"{duration_text(now - self._automatic_phase_started)}"
+            )
+        if label != self._automatic_phase:
+            self._automatic_phase = label
+            self._automatic_phase_started = (
+                0.0 if automatic_phase_is_waiting(label) else now
+            )
+        self._update_match_clock()
+
+    def _finish_automatic_phase(self, label: str) -> None:
+        if self._automatic_phase_started > 0:
+            self._log(
+                f"⏱ {self._automatic_phase}: "
+                f"{duration_text(time.monotonic() - self._automatic_phase_started)}"
+            )
+        self._automatic_phase = label
+        self._automatic_phase_started = 0.0
+        self._update_match_clock()
 
     def _reload_env(self, show_dialog: bool = True) -> None:
         try:
@@ -1073,6 +1344,7 @@ class SolverGUI(tk.Tk):
             self._clear_answer_route()
             self._begin_search_result(f"day={data + 1}")
         elif key == "phase":
+            self._set_automatic_phase(str(data))
             self.status_var.set(str(data))
             self._log(str(data))
         elif key == "log":
@@ -1117,6 +1389,8 @@ class SolverGUI(tk.Tk):
     def _setting_loaded(self, path: Path) -> None:
         self._daily_inputs.clear()
         self._day_deadlines.clear()
+        self._clock_current_day = None
+        self._clock_day_ends_at = 0.0
         self._clear_answer_route()
         self._clear_search_result()
         self.setting_var.set(str(path))
@@ -1187,6 +1461,13 @@ class SolverGUI(tk.Tk):
         self._daily_inputs.clear()
         self._day_deadlines.clear()
         self._logged_schedule = None
+        self._milestones.clear()
+        self._clock_starts_at = 0.0
+        self._clock_day_seconds = ()
+        self._clock_selection_ends_at = 0.0
+        self._clock_current_day = None
+        self._clock_day_ends_at = 0.0
+        self._update_match_clock()
         self._sync_day_button()
 
     def _advance_finished_day(self) -> None:
@@ -1407,6 +1688,9 @@ class SolverGUI(tk.Tk):
                 ends_at = value.get("endsAt", 0)
                 if type(ends_at) in (int, float) and ends_at > 0:
                     self._day_deadlines[day] = float(ends_at)
+                    self._clock_current_day = day
+                    self._clock_day_ends_at = float(ends_at)
+                    self._update_match_clock()
                 self.day_var.set(day + 1)
                 if day > 0:
                     candidate = self._work_path(f"score-day{day}.json")

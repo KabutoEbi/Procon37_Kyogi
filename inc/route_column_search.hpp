@@ -26,6 +26,9 @@ struct RouteColumnConfig {
     bool rankTransitPickups = true;
     bool supplyRendezvous = true;
     std::size_t maxSupplySchedules = 8;
+    // 当日開始時点で動けない、または満タンの1割以下の巡回車へ
+    // 補給車が直行する候補を、通常の合流候補より先に確保する。
+    std::size_t maxStrandedRescueSchedules = 2;
     // Keep most of the global schedule pool for timed multi-meeting routes.
     std::size_t maxStationSchedules = 2;
     std::size_t maxMeetingsPerSchedule = 3;
@@ -105,6 +108,121 @@ inline RouteColumnResult searchRouteColumns(
     // Fixed supply schedule plus a small set of deliberate high-demand stations.
     // Rebuild patrol columns for each schedule: their legal fuel trajectories differ.
     std::vector<DailyPlan> supplySchedules{incumbent};
+    std::vector<std::array<int, kMaxAgents>> rescueSteps(1);
+    const auto appendSupplySchedule = [&](DailyPlan schedule,
+                                          std::array<int, kMaxAgents> rescue) {
+        if (supplySchedules.size() >= config.maxSupplySchedules) return false;
+        const auto duplicate = std::find_if(
+            supplySchedules.begin(), supplySchedules.end(),
+            [&](const DailyPlan& old) {
+                return std::all_of(supplies.begin(), supplies.end(),
+                    [&](AgentIndex supply) {
+                        return old[supply] == schedule[supply];
+                    });
+            });
+        if (duplicate != supplySchedules.end()) return false;
+        supplySchedules.push_back(std::move(schedule));
+        rescueSteps.push_back(rescue);
+        return true;
+    };
+
+    // A fuel-zero patrol cannot appear in a useful incumbent meeting trace:
+    // it simply waits while generic schedules are ranked around moving cars.
+    // Reserve direct-to-current-position rescues before consuming the global
+    // schedule pool with station and timed-meeting alternatives.
+    if (config.supplyRendezvous && !supplies.empty() &&
+        config.maxStrandedRescueSchedules > 0 &&
+        supplySchedules.size() < config.maxSupplySchedules) {
+        struct Rescue {
+            std::int64_t value = 0;
+            AgentIndex supply = 0;
+            AgentIndex patrol = 0;
+            PathResult path;
+        };
+        std::vector<Rescue> rescues;
+        std::array<DijkstraTable, kMaxAgents> supplyTables;
+        for (const AgentIndex supply : supplies)
+            supplyTables[supply] = Brain0::dijkstra(
+                setting, matchState, matchState.agents[supply].pos);
+        const int lowFuel = std::max(2, setting.fuelLimit / 10);
+        for (const AgentIndex patrol : patrols) {
+            const auto& agent = matchState.agents[patrol];
+            bool canMove = false;
+            for (int raw = 0; raw < 6; ++raw) {
+                const auto direction = static_cast<Direction>(raw);
+                const CellPos next = setting.field.neighbor(agent.pos, direction);
+                if (!setting.field.contains(next) ||
+                    !setting.field.at(next).isPassable()) continue;
+                if (moveFuelCost(setting, AgentKind::Patrol, agent.pos) <=
+                    agent.fuel) {
+                    canMove = true;
+                    break;
+                }
+            }
+            if (canMove && agent.fuel > lowFuel) continue;
+            for (const AgentIndex supply : supplies) {
+                const auto path = Brain0::restorePath(
+                    setting, supplyTables[supply], agent.pos,
+                    AgentKind::Supply);
+                if (!path.reachable || path.cost.steps >= steps) continue;
+                const std::int64_t urgency = canMove ? setting.fuelLimit :
+                    static_cast<std::int64_t>(setting.fuelLimit) * steps;
+                const std::int64_t value = urgency +
+                    static_cast<std::int64_t>(setting.fuelLimit - agent.fuel) *
+                        (steps - path.cost.steps) - path.cost.steps;
+                rescues.push_back({value, supply, patrol, path});
+            }
+        }
+        std::stable_sort(rescues.begin(), rescues.end(),
+            [](const Rescue& lhs, const Rescue& rhs) {
+                return std::make_tuple(lhs.value, -lhs.path.cost.steps,
+                           -static_cast<int>(lhs.patrol),
+                           -static_cast<int>(lhs.supply)) >
+                       std::make_tuple(rhs.value, -rhs.path.cost.steps,
+                           -static_cast<int>(rhs.patrol),
+                           -static_cast<int>(rhs.supply));
+            });
+        const auto rescuePlan = [&](const Rescue& rescue) {
+            AgentPlan actions;
+            for (const Direction direction : rescue.path.directions)
+                actions.push_back(static_cast<int>(direction));
+            if (rescue.path.cost.steps < steps)
+                actions.push_back(rescue.path.cost.steps - steps);
+            return actions;
+        };
+        // With several supply vehicles, first offer one schedule that rescues
+        // different patrols in parallel instead of mutually exclusive plans.
+        if (!rescues.empty()) {
+            DailyPlan combined = incumbent;
+            std::array<int, kMaxAgents> combinedSteps{};
+            std::array<bool, kMaxAgents> usedSupply{}, usedPatrol{};
+            for (const Rescue& rescue : rescues) {
+                if (usedSupply[rescue.supply] || usedPatrol[rescue.patrol])
+                    continue;
+                combined[rescue.supply] = rescuePlan(rescue);
+                // Refuelling is applied after step 1 even when both vehicles
+                // start on the same cell.  The patrol must wait through that
+                // step before a fuel-consuming route becomes legal.
+                combinedSteps[rescue.patrol] =
+                    std::max(1, rescue.path.cost.steps);
+                usedSupply[rescue.supply] = true;
+                usedPatrol[rescue.patrol] = true;
+            }
+            appendSupplySchedule(std::move(combined), combinedSteps);
+        }
+        std::size_t added = 0;
+        for (const Rescue& rescue : rescues) {
+            if (added >= config.maxStrandedRescueSchedules ||
+                supplySchedules.size() >= config.maxSupplySchedules) break;
+            DailyPlan schedule = incumbent;
+            schedule[rescue.supply] = rescuePlan(rescue);
+            std::array<int, kMaxAgents> stepsToRescue{};
+            stepsToRescue[rescue.patrol] =
+                std::max(1, rescue.path.cost.steps);
+            if (appendSupplySchedule(std::move(schedule), stepsToRescue))
+                ++added;
+        }
+    }
     if (config.supplyRendezvous && !supplies.empty() &&
         config.maxStationSchedules > 0) {
         std::vector<DijkstraTable> patrolStartTables;
@@ -190,7 +308,7 @@ inline RouteColumnResult searchRouteColumns(
                     [&](const auto& old) {
                         return old[station.supply] == schedule[station.supply];
                     })) {
-                supplySchedules.push_back(std::move(schedule));
+                appendSupplySchedule(std::move(schedule), {});
             }
         }
     }
@@ -297,7 +415,7 @@ inline RouteColumnResult searchRouteColumns(
                     [&](const auto& old) { return old[supply] == plan; })) continue;
                 auto schedule = incumbent;
                 schedule[supply] = std::move(plan);
-                supplySchedules.push_back(std::move(schedule));
+                appendSupplySchedule(std::move(schedule), {});
             }
         }
     }
@@ -333,6 +451,15 @@ inline RouteColumnResult searchRouteColumns(
             future.distanceSum <= initialFuture.distanceSum + 16 + 8 * extra &&
             future.patrolFuel >= initialFuture.patrolFuel - 20 - 30 * extra;
     };
+    const auto futureRank = [&](const GameState& candidate) {
+        if (finalDay || !guard.allowFuturePositionChange)
+            return std::make_tuple(0, 0, 0, 0, 0, 0);
+        const auto future = detail::futureRoutePotential(setting, matchState,
+            candidate, futureCache, futureCached);
+        return std::make_tuple(future.reachableBrands,
+            -future.strandedPatrols, future.readyBrands, future.readyUdon,
+            -future.distanceSum, future.patrolFuel);
+    };
 
     // Paths between the patrol starts and all spots are shared by all supply
     // schedules. Labels do not assume fuel feasibility: solo simulation checks
@@ -360,6 +487,10 @@ inline RouteColumnResult searchRouteColumns(
          scheduleIndex < supplySchedules.size(); ++scheduleIndex) {
         if (Clock::now() >= deadline) break;
         const DailyPlan& schedule = supplySchedules[scheduleIndex];
+        const bool rescueSchedule = std::any_of(
+            rescueSteps[scheduleIndex].begin(),
+            rescueSteps[scheduleIndex].end(),
+            [](int rescueStep) { return rescueStep > 0; });
         const auto scheduleDeadline = Clock::now() +
             (deadline - Clock::now()) /
                 static_cast<std::int64_t>(supplySchedules.size() - scheduleIndex);
@@ -524,6 +655,12 @@ inline RouteColumnResult searchRouteColumns(
                 int count = 0;
             };
             std::vector<Label> beam{{matchState.agents[agent].pos, {}, 0, 0, 0, 0}};
+            const int rescueStep = rescueSteps[scheduleIndex][agent];
+            if (rescueStep > 0 && rescueStep < steps) {
+                beam.push_back({matchState.agents[agent].pos,
+                                AgentPlan{-rescueStep}, 0, 0,
+                                rescueStep, 0});
+            }
             for (std::size_t depth = 0;
                  depth < config.maxVisits && !beam.empty() &&
                      Clock::now() < agentDeadline;
@@ -743,13 +880,24 @@ inline RouteColumnResult searchRouteColumns(
                 brands | (remaining[index] & availableBrands),
                 previous.totalUdon + udon +
                     std::min(maxUdon[index], remainingStock));
-            if (optimistic <= scoreOf(result.finalState)) return;
+            // Equality is not a dead branch on intermediate days: a direct
+            // rescue can preserve today's official score while preventing a
+            // stranded patrol tomorrow.
+            if (optimistic < scoreOf(result.finalState) ||
+                (optimistic == scoreOf(result.finalState) &&
+                 (!rescueSchedule || finalDay))) return;
             if (index == patrols.size()) {
                 // A high-pickup column is provisional until every patrol has
                 // a route. The full replay decides whether brand-repair
                 // columns are needed; never accept a brand regression.
                 const auto checked = simulateDay(setting, matchState, combined, previous);
-                if (checked.valid && scoreOf(checked.state) > scoreOf(result.finalState) &&
+                const bool betterOfficial = checked.valid &&
+                    scoreOf(checked.state) > scoreOf(result.finalState);
+                const bool betterFuture = checked.valid && rescueSchedule &&
+                    !finalDay &&
+                    scoreOf(checked.state) == scoreOf(result.finalState) &&
+                    futureRank(checked.state) > futureRank(result.finalState);
+                if ((betterOfficial || betterFuture) &&
                     preservesFuture(checked.state)) {
                     result.plan = combined;
                     result.finalState = checked.state;

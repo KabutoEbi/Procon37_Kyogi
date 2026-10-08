@@ -457,8 +457,16 @@ public:
             // 避ける程度の重みにする。玉数上限の差が大きければ巡回寄りも選べる。
             const std::int32_t preferredSupply =
                 preferredSupplyCount(n, cfg, maxSupply);
+            // 長期戦では初日の取得上限より、燃料切れを翌日以降へ
+            // 連鎖させない構成の価値が高い。試走を省略する全自動でも
+            // 7台の中心構成（巡回5＋補給2）が僅差の在庫上限に負けない
+            // よう、日数に応じて弱い事前分布を最大2倍まで強める。
+            const double longMatchFactor = 1.0 + std::min(
+                1.0,
+                std::max(0.0,
+                    (static_cast<double>(s.dayCount()) - 4.0) / 6.0));
             const double compositionPrior =
-                -5.0e5 * (1.0 + fuelPressure) *
+                -5.0e5 * longMatchFactor * (1.0 + fuelPressure) *
                 std::abs(supplyN - preferredSupply);
             c.heuristicScore =
                 // 最大10日・32系列・8台・32スポットでも、上位の評価軸

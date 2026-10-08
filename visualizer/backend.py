@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_TIMEOUT_SECONDS = 10.0
 SERVER_CLIENT_DIR = PROJECT_ROOT / "server_client"
 if str(SERVER_CLIENT_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_CLIENT_DIR))
@@ -127,7 +128,7 @@ class RandomSettingParameters:
 class ConnectionConfig:
     url: str
     token: str
-    timeout: float = 3.0
+    timeout: float = DEFAULT_TIMEOUT_SECONDS
 
     def validate(self) -> None:
         if not self.url.strip():
@@ -480,7 +481,9 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def connection_from_env(path: Path, timeout: float = 3.0) -> ConnectionConfig:
+def connection_from_env(
+    path: Path, timeout: float = DEFAULT_TIMEOUT_SECONDS
+) -> ConnectionConfig:
     values = read_env_file(path)
     # シェルから一時的に上書きできるよう、実環境を優先する。
     url = os.environ.get("PROCON_URL", values.get("PROCON_URL", ""))
@@ -1263,7 +1266,7 @@ class AutomaticMatch:
         except WorkflowError as error:
             if str(error).startswith("connection failed:"):
                 guidance = (
-                    "通信timeout(s)を10〜15へ増やし、作業フォルダを消さずに"
+                    "通信timeout(s)を15へ増やし、作業フォルダを消さずに"
                     "「試合終了まで全自動」をもう一度押してください。"
                 )
                 if not self.retryable:

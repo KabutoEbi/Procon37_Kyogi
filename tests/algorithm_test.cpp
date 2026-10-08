@@ -988,6 +988,25 @@ void testFutureFuelDivisorValidation() {
     assert(!result.success && result.stopReason == SearchStopReason::NoValidPlan);
 }
 
+void testDynamicFuelRiskDetection() {
+    const auto s = line(4, {20, 20}, 100, {0, 3},
+                        {{0, 1, 1, -1}, {1, 2, 1, -1}});
+    auto healthy = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    assert(!detail::isFuelRiskDay(s, healthy));
+    healthy.agents[0].fuel = 10;
+    assert(detail::isFuelRiskDay(s, healthy));
+
+    auto depleted = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    depleted.agents[0].fuel = 20;
+    assert(detail::isFuelRiskDay(s, depleted));
+
+    auto severe = s;
+    severe.fuelLimit = 8;
+    auto severeState = stateFor(severe,
+        {AgentKind::Patrol, AgentKind::Supply});
+    assert(detail::isFuelRiskDay(severe, severeState));
+}
+
 } // namespace
 
 int main() {
@@ -1010,5 +1029,6 @@ int main() {
     testDetourRendezvousAndTwoSpots();
     testTrialsAndTuning();
     testFutureFuelDivisorValidation();
+    testDynamicFuelRiskDetection();
     testConsoleReport();
 }

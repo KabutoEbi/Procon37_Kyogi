@@ -225,7 +225,7 @@ class RecoveryTest(unittest.TestCase):
                        "The handshake operation timed out"),
             ):
                 with self.assertRaisesRegex(
-                    WorkflowError, "timeout\\(s\\).*10〜15.*同一回答"
+                    WorkflowError, "timeout\\(s\\).*15.*同一回答"
                 ):
                     runner.run()
             self.assertEqual(runner.phase, "send_answer")
