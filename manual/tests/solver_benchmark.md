@@ -49,7 +49,7 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 出力は次のCSV形式である。
 
 ```text
-size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements
+size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements,day_beam_candidates,day_beam_expanded,day_beam_complete,supply_move_steps,supply_wait_steps,supply_refuels,supplied_fuel,supply_idle_after_last_refuel
 ```
 
 - `variant`: 比較する機能構成
@@ -69,6 +69,9 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `alns_attempts`, `alns_expanded`, `alns_improvements`: 系列マスク固定ALNSの試行数、状態展開数、玉数改善の採用数
 - `route_columns_generated`, `route_columns_master_nodes`, `route_columns_improvements`: 巡回車別の経路候補数、在庫制約付き組合せ探索の訪問ノード数、採用改善数
 - `day_beam_candidates`, `day_beam_expanded`, `day_beam_complete`: 日跨ぎ候補数、将来の日次探索回数、全候補比較完了
+- `supply_move_steps`, `supply_wait_steps`: 補給車が移動中・待機中だったステップ数
+- `supply_refuels`, `supplied_fuel`: 実際に燃料が回復した巡回車の延べ台数と供給燃料量
+- `supply_idle_after_last_refuel`: 各補給車について最後の実補給から日終了までのステップ数の合計。補給しなかった車は1日分を数える
 
 `no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流、拡張ALNSポートフォリオをまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`、`no-expanded-alns`は各機能のアブレーションに使う。
 
@@ -78,7 +81,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 `--fixed-work`は時間制限と幅の自動調整を無効にし、ビーム幅32・同時行動幅128で最後まで探索する。高速化前後の実行ファイルを同じ引数で実行し、`plan_hash`・得点・展開数が一致した行の`ms`を比較する。時間制限付きの比較は探索量が変わるため、これと分けて評価する。
 
-各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`no-supply-cleanup`は探索後の補給車周回除去を、`wandering-supply`は合流未割当時の自由移動を有効にする。`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
+各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`no-supply-cleanup`は探索後の補給車周回除去を、`wandering-supply`は合流未割当時の自由移動を有効にする。`unbounded-supply-wait`は補給車の待機上限を0にして旧方式へ戻す。`legacy-supply-schedules`は経路候補組合せの固定待機案を1件、時刻付き合流を最大2回へ戻す比較用設定である。`terminal-wait-fill`は実験的な末尾待機活用を有効化し、`no-transit-pickup-ranking`は32×32の経路ラベルにおける通過取得順位を無効化する。`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
 
 標準エラーへ試合単位の得点合計、時間の中央値・最大値、展開数、辞書順（試合系列→日別系列累計→玉数）での勝ち・同点・負けを出力する。性能値はCPU負荷などに左右されるため、同じ環境・同じビルド設定で比較する。固定シードでも時間打切りの結果は変動し、生成問題での改善が本番問題での改善を保証するものではない。
 

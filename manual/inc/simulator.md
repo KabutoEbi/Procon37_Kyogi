@@ -21,6 +21,8 @@ if (!result.valid) {
 
 `SimulationResult::roadStaySteps`には、自チームが各道路セルに滞在した合計ステップ数が入る。
 
+`SimulationResult::supplyUtilization`には補給車ごとの実利用状況が入る。`moveSteps`と`waitSteps`は移動中・待機中だったステップ数、`refuelEvents`は実際に燃料が回復した巡回車の延べ台数、`deliveredFuel`は回復量の合計である。`firstRefuelStep`、`lastRefuelStep`、`idleStepsAfterLastRefuel`、`servedPatrolMask`も公式フェーズ順の再生結果から計算する。補給車が複数台同じセルにいる場合、補給元を仕様から一意に区別できないため、診断上は最小インデックスの補給車へ帰属させる。得点・状態遷移には影響しない。
+
 ## 1ステップずつ実行
 
 ```cpp

@@ -46,16 +46,17 @@ struct BeamSearchConfig {
     bool coordinatedRefinement = true;
     // 系列上限未達のとき、枝刈り付き全行動探索で補完する。
     bool refineBrands = true;
-    std::size_t brandSearchNodeLimit = 10000;
+    std::size_t brandSearchNodeLimit = 50000;
     // trueなら系列探索のノード上限を解除する。締切は引き続き守る。
     bool exactBrands = false;
     bool useBrandRepair = true;
     BrandRepairConfig brandRepair{};
-    // On 16x16 reserve a larger post-beam slice and widen repair/exact search
-    // while the daily-brand upper bound is still open.
+    // Reserve a larger post-beam slice and widen repair/exact search while the
+    // daily-brand upper bound is still open. Tight-fuel maps retain the proven
+    // larger beam share because refuel coordination dominates there.
     bool adaptiveSmallBoardBrandRescue = true;
-    std::size_t smallBoardBeamBudgetPercent = 85;
-    std::size_t smallBoardBrandSearchNodeLimit = 100000;
+    std::size_t smallBoardBeamBudgetPercent = 75;
+    std::size_t smallBoardBrandSearchNodeLimit = 200000;
     bool useUdonAlns = true;
     UdonAlnsConfig udonAlns{};
     bool useSpotRouteLns = true;
@@ -122,6 +123,9 @@ struct BeamSearchConfig {
     // 24x24以上で合流割当がない補給車の自由移動を許す検証用フラグ。
     // 既定では低燃料の巡回車へ近づく移動だけを優先する。
     bool allowUnassignedSupplyMoves = false;
+    // An unassigned supply must wake up periodically.  A wait covering the
+    // whole remaining day cannot be cancelled when patrol targets change.
+    std::size_t maxSupplyWaitSteps = 8;
     bool coordinatedAssignments = true;
     bool detourRendezvous = true;
     bool twoSpotLookahead = true;
@@ -197,6 +201,7 @@ struct BeamSearchResult {
     std::size_t repairedAssignments = 0;
     std::size_t detourPlans = 0;
     std::size_t removedSupplyLoops = 0;
+    std::array<SupplyUtilization, kMaxAgents> supplyUtilization{};
     std::int64_t assignmentTimeNs = 0;
     std::int64_t flowTimeNs = 0;
     std::int64_t rendezvousTimeNs = 0;
@@ -583,6 +588,30 @@ private:
     }
 
 public:
+    static std::int32_t supplyDecisionWait(
+        const GameState& state, AgentIndex supply,
+        std::size_t maximumWaitSteps) noexcept {
+        if (supply >= state.agentCount ||
+            !state.agents[supply].isSupply() ||
+            state.remainingSteps() <= 0) return 0;
+        std::int32_t wait = state.remainingSteps();
+        if (maximumWaitSteps > 0) {
+            wait = std::min<std::int32_t>(wait,
+                static_cast<std::int32_t>(std::min<std::size_t>(
+                    maximumWaitSteps,
+                    static_cast<std::size_t>(
+                        std::numeric_limits<std::int32_t>::max()))));
+        }
+        // Reconsider as soon as any patrol completes its current action.  Its
+        // next target and fuel demand may create a new rendezvous assignment.
+        for (AgentIndex p = 0; p < state.agentCount; ++p) {
+            if (!state.agents[p].isPatrol()) continue;
+            const auto& pending = state.pendingActions[p];
+            if (pending.active) wait = std::min(wait, pending.remainingSteps);
+        }
+        return std::max<std::int32_t>(1, wait);
+    }
+
     // 補給車が同じ地点へ戻る区間を待機へ置換する。全体を再シミュレーションし、
     // 巡回車の燃料・取得・終端位置を含む最終状態が一致する場合だけ採用する。
     static std::size_t simplifySupplyPlan(
@@ -2367,6 +2396,10 @@ public:
                         s, ms, prev, res.finalState, res.plan);
                 }
                 res.plan = compressWaitActions(res.plan);
+                const auto replay = simulateDay(s, ms, res.plan, prev);
+                if (replay.valid) {
+                    res.supplyUtilization = replay.supplyUtilization;
+                }
             }
             res.stopReason = reason;
             res.elapsedMs = std::chrono::duration_cast<
@@ -2806,8 +2839,14 @@ public:
                     for (const int action : actions)
                         options.emplace_back(action, ActionRoutes::none, kInvalidCell);
                     if (cfg.useMacroActions) {
-                        if (node.state.remainingSteps() > 1)
-                            options.emplace_back(-node.state.remainingSteps(), ActionRoutes::none, kInvalidCell);
+                        if (node.state.remainingSteps() > 1) {
+                            const auto wait = node.state.agents[a].isSupply()
+                                ? supplyDecisionWait(node.state, a,
+                                      cfg.maxSupplyWaitSteps)
+                                : node.state.remainingSteps();
+                            options.emplace_back(
+                                -wait, ActionRoutes::none, kInvalidCell);
+                        }
                         if (!forceWait) {
                             for (const auto& plan : macroPlans(
                                      node.state, a, s, ms, spotDist, targets, meets, cfg)) {
@@ -3418,6 +3457,9 @@ inline BeamSearchResult brain1(
     const auto searchBudget = limited ? budget - dayBeamMs - overnightMs : budget;
     const bool smallBoardTier = config.adaptiveSmallBoardBrandRescue &&
         setting.field.width == 16 && setting.field.height == 16;
+    const bool severeFuel = !setting.daySteps.empty() &&
+        static_cast<std::int64_t>(setting.fuelLimit) * 2 <=
+            setting.daySteps.front();
     const auto quantityPercent = static_cast<std::int64_t>(
         std::clamp<std::size_t>(config.quantityBudgetPercent, 1, 90));
     const auto brandDeadline = limited && !config.exactBrands && config.quantityUpgrades
@@ -3432,10 +3474,15 @@ inline BeamSearchResult brain1(
             ? std::max<std::int64_t>(1, searchBudget / 5)
             : !config.quantityUpgrades ? std::max<std::int64_t>(1,
                   searchBudget * (smallBoardTier && config.autoSizedBeam
-                      ? static_cast<std::int64_t>(std::clamp<std::size_t>(
-                            config.smallBoardBeamBudgetPercent, 50, 95))
+                      ? static_cast<std::int64_t>(severeFuel
+                            ? std::max<std::size_t>(85,
+                                  std::clamp<std::size_t>(
+                                      config.smallBoardBeamBudgetPercent, 50, 95))
+                            : std::clamp<std::size_t>(
+                                  config.smallBoardBeamBudgetPercent, 50, 95))
                       : config.autoSizedBeam
-                          ? (config.coordinatedRefinement ? 85 : 95)
+                          ? (config.coordinatedRefinement
+                                ? (severeFuel ? 85 : 75) : 95)
                           : 80) / 100)
             : std::max<std::int64_t>(1,
                   searchBudget * std::max<std::int64_t>(1, 90 - quantityPercent) / 100);
@@ -3472,10 +3519,8 @@ inline BeamSearchResult brain1(
     const bool runSpotRouteLns = config.useSpotRouteLns &&
         (!config.spotRouteLns.finalDayOnly || finalDay);
     if (config.useBrandRepair && !config.exactBrands) {
-        const auto repairConfig = smallBoardTier
-            ? strengthenedSmallBoardBrandRepair(
-                  setting, result.finalState, config.brandRepair)
-            : config.brandRepair;
+        const auto repairConfig = strengthenedBrandRepair(
+            setting, result.finalState, config.brandRepair);
         auto repairDeadline = brandDeadline;
         if (limited) {
             const auto now = Clock::now();
@@ -3516,8 +3561,16 @@ inline BeamSearchResult brain1(
     // The quantity search below treats these counts as hard lower bounds, so a
     // larger udon total can never replace a plan with fewer brands.
     const auto brandNodeLimit = config.exactBrands ? std::size_t{0} :
-        smallBoardTier ? std::max(config.brandSearchNodeLimit,
-            config.smallBoardBrandSearchNodeLimit) : config.brandSearchNodeLimit;
+        severeFuel
+            ? (smallBoardTier
+                  ? std::min<std::size_t>(
+                        std::max(config.brandSearchNodeLimit,
+                            config.smallBoardBrandSearchNodeLimit), 100000)
+                  : std::min<std::size_t>(config.brandSearchNodeLimit, 10000))
+            : smallBoardTier
+                  ? std::max(config.brandSearchNodeLimit,
+                        config.smallBoardBrandSearchNodeLimit)
+                  : config.brandSearchNodeLimit;
     const auto refined = maximizeDayBrands(setting, matchState, previousScore,
         result.plan, brandNodeLimit,
         brandDeadline);
@@ -3607,6 +3660,22 @@ inline BeamSearchResult brain1(
             result.finalState = routed.finalState;
             changed = true;
             remember();
+        }
+        // Use only time left by the established local search.  Running this
+        // first reduced its node count under short wall-clock limits.
+        if (config.spotRouteLns.terminalWaitFill &&
+            Clock::now() < localDeadline) {
+            const auto filled = fillTerminalPatrolWaits(setting, matchState,
+                previousScore, result.plan, config.spotRouteLns,
+                localDeadline);
+            result.spotRouteLnsAttempts += filled.attempts;
+            result.spotRouteLnsImprovements += filled.improvements;
+            if (filled.improvements) {
+                result.plan = filled.plan;
+                result.finalState = filled.finalState;
+                changed = true;
+                remember();
+            }
         }
         if (config.spotRouteLns.teamNeighborhood && Clock::now() < legacyRouteDeadline) {
             auto teamConfig = config.spotRouteLns;
@@ -3849,6 +3918,14 @@ inline BeamSearchResult brain1(
         EvaluationContext context;
         context.scoreAtDayStart = previousScore;
         result.evaluation = evaluateGameState(result.finalState, context, config.weights);
+    }
+    // Refiners can replace the beam plan after its utilization was measured.
+    // Replay the final winner so diagnostics always describe the submitted
+    // plan rather than an earlier incumbent.
+    const auto finalReplay = simulateDay(
+        setting, matchState, result.plan, previousScore);
+    if (finalReplay.valid) {
+        result.supplyUtilization = finalReplay.supplyUtilization;
     }
     result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         Clock::now() - started).count();

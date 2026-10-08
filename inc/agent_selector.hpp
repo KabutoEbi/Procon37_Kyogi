@@ -38,7 +38,8 @@ struct AgentSelectorConfig {
     std::int64_t timeLimitMs = 0;
     std::int64_t deadlineUnixSeconds = 0;
     std::int64_t safetyMarginMs = 1000;
-    // trueならtrialCandidateLimitを初期枠とし、締切まで未試走候補を追加する。
+    // 期限付き試走でも trialCandidateLimit 件は公平に比較し、
+    // 基本候補の完走後に残り時間があれば未試走配置も追加する。
     bool extendTrialsToDeadline = false;
 };
 
@@ -484,9 +485,9 @@ public:
             return res;
         }
 
-        // 時間制限がある実運用では、trialCandidateLimit 件を最低限の
-        // 比較対象とし、余った時間は未試走の配置へ使う。候補数だけで
-        // 先に終了せず、deadline が実際の上限になるようにする。
+        // 期限付き試走で全配置を候補にすると、最初の配置が
+        // 全予算を使い切る。基本枠を固定し、各配置・交通シナリオへ
+        // 残り時間を公平に分けて、台数と開始位置を実際に比較する。
         const std::size_t trialLimit =
             cfg.trialCandidateLimit > 0 && limited &&
                     cfg.extendTrialsToDeadline
@@ -608,7 +609,13 @@ public:
             : cfg.trialScenarios;
         if (cfg.trialCandidateLimit > 0 && scenarios.empty())
             throw std::invalid_argument("at least one trial scenario is required");
-        for (const std::size_t i : trials) {
+        std::size_t completedRuns = 0;
+        const std::size_t baseTrialCount =
+            std::min(cfg.trialCandidateLimit, trials.size());
+        const std::size_t plannedRuns = baseTrialCount * scenarios.size();
+        for (std::size_t trialIndex = 0;
+             trialIndex < trials.size(); ++trialIndex) {
+            const std::size_t i = trials[trialIndex];
             if (expired()) {
                 res.timedOut = true;
                 break;
@@ -626,9 +633,25 @@ public:
                     valid = false;
                     break;
                 }
+                auto trialDeadline = deadline;
+                if (limited && trialIndex < baseTrialCount) {
+                    const auto now = Clock::now();
+                    const auto left = std::chrono::duration_cast<
+                        std::chrono::milliseconds>(deadline - now).count();
+                    const std::size_t remainingRuns =
+                        std::max<std::size_t>(1, plannedRuns - completedRuns);
+                    // 呼び出し間の処理用に5%を残す。早く完走した分は
+                    // 次の配置へ自動的に繰り越される。
+                    const auto sliceMs = std::max<std::int64_t>(
+                        1, (left * 95 / 100) /
+                               static_cast<std::int64_t>(remainingRuns));
+                    trialDeadline = std::min(
+                        deadline, now + std::chrono::milliseconds(sliceMs));
+                }
                 const auto trial = runTrial(
-                    s, c.kinds, traffic, beam, cfg.trialDays, deadline,
+                    s, c.kinds, traffic, beam, cfg.trialDays, trialDeadline,
                     &firstDay);
+                ++completedRuns;
                 ++res.trialSimulations;
                 if (!trial.success) { valid = false; break; }
                 const auto score = trialScore(trial.score);

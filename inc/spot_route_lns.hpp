@@ -17,6 +17,11 @@ struct SpotRouteLnsConfig {
     // 巡回車1台あたりの公式シミュレーション回数。4つの切断位置へ配分する。
     std::size_t maxAttempts = 24;
     std::size_t maxInsertions = 3;
+    // Convert a patrol's terminal wait into a few extra pickups using only
+    // time left by the established ruin/recreate search.
+    bool terminalWaitFill = false;
+    std::size_t terminalFillRounds = 4;
+    std::size_t terminalFillCandidates = 8;
     bool finalDayOnly = false;
     bool preserveIntermediateState = true;
     // 系列を確保した後、複数巡回車の取得列を同時に組み替える。
@@ -418,6 +423,136 @@ inline SpotRouteLnsResult improveSpotRoutes(
                 }
             }
         }
+    }
+    return result;
+}
+
+// Replace only the final wait of one patrol at a time.  This is a cheap,
+// monotone neighbourhood: every accepted plan is fully replayed and must
+// improve the official lexicographic score.  Repeating it can append several
+// nearby pickups without rebuilding an already useful timed-refuel prefix.
+inline SpotRouteLnsResult fillTerminalPatrolWaits(
+    const MatchSetting& setting, const MatchState& matchState,
+    ScoreState previous, const DailyPlan& incumbent,
+    const SpotRouteLnsConfig& config,
+    std::chrono::steady_clock::time_point deadline) {
+    using Clock = std::chrono::steady_clock;
+    SpotRouteLnsResult result;
+    result.plan = incumbent;
+    const auto initial = simulateDay(setting, matchState, incumbent, previous);
+    if (!initial.valid) return result;
+    result.finalState = initial.state;
+    if (!config.terminalWaitFill || !config.terminalFillRounds ||
+        !config.terminalFillCandidates || Clock::now() >= deadline) return result;
+
+    const bool finalDay = static_cast<std::size_t>(matchState.day + 1) >=
+        setting.dayCount();
+    std::vector<DijkstraTable> pathCache(setting.field.cellCount());
+    std::vector<bool> cached(setting.field.cellCount(), false);
+    const auto initialFuture = !finalDay && config.allowFuturePositionChange
+        ? detail::futureRoutePotential(setting, matchState, initial.state,
+                                      pathCache, cached)
+        : detail::FutureRoutePotential{};
+    const auto score = [](const GameState& state) {
+        return std::make_tuple(countBits(state.score.matchBrands),
+            countBits(state.dayBrands), state.score.totalUdon);
+    };
+    const auto preservesFuture = [&](const GameState& candidate) {
+        if (finalDay || !config.preserveIntermediateState) return true;
+        if ((candidate.score.matchBrands & initial.state.score.matchBrands) !=
+                initial.state.score.matchBrands ||
+            (candidate.dayBrands & initial.state.dayBrands) !=
+                initial.state.dayBrands) return false;
+        if (!config.allowFuturePositionChange) {
+            for (AgentIndex a = 0; a < candidate.agentCount; ++a)
+                if (candidate.agents[a].pos != initial.state.agents[a].pos ||
+                    candidate.agents[a].fuel < initial.state.agents[a].fuel)
+                    return false;
+            return true;
+        }
+        const auto future = detail::futureRoutePotential(
+            setting, matchState, candidate, pathCache, cached);
+        const int extra = candidate.score.totalUdon -
+            initial.state.score.totalUdon;
+        return future.reachableBrands >= initialFuture.reachableBrands &&
+            future.strandedPatrols <= initialFuture.strandedPatrols &&
+            future.distanceSum <= initialFuture.distanceSum + 16 + 8 * extra &&
+            future.patrolFuel >= initialFuture.patrolFuel - 20 - 30 * extra;
+    };
+
+    for (std::size_t round = 0;
+         round < config.terminalFillRounds && Clock::now() < deadline; ++round) {
+        DailyPlan bestPlan;
+        GameState bestState = result.finalState;
+        bool found = false;
+        for (AgentIndex agent = 0;
+             agent < matchState.agents.size() && Clock::now() < deadline;
+             ++agent) {
+            if (!matchState.agents[agent].isPatrol() ||
+                result.plan[agent].empty() || result.plan[agent].back() >= 0)
+                continue;
+            const int spare = -result.plan[agent].back();
+            const CellPos from = result.finalState.agents[agent].pos;
+            const auto index = static_cast<std::size_t>(from);
+            if (!cached[index]) {
+                pathCache[index] = Brain0::dijkstra(setting, matchState, from);
+                cached[index] = true;
+            }
+            struct Candidate {
+                int newMatchBrand = 0;
+                int newDayBrand = 0;
+                std::size_t spot = 0;
+                PathResult path;
+            };
+            std::vector<Candidate> candidates;
+            for (std::size_t spot = 0;
+                 spot < setting.field.spots.size(); ++spot) {
+                if (result.finalState.remainingStocks[spot] <= 0 ||
+                    (result.finalState.acquiredSpots[agent] & spotBit(spot)))
+                    continue;
+                auto path = Brain0::restorePath(setting, pathCache[index],
+                    setting.field.spots[spot].pos);
+                if (!path.reachable || path.cost.steps <= 0 ||
+                    path.cost.steps > spare) continue;
+                const int brandIndex = setting.field.spots[spot].brandIndex;
+                const auto brand = brandIndex >= 0
+                    ? brandBit(brandIndex) : BrandMask{0};
+                candidates.push_back({
+                    (result.finalState.score.matchBrands & brand) ? 0 : 1,
+                    (result.finalState.dayBrands & brand) ? 0 : 1,
+                    spot, std::move(path)});
+            }
+            std::sort(candidates.begin(), candidates.end(),
+                [](const Candidate& lhs, const Candidate& rhs) {
+                    return std::make_tuple(-lhs.newMatchBrand,
+                               -lhs.newDayBrand, lhs.path.cost.steps, lhs.spot) <
+                           std::make_tuple(-rhs.newMatchBrand,
+                               -rhs.newDayBrand, rhs.path.cost.steps, rhs.spot);
+                });
+            if (candidates.size() > config.terminalFillCandidates)
+                candidates.resize(config.terminalFillCandidates);
+            for (const auto& candidate : candidates) {
+                if (Clock::now() >= deadline) break;
+                DailyPlan trial = result.plan;
+                trial[agent].pop_back();
+                for (const Direction direction : candidate.path.directions)
+                    trial[agent].push_back(static_cast<int>(direction));
+                if (candidate.path.cost.steps < spare)
+                    trial[agent].push_back(candidate.path.cost.steps - spare);
+                ++result.attempts;
+                const auto replay = simulateDay(
+                    setting, matchState, trial, previous);
+                if (!replay.valid || score(replay.state) <= score(bestState) ||
+                    !preservesFuture(replay.state)) continue;
+                bestPlan = std::move(trial);
+                bestState = replay.state;
+                found = true;
+            }
+        }
+        if (!found) break;
+        result.plan = std::move(bestPlan);
+        result.finalState = bestState;
+        ++result.improvements;
     }
     return result;
 }

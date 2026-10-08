@@ -144,13 +144,17 @@ void checkRandomValidityAndNonRegression() {
     }
 }
 
-void checkSmallBoardStrengthening() {
+void checkAdaptiveStrengthening() {
     MatchSetting s;
     s.field.width = s.field.height = 16;
     s.field.cells.assign(s.field.cellCount(), {CellType::Plain, -1});
     s.field.spots = {{0, 0, 1, -1}, {1, 255, 1, -1}};
     assert(s.field.rebuildSpotIndex());
     GameState incumbent;
+    incumbent.agentCount = 5;
+    for (AgentIndex a = 0; a < incumbent.agentCount; ++a)
+        incumbent.agents[a].kind = a + 1 == incumbent.agentCount
+            ? AgentKind::Supply : AgentKind::Patrol;
     incumbent.dayBrands = brandBit(0);
     const BrandRepairConfig ordinary;
     const auto stronger = strengthenedSmallBoardBrandRepair(s, incumbent, ordinary);
@@ -170,8 +174,18 @@ void checkSmallBoardStrengthening() {
     s.field.height = 24;
     incumbent.dayBrands = brandBit(0);
     const auto large = strengthenedSmallBoardBrandRepair(s, incumbent, ordinary);
-    assert(large.maxAttempts == ordinary.maxAttempts);
-    assert(large.nodesPerAttempt == ordinary.nodesPerAttempt);
+    assert(large.maxAttempts >= 56);
+    assert(large.nodesPerAttempt >= 4000);
+    assert(large.maxPatrols >= 4);
+    assert(large.maxCutVariants >= 6);
+
+    s.daySteps = {100};
+    s.fuelLimit = 50;
+    const auto constrained = strengthenedBrandRepair(s, incumbent, ordinary);
+    assert(constrained.maxAttempts == ordinary.maxAttempts);
+    assert(constrained.nodesPerAttempt == ordinary.nodesPerAttempt);
+    assert(constrained.maxPatrols == ordinary.maxPatrols);
+    assert(constrained.maxCutVariants == ordinary.maxCutVariants);
 }
 }  // namespace
 
@@ -180,5 +194,5 @@ int main() {
     checkWaitCutAndPendingMove();
     checkSupplyChain();
     checkRandomValidityAndNonRegression();
-    checkSmallBoardStrengthening();
+    checkAdaptiveStrengthening();
 }

@@ -128,6 +128,7 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " quantity-budget-percent=" << config.quantityBudgetPercent
               << " quantity-upgrades=" << (config.quantityUpgrades ? 1 : 0)
               << " coordinated-refinement=" << (config.coordinatedRefinement ? 1 : 0)
+              << " supply-wait-steps=" << config.maxSupplyWaitSteps
               << " small-board-brand-rescue="
               << (config.adaptiveSmallBoardBrandRescue ? 1 : 0)
               << " small-board-beam-budget-percent="

@@ -18,21 +18,48 @@ struct BrandRepairConfig {
     std::size_t maxCutVariants = 2;
 };
 
-// A one-brand miss on the small competition tier dominates any quantity gain.
-// Widen only that rescue neighborhood; the caller's deadline is still the
-// hard bound, and other board sizes retain the established defaults.
+// Missing a brand dominates every quantity gain. Widen the rescue neighborhood
+// according to the competition tier and the number of missing brands. The
+// caller's deadline remains the hard bound, so these are work ceilings rather
+// than guaranteed extra runtime.
+inline BrandRepairConfig strengthenedBrandRepair(
+    const MatchSetting& setting, const GameState& incumbent,
+    BrandRepairConfig config) {
+    const std::size_t acquired = countBits(incumbent.dayBrands);
+    if (acquired >= setting.field.brands.size()) {
+        return config;
+    }
+    const std::size_t missing = setting.field.brands.size() - acquired;
+    const bool severeFuel = !setting.daySteps.empty() &&
+        static_cast<std::int64_t>(setting.fuelLimit) * 2 <=
+            setting.daySteps.front();
+    // On larger maps under severe fuel pressure, freeing more patrols makes
+    // the joint refuel search explode and displaced the stronger incumbent in
+    // benchmarks. Preserve the compact proven neighborhood there.
+    if (severeFuel && std::max(setting.field.width, setting.field.height) > 16)
+        return config;
+    std::size_t patrols = 0;
+    for (AgentIndex a = 0; a < incumbent.agentCount; ++a)
+        if (incumbent.agents[a].isPatrol()) ++patrols;
+    const int size = std::max(setting.field.width, setting.field.height);
+    const std::size_t tierAttempts = size <= 16 ? 48 : size <= 24 ? 56 : 64;
+    const std::size_t tierNodes = size <= 16 ? 3000 : size <= 24 ? 4000 : 5000;
+    const std::size_t tierPatrols = size <= 16 ? 3 : size <= 24 ? 4 : 5;
+    config.maxAttempts = std::max(
+        config.maxAttempts, tierAttempts + 8 * (missing - 1));
+    config.nodesPerAttempt = std::max(config.nodesPerAttempt, tierNodes);
+    config.maxPatrols = std::max(
+        config.maxPatrols, std::min(patrols, tierPatrols));
+    config.maxCutVariants = std::max<std::size_t>(
+        config.maxCutVariants, size <= 16 ? 5 : 6);
+    return config;
+}
+
+// Source compatibility for callers that used the original 16x16 helper.
 inline BrandRepairConfig strengthenedSmallBoardBrandRepair(
     const MatchSetting& setting, const GameState& incumbent,
     BrandRepairConfig config) {
-    if (setting.field.width != 16 || setting.field.height != 16 ||
-        countBits(incumbent.dayBrands) >= setting.field.brands.size()) {
-        return config;
-    }
-    config.maxAttempts = std::max<std::size_t>(config.maxAttempts, 48);
-    config.nodesPerAttempt = std::max<std::size_t>(config.nodesPerAttempt, 3000);
-    config.maxPatrols = std::max<std::size_t>(config.maxPatrols, 3);
-    config.maxCutVariants = std::max<std::size_t>(config.maxCutVariants, 5);
-    return config;
+    return strengthenedBrandRepair(setting, incumbent, config);
 }
 
 struct BrandRepairResult {

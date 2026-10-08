@@ -465,6 +465,20 @@ void testMultipleRefuelsInOneDay() {
 }
 
 void testSupplyMovesOnlyForRendezvous() {
+    // 利用率は公式フェーズ順の移動完了直後に発生した補給を記録する。
+    auto measured = line(3, {4}, 1, {0, 1}, {});
+    auto measuredState = stateFor(
+        measured, {AgentKind::Patrol, AgentKind::Supply});
+    const auto measuredReplay = simulateDay(
+        measured, measuredState, DailyPlan{{2, 2}, {-4}});
+    assert(measuredReplay.valid);
+    const auto& usage = measuredReplay.supplyUtilization[1];
+    assert(usage.moveSteps == 0 && usage.waitSteps == 4);
+    assert(usage.refuelEvents == 1 && usage.deliveredFuel == 1);
+    assert(usage.firstRefuelStep == 2 && usage.lastRefuelStep == 2);
+    assert(usage.idleStepsAfterLastRefuel == 2);
+    assert(usage.servedPatrolMask == 1U);
+
     // 目的地へは届くが、到着時に燃料が尽きる。補給車も移動して
     // 合流し、次の巡回に使える燃料を残す。
     auto s = line(5, {8}, 4, {0, 0}, {{1, 4, 1, -1}});
@@ -516,6 +530,16 @@ void testSupplyMovesOnlyForRendezvous() {
 }
 
 void testSupplyReplansInsteadOfWaitingAllDay() {
+    auto eventSetting = line(3, {12}, 4, {0, 1}, {});
+    auto eventState = stateFor(
+        eventSetting, {AgentKind::Patrol, AgentKind::Supply});
+    GameState event;
+    assert(event.initialize(eventSetting, eventState));
+    assert(Brain1::supplyDecisionWait(event, 1, 8) == 8);
+    assert(tryScheduleAction(event, eventSetting, eventState, 0, 2).error ==
+           SimulationError::None);
+    assert(Brain1::supplyDecisionWait(event, 1, 8) == 2);
+
     // 32x32・seed 1では、巡回車がマクロ経路へ入った後に通常の巡回先割当が
     // 一時的に消える。補給車が残り全時間を待機せず、移動中の巡回車を
     // 追跡して次の合流を再計画することを確認する。

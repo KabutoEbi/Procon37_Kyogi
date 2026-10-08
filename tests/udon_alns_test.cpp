@@ -157,6 +157,36 @@ void checkRandomValidityAndPreservedBrandCounts() {
                    cfg.nodesPerAttempt);
     }
 }
+
+void checkNearestSupplyUsesTrafficTravelTime() {
+    auto s = line(5, 8, {2, 1, 4}, {});
+    s.field.cells[1].type = CellType::Road;
+    s.field.cells[3].type = CellType::Road;
+    auto ms = stateFor(s, {
+        AgentKind::Patrol, AgentKind::Supply, AgentKind::Supply});
+    ms.trafficByPos[1] = TrafficStatus::Jammed;
+    ms.trafficByPos[3] = TrafficStatus::Smooth;
+    GameState state;
+    assert(state.initialize(s, ms));
+    std::vector<DijkstraTable> cache(s.field.cellCount());
+    std::vector<bool> cached(s.field.cellCount(), false);
+    // Supply 1 is geometrically adjacent but leaving its jammed road takes
+    // four steps. Supply 2 reaches the patrol in three steps.
+    assert(detail::nearestSupplyByTravel(
+               s, ms, state, 0, cache, cached) == 2);
+
+    auto blocked = line(3, 4, {0, 2}, {});
+    blocked.field.cells[1].type = CellType::Pond;
+    auto blockedState = stateFor(
+        blocked, {AgentKind::Patrol, AgentKind::Supply});
+    GameState blockedGame;
+    assert(blockedGame.initialize(blocked, blockedState));
+    cache.assign(blocked.field.cellCount(), DijkstraTable{});
+    cached.assign(blocked.field.cellCount(), false);
+    assert(detail::nearestSupplyByTravel(
+               blocked, blockedState, blockedGame, 0, cache, cached) ==
+           blockedGame.agentCount);
+}
 }  // namespace
 
 void checkReassignConsumedStock() {
@@ -184,4 +214,5 @@ int main() {
     checkBrainMaximizesBrandsBeforeUdon();
     checkIntermediateDayPreservesFutureState();
     checkRandomValidityAndPreservedBrandCounts();
+    checkNearestSupplyUsesTrafficTravelTime();
 }

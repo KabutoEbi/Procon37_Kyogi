@@ -12,6 +12,40 @@
 
 namespace benzen {
 
+namespace detail {
+
+inline AgentIndex nearestSupplyByTravel(
+    const MatchSetting& setting, const MatchState& matchState,
+    const GameState& state, AgentIndex patrol,
+    std::vector<DijkstraTable>& cache, std::vector<bool>& cached) {
+    if (patrol >= state.agentCount ||
+        cache.size() != setting.field.cellCount() ||
+        cached.size() != setting.field.cellCount()) return state.agentCount;
+    const CellPos goal = state.agents[patrol].pos;
+    AgentIndex best = state.agentCount;
+    std::int32_t bestArrival = kImpassableCost;
+    for (AgentIndex supply = 0; supply < state.agentCount; ++supply) {
+        if (!state.agents[supply].isSupply()) continue;
+        const CellPos start = state.agents[supply].pos;
+        const auto index = static_cast<std::size_t>(start);
+        if (!cached[index]) {
+            cache[index] = Brain0::dijkstra(setting, matchState, start);
+            cached[index] = true;
+        }
+        const auto arrival = cache[index].distances[
+            static_cast<std::size_t>(goal)];
+        if (arrival >= kImpassableCost) continue;
+        if (std::make_pair(arrival, supply) <
+            std::make_pair(bestArrival, best)) {
+            bestArrival = arrival;
+            best = supply;
+        }
+    }
+    return best;
+}
+
+} // namespace detail
+
 struct UdonAlnsConfig {
     std::size_t maxAttempts = 12;
     // Once a useful neighborhood is found, spend a small extra budget there.
@@ -54,6 +88,8 @@ inline UdonAlnsResult improveDayUdon(
         static_cast<std::size_t>(ms.day + 1) >= s.dayCount();
     std::vector<DijkstraTable> futureCache(s.field.cellCount());
     std::vector<bool> futureCached(s.field.cellCount(), false);
+    std::vector<DijkstraTable> supplyDistanceCache(s.field.cellCount());
+    std::vector<bool> supplyDistanceCached(s.field.cellCount(), false);
     const auto initialFuture = !finalDay && config.allowFuturePositionChange
         ? detail::futureRoutePotential(s, ms, result.finalState,
                                       futureCache, futureCached)
@@ -188,18 +224,9 @@ inline UdonAlnsResult improveDayUdon(
         }
 
         if (op.freeSupply) {
-            AgentIndex supply = ms.agents.size();
-            int nearest = kImpassableCost;
-            const auto p = s.field.toCoord(cp.state.agents[primary].pos);
-            for (AgentIndex a = 0; a < ms.agents.size(); ++a) {
-                if (!ms.agents[a].isSupply()) continue;
-                const auto q = s.field.toCoord(cp.state.agents[a].pos);
-                const int distance = std::abs(p.x - q.x) + std::abs(p.y - q.y);
-                if (distance < nearest) {
-                    nearest = distance;
-                    supply = a;
-                }
-            }
+            const AgentIndex supply = detail::nearestSupplyByTravel(
+                s, ms, cp.state, primary,
+                supplyDistanceCache, supplyDistanceCached);
             if (supply < ms.agents.size()) neighborhood.freeAgents[supply] = true;
         }
 

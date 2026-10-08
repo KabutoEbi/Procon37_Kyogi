@@ -86,6 +86,7 @@ private:
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
         else if (name == "--quantity-upgrades") beam.quantityUpgrades = value != 0;
         else if (name == "--coordinated-refinement") beam.coordinatedRefinement = value != 0;
+        else if (name == "--supply-wait-steps") beam.maxSupplyWaitSteps = value;
         else if (name == "--small-board-brand-rescue") {
             beam.adaptiveSmallBoardBrandRescue = value != 0;
         } else if (name == "--small-board-beam-budget-percent") {

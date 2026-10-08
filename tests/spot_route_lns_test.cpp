@@ -40,6 +40,64 @@ void checkFinalDayInsertion() {
     assert(replay.valid && replay.state == result.finalState);
 }
 
+void checkTerminalWaitFillsSeveralSpots() {
+    MatchSetting setting;
+    setting.field.width = 5;
+    setting.field.height = 1;
+    setting.field.cells.assign(5, {CellType::Plain, -1});
+    setting.field.spots = {
+        {0, 1, 1, -1}, {0, 2, 1, -1}, {0, 3, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0};
+    setting.daySteps = {8};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 8;
+
+    MatchState state;
+    state.trafficByPos.assign(5, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 8}};
+    const DailyPlan incumbent{{2, -6}};
+    const auto before = simulateDay(setting, state, incumbent);
+    assert(before.valid && before.state.dayUdon == 1);
+
+    SpotRouteLnsConfig config;
+    config.terminalWaitFill = true;
+    const auto result = fillTerminalPatrolWaits(
+        setting, state, {}, incumbent, config,
+        std::chrono::steady_clock::time_point::max());
+    // A shortest path to spot 3 passes through spot 2, so both may be gained
+    // by one accepted extension.
+    assert(result.improvements >= 1);
+    assert(result.finalState.dayUdon == 3);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
+void checkRoutePathCountsTransitPickups() {
+    MatchSetting setting;
+    setting.field.width = 5;
+    setting.field.height = 1;
+    setting.field.cells.assign(5, {CellType::Plain, -1});
+    setting.field.spots = {
+        {0, 1, 1, -1}, {1, 2, 1, -1}, {2, 4, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0};
+    setting.daySteps = {8};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 8;
+    MatchState state;
+    state.trafficByPos.assign(5, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 8}};
+    const auto path = Brain0::shortestPath(
+        setting, state, 0, 4, AgentKind::Patrol);
+    assert(path.reachable);
+    const auto spots = detail::routePathSpots(setting, path);
+    assert(countBits(spots) == 3);
+    assert((spots & spotBit(0)) != 0);
+    assert((spots & spotBit(1)) != 0);
+    assert((spots & spotBit(2)) != 0);
+}
+
 void checkJointRouteSearch() {
     MatchSetting setting;
     setting.field.width = 8;
@@ -281,6 +339,34 @@ void checkRouteColumnsSupplyStation() {
     assert(replay.valid && replay.state == result.finalState);
 }
 
+void checkRouteColumnsUseEverySupplyForStations() {
+    MatchSetting setting;
+    setting.field.width = 7;
+    setting.field.height = 1;
+    setting.field.cells.assign(7, {CellType::Plain, -1});
+    setting.field.spots = {{0, 1, 1, -1}, {1, 2, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {0, 6, 2};
+    setting.daySteps = {4};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 1;
+    MatchState state;
+    state.trafficByPos.assign(7, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 0, 1},
+                    {1, AgentKind::Supply, 6, 0},
+                    {2, AgentKind::Supply, 2, 0}};
+    const DailyPlan incumbent{{2, -2}, {-4}, {-4}};
+    assert(simulateDay(setting, state, incumbent).state.dayUdon == 1);
+    const auto result = searchRouteColumns(setting, state, {}, incumbent,
+        SpotRouteLnsConfig{}, RouteColumnConfig{},
+        std::chrono::steady_clock::time_point::max());
+    assert(result.improvements > 0 && result.finalState.dayUdon == 2);
+    assert(result.plan[1] == incumbent[1]);
+    assert(result.plan[2] != incumbent[2]);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
 void checkRouteColumnsLargePool() {
     MatchSetting setting;
     setting.field.width = 14;
@@ -406,6 +492,8 @@ void checkRouteColumnsSuffixInsertionWithoutTerminalWait() {
 
 int main() {
     checkFinalDayInsertion();
+    checkTerminalWaitFillsSeveralSpots();
+    checkRoutePathCountsTransitPickups();
     checkIntermediateFuelDominance();
     checkJointRouteSearch();
     checkPortfolioPrefersNewMatchBrand();
@@ -414,6 +502,7 @@ int main() {
     checkRouteColumnsRespectStock();
     checkRouteColumnsCombinePatrols();
     checkRouteColumnsSupplyStation();
+    checkRouteColumnsUseEverySupplyForStations();
     checkRouteColumnsLargePool();
     checkRouteColumnsKeepSearchSlotBesideIncumbent();
     checkRouteColumnsRepairBrandsAfterQuantityRoute();

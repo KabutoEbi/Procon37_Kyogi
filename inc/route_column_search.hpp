@@ -21,8 +21,14 @@ struct RouteColumnConfig {
     std::size_t columnsPerAgent = 32;
     std::size_t maxVisits = 14;
     std::size_t maxMasterNodes = 150000;
+    // Rank labels by every spot crossed on the restored shortest path, not
+    // only by the explicitly selected destination.  Replay remains the oracle.
+    bool rankTransitPickups = true;
     bool supplyRendezvous = true;
     std::size_t maxSupplySchedules = 8;
+    // Keep most of the global schedule pool for timed multi-meeting routes.
+    std::size_t maxStationSchedules = 2;
+    std::size_t maxMeetingsPerSchedule = 3;
 };
 
 struct RouteColumnResult {
@@ -49,6 +55,17 @@ inline BrandMask columnBrands(const MatchSetting& setting, SpotMask spots) {
     for (std::size_t i = 0; i < setting.field.spots.size(); ++i)
         if ((spots & spotBit(i)) && setting.field.spots[i].brandIndex >= 0)
             result |= BrandMask{1} << setting.field.spots[i].brandIndex;
+    return result;
+}
+
+inline SpotMask routePathSpots(
+    const MatchSetting& setting, const PathResult& path) {
+    SpotMask result = 0;
+    for (const CellPos pos : path.positions) {
+        const int spot = setting.field.at(pos).spotIndex;
+        if (spot >= 0)
+            result |= spotBit(static_cast<std::size_t>(spot));
+    }
     return result;
 }
 
@@ -85,53 +102,96 @@ inline RouteColumnResult searchRouteColumns(
         (matchState.agents[a].isPatrol() ? patrols : supplies).push_back(a);
     if (patrols.empty() || setting.field.spots.empty()) return result;
 
-    // Fixed supply schedule plus one deliberate station at a high-demand spot.
+    // Fixed supply schedule plus a small set of deliberate high-demand stations.
     // Rebuild patrol columns for each schedule: their legal fuel trajectories differ.
     std::vector<DailyPlan> supplySchedules{incumbent};
-    if (config.supplyRendezvous && !supplies.empty()) {
-        const AgentIndex supply = supplies.front();
-        const auto table = Brain0::dijkstra(setting, matchState,
-                                             matchState.agents[supply].pos);
+    if (config.supplyRendezvous && !supplies.empty() &&
+        config.maxStationSchedules > 0) {
         std::vector<DijkstraTable> patrolStartTables;
         patrolStartTables.reserve(patrols.size());
         for (const AgentIndex patrol : patrols)
             patrolStartTables.push_back(Brain0::dijkstra(
                 setting, matchState, matchState.agents[patrol].pos));
-        int bestValue = -1;
-        std::size_t bestSpot = setting.field.spots.size();
-        for (std::size_t i = 0; i < setting.field.spots.size(); ++i) {
-            const auto& spot = setting.field.spots[i];
-            const auto path = Brain0::restorePath(setting, table, spot.pos,
-                                                   AgentKind::Supply);
-            if (!path.reachable || path.cost.steps > steps / 2) continue;
-            int value = std::min(spot.maxStock, static_cast<int>(patrols.size())) * 2 -
-                        path.cost.steps;
-            for (std::size_t p = 0; p < patrols.size(); ++p) {
-                const auto patrolPath = Brain0::restorePath(setting,
-                    patrolStartTables[p], spot.pos);
-                if (!patrolPath.reachable || patrolPath.cost.steps > steps / 2 ||
-                    patrolPath.cost.fuel > matchState.agents[patrols[p]].fuel)
-                    continue;
-                const int fuelOnArrival = matchState.agents[patrols[p]].fuel -
-                    patrolPath.cost.fuel;
-                const int missing = std::max(0, setting.fuelLimit - fuelOnArrival);
-                value += 3 + missing * 4 / std::max(1, setting.fuelLimit);
-            }
-            if (bestSpot == setting.field.spots.size() || value > bestValue) {
-                bestValue = value;
-                bestSpot = i;
+        struct Station {
+            std::int64_t value = 0;
+            AgentIndex supply = 0;
+            std::size_t spot = 0;
+            PathResult path;
+        };
+        std::vector<Station> stations;
+        for (const AgentIndex supply : supplies) {
+            const auto table = Brain0::dijkstra(
+                setting, matchState, matchState.agents[supply].pos);
+            for (std::size_t i = 0; i < setting.field.spots.size(); ++i) {
+                const auto& spot = setting.field.spots[i];
+                const auto path = Brain0::restorePath(
+                    setting, table, spot.pos, AgentKind::Supply);
+                if (!path.reachable || path.cost.steps > steps / 2) continue;
+                std::int64_t delivered = 0;
+                int served = 0;
+                for (std::size_t p = 0; p < patrols.size(); ++p) {
+                    const auto patrolPath = Brain0::restorePath(
+                        setting, patrolStartTables[p], spot.pos);
+                    if (!patrolPath.reachable ||
+                        patrolPath.cost.steps > steps / 2 ||
+                        patrolPath.cost.fuel >
+                            matchState.agents[patrols[p]].fuel) continue;
+                    const int fuelOnArrival =
+                        matchState.agents[patrols[p]].fuel -
+                        patrolPath.cost.fuel;
+                    const int missing = std::max(
+                        0, setting.fuelLimit - fuelOnArrival);
+                    if (missing == 0) continue;
+                    const int serviceTime = std::max(
+                        path.cost.steps, patrolPath.cost.steps);
+                    delivered += static_cast<std::int64_t>(missing) *
+                        std::max(1, steps - serviceTime + 1);
+                    ++served;
+                }
+                // A parked supply with no predicted customer is merely a
+                // positional guess.  Leave such repositioning to the
+                // overnight refinement instead of consuming schedule slots.
+                if (served == 0) continue;
+                const auto stockUse = std::min(
+                    spot.maxStock, static_cast<int>(patrols.size()));
+                const std::int64_t value = delivered +
+                    static_cast<std::int64_t>(served) * setting.fuelLimit +
+                    static_cast<std::int64_t>(stockUse) * steps -
+                    path.cost.steps;
+                stations.push_back({value, supply, i, path});
             }
         }
-        if (bestSpot < setting.field.spots.size()) {
-            const auto path = Brain0::restorePath(setting, table,
-                setting.field.spots[bestSpot].pos, AgentKind::Supply);
+        std::stable_sort(stations.begin(), stations.end(),
+            [](const Station& lhs, const Station& rhs) {
+                return std::make_tuple(lhs.value, -lhs.path.cost.steps,
+                           -static_cast<int>(lhs.supply),
+                           -static_cast<int>(lhs.spot)) >
+                       std::make_tuple(rhs.value, -rhs.path.cost.steps,
+                           -static_cast<int>(rhs.supply),
+                           -static_cast<int>(rhs.spot));
+            });
+        const auto stationLimit = std::min({
+            config.maxStationSchedules, stations.size(),
+            config.maxSupplySchedules > supplySchedules.size()
+                ? config.maxSupplySchedules - supplySchedules.size()
+                : std::size_t{0}});
+        for (std::size_t candidate = 0;
+             candidate < stationLimit; ++candidate) {
+            const auto& station = stations[candidate];
             DailyPlan schedule = incumbent;
             AgentPlan actions;
-            for (const Direction d : path.directions)
+            for (const Direction d : station.path.directions)
                 actions.push_back(static_cast<int>(d));
-            if (steps > path.cost.steps) actions.push_back(path.cost.steps - steps);
-            schedule[supply] = std::move(actions);
-            if (schedule[supply] != incumbent[supply]) supplySchedules.push_back(schedule);
+            if (steps > station.path.cost.steps)
+                actions.push_back(station.path.cost.steps - steps);
+            schedule[station.supply] = std::move(actions);
+            if (schedule[station.supply] != incumbent[station.supply] &&
+                std::none_of(supplySchedules.begin(), supplySchedules.end(),
+                    [&](const auto& old) {
+                        return old[station.supply] == schedule[station.supply];
+                    })) {
+                supplySchedules.push_back(std::move(schedule));
+            }
         }
     }
 
@@ -151,7 +211,16 @@ inline RouteColumnResult searchRouteColumns(
                 for (const auto q : patrols)
                     if (state.agents[q].pos == pos)
                         demand += setting.fuelLimit - state.agents[q].fuel;
-                if (demand > 0) meetings.push_back({pos, static_cast<int>(t), demand});
+                if (demand <= 0) continue;
+                const auto duplicate = std::find_if(
+                    meetings.begin(), meetings.end(), [&](const Meeting& old) {
+                        return old.pos == pos && old.time == static_cast<int>(t);
+                    });
+                if (duplicate == meetings.end()) {
+                    meetings.push_back({pos, static_cast<int>(t), demand});
+                } else {
+                    duplicate->demand = std::max(duplicate->demand, demand);
+                }
             }
         }
         // Prefer fuel delivered while there is still useful working time.
@@ -185,17 +254,43 @@ inline RouteColumnResult searchRouteColumns(
                 for (const auto d : path.directions) plan.push_back(static_cast<int>(d));
                 int time = std::min(steps, first.time + 1);
                 if (time > cut + path.cost.steps) plan.push_back(cut + path.cost.steps - time);
-                const auto onward = Brain0::dijkstra(setting, matchState, first.pos);
-                for (const auto& second : meetings) {
-                    if (second.pos == first.pos || second.time <= time) continue;
-                    const auto next = Brain0::restorePath(setting, onward, second.pos, AgentKind::Supply);
-                    if (!next.reachable || time + next.cost.steps > second.time) continue;
-                    for (const auto d : next.directions) plan.push_back(static_cast<int>(d));
-                    time += next.cost.steps;
-                    const int leave = std::min(steps, second.time + 1);
+                CellPos current = first.pos;
+                for (std::size_t leg = 1;
+                     leg < config.maxMeetingsPerSchedule; ++leg) {
+                    const auto onward = Brain0::dijkstra(
+                        setting, matchState, current);
+                    const Meeting* selected = nullptr;
+                    PathResult selectedPath;
+                    std::int64_t selectedValue =
+                        std::numeric_limits<std::int64_t>::min();
+                    for (const auto& nextMeeting : meetings) {
+                        if (nextMeeting.time < time) continue;
+                        const auto next = Brain0::restorePath(
+                            setting, onward, nextMeeting.pos,
+                            AgentKind::Supply);
+                        if (!next.reachable ||
+                            time + next.cost.steps > nextMeeting.time) continue;
+                        const std::int64_t value =
+                            static_cast<std::int64_t>(nextMeeting.demand) *
+                                (steps - nextMeeting.time + 1) -
+                            next.cost.steps;
+                        if (!selected || value > selectedValue ||
+                            (value == selectedValue &&
+                             std::make_pair(nextMeeting.time, nextMeeting.pos) <
+                                 std::make_pair(selected->time, selected->pos))) {
+                            selected = &nextMeeting;
+                            selectedPath = next;
+                            selectedValue = value;
+                        }
+                    }
+                    if (!selected) break;
+                    for (const auto d : selectedPath.directions)
+                        plan.push_back(static_cast<int>(d));
+                    time += selectedPath.cost.steps;
+                    const int leave = std::min(steps, selected->time + 1);
                     if (leave > time) plan.push_back(time - leave);
                     time = leave;
-                    break;
+                    current = selected->pos;
                 }
                 if (time < steps) plan.push_back(time - steps);
                 if (std::any_of(supplySchedules.begin(), supplySchedules.end(),
@@ -444,10 +539,23 @@ inline RouteColumnResult searchRouteColumns(
                         Label child = label;
                         child.pos = target.pos;
                         child.time += duration;
-                        child.visited |= spotBit(spot);
-                        if (target.brandIndex >= 0)
-                            child.brands |= BrandMask{1} << target.brandIndex;
-                        ++child.count;
+                        if (config.rankTransitPickups &&
+                            setting.field.width >= 32 &&
+                            setting.field.height >= 32) {
+                            const SpotMask traversed =
+                                detail::routePathSpots(setting, path);
+                            const SpotMask gained = traversed & ~child.visited;
+                            child.visited |= traversed;
+                            child.count += countBits(gained);
+                            child.brands |= detail::columnBrands(
+                                setting, traversed);
+                        } else {
+                            child.visited |= spotBit(spot);
+                            if (target.brandIndex >= 0)
+                                child.brands |= BrandMask{1} <<
+                                    target.brandIndex;
+                            ++child.count;
+                        }
                         for (const Direction d : path.directions)
                             child.actions.push_back(static_cast<int>(d));
                         if (path.cost.steps == 0) child.actions.push_back(-1);
@@ -467,14 +575,14 @@ inline RouteColumnResult searchRouteColumns(
                         1, config.labelWidth / 2);
                     std::sort(next.begin() + brandQuota, next.end(),
                         [&](const Label& a, const Label& b) {
-                            return std::make_tuple(
-                                       -a.time,
-                                       countBits(a.brands & ~previous.matchBrands),
-                                       countBits(a.brands), a.count) >
-                                   std::make_tuple(
-                                       -b.time,
-                                       countBits(b.brands & ~previous.matchBrands),
-                                       countBits(b.brands), b.count);
+                            const auto rank = [&](const Label& x) {
+                                return std::make_tuple(
+                                    -x.time,
+                                    countBits(x.brands & ~previous.matchBrands),
+                                    countBits(x.brands),
+                                    x.count);
+                            };
+                            return rank(a) > rank(b);
                         });
                 }
                 if (next.size() > config.labelWidth) next.resize(config.labelWidth);

@@ -34,6 +34,7 @@ struct MatchDayResult {
     std::size_t assignmentCacheHits = 0;
     std::size_t assignmentComputations = 0;
     std::size_t removedSupplyLoops = 0;
+    std::array<SupplyUtilization, kMaxAgents> supplyUtilization{};
     std::size_t brandRepairAttempts = 0, brandRepairExpanded = 0, brandRepairImprovements = 0;
     std::size_t udonAlnsAttempts = 0, udonAlnsExpanded = 0, udonAlnsImprovements = 0;
     std::size_t spotRouteLnsAttempts = 0, spotRouteLnsImprovements = 0;
@@ -244,6 +245,7 @@ public:
 
             record.endState = sim.state;
             record.roadStaySteps = sim.roadStaySteps;
+            record.supplyUtilization = sim.supplyUtilization;
             if (record.usedFallback) {
                 EvaluationContext ctx;
                 ctx.scoreAtDayStart = score;

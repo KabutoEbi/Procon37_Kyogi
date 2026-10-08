@@ -32,6 +32,20 @@ struct SimulationFailure {
     std::int32_t step = 0;
 };
 
+// A supply vehicle is useful only when its position actually restores patrol
+// fuel.  Keep this diagnostic beside the official replay so every caller uses
+// exactly the same movement/refuel timing as the judge.
+struct SupplyUtilization {
+    std::int32_t moveSteps = 0;
+    std::int32_t waitSteps = 0;
+    std::int32_t refuelEvents = 0;
+    std::int32_t deliveredFuel = 0;
+    std::int32_t firstRefuelStep = -1;
+    std::int32_t lastRefuelStep = -1;
+    std::int32_t idleStepsAfterLastRefuel = 0;
+    std::uint32_t servedPatrolMask = 0;
+};
+
 struct SimulationResult {
     bool valid = false;
     GameState state{};
@@ -39,6 +53,7 @@ struct SimulationResult {
 
     // 自チームの各エージェントが各道路セルに滞在したステップ数の合計。
     std::vector<std::int32_t> roadStaySteps;
+    std::array<SupplyUtilization, kMaxAgents> supplyUtilization{};
 };
 
 constexpr const char* simulationErrorMessage(SimulationError error) noexcept {
@@ -240,6 +255,7 @@ advanceSimulationStep(GameState& state, const MatchSetting& setting,
 inline SimulationResult simulateDay(const MatchSetting& s, const MatchState& ms,
                                     const DailyPlan& plan, ScoreState score = {}) {
     GameState st;
+    SimulationResult res;
     std::vector<std::int32_t> roadSteps(s.field.cellCount(), 0);
 
     if (!st.initialize(s, ms, score)) {
@@ -273,9 +289,50 @@ inline SimulationResult simulateDay(const MatchSetting& s, const MatchState& ms,
     }
 
     for (std::int32_t step = 1; step <= st.dayStepLimit; ++step) {
+        // Predict the positions and patrol fuel immediately before the refuel
+        // phase.  advanceSimulationStep performs the same completed-move
+        // update, followed by pickup and refuel, atomically.
+        std::array<CellPos, kMaxAgents> reflectedPositions{};
+        std::array<std::int32_t, kMaxAgents> fuelBeforeRefuel{};
+        for (AgentIndex i = 0; i < st.agentCount; ++i) {
+            const auto& pending = st.pendingActions[i];
+            reflectedPositions[i] =
+                pending.isMove() && pending.remainingSteps == 1
+                    ? pending.destination : st.agents[i].pos;
+            fuelBeforeRefuel[i] = st.agents[i].fuel;
+            if (st.agents[i].isPatrol() && pending.isMove() &&
+                pending.remainingSteps == 1) {
+                fuelBeforeRefuel[i] -= pending.fuelCost;
+            }
+            if (st.agents[i].isSupply()) {
+                auto& usage = res.supplyUtilization[i];
+                if (pending.isMove()) ++usage.moveSteps;
+                else ++usage.waitSteps;
+            }
+        }
         const auto err = advanceSimulationStep(st, s, &roadSteps);
         if (err.error != SimulationError::None) {
             return failWith(err);
+        }
+
+        for (AgentIndex p = 0; p < st.agentCount; ++p) {
+            if (!st.agents[p].isPatrol() ||
+                fuelBeforeRefuel[p] >= s.fuelLimit) continue;
+            AgentIndex provider = st.agentCount;
+            for (AgentIndex q = 0; q < st.agentCount; ++q) {
+                if (st.agents[q].isSupply() &&
+                    reflectedPositions[q] == reflectedPositions[p]) {
+                    provider = q;
+                    break;
+                }
+            }
+            if (provider >= st.agentCount) continue;
+            auto& usage = res.supplyUtilization[provider];
+            ++usage.refuelEvents;
+            usage.deliveredFuel += s.fuelLimit - fuelBeforeRefuel[p];
+            if (usage.firstRefuelStep < 0) usage.firstRefuelStep = step;
+            usage.lastRefuelStep = step;
+            if (p < 32) usage.servedPatrolMask |= std::uint32_t{1} << p;
         }
 
         // 最終ステップにはアクションフェーズがない。
@@ -308,10 +365,16 @@ inline SimulationResult simulateDay(const MatchSetting& s, const MatchState& ms,
         return fail(SimulationError::InternalStateError, 0, 0, st.dayStepLimit);
     }
 
-    SimulationResult res;
     res.valid = true;
     res.state = st;
     res.roadStaySteps = std::move(roadSteps);
+    for (AgentIndex i = 0; i < st.agentCount; ++i) {
+        if (!st.agents[i].isSupply()) continue;
+        auto& usage = res.supplyUtilization[i];
+        usage.idleStepsAfterLastRefuel = usage.lastRefuelStep >= 0
+            ? st.dayStepLimit - usage.lastRefuelStep
+            : st.dayStepLimit;
+    }
     return res;
 }
 

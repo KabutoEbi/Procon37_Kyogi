@@ -349,6 +349,27 @@ inline void printConsoleReport(
         << "  total-daily-brands="
         << result.finalState.score.sumOfDailyBrandCounts << '\n'
         << "  total-udon=" << result.finalState.score.totalUdon << '\n';
+    for (AgentIndex i = 0; i < result.finalState.agentCount; ++i) {
+        if (!result.finalState.agents[i].isSupply()) continue;
+        const auto& usage = result.supplyUtilization[i];
+        out << "  supply-" << static_cast<unsigned>(i)
+            << "-move-steps=" << usage.moveSteps << '\n'
+            << "  supply-" << static_cast<unsigned>(i)
+            << "-wait-steps=" << usage.waitSteps << '\n'
+            << "  supply-" << static_cast<unsigned>(i)
+            << "-refuel-events=" << usage.refuelEvents << '\n'
+            << "  supply-" << static_cast<unsigned>(i)
+            << "-served-patrols=" << countBits(usage.servedPatrolMask) << '\n'
+            << "  supply-" << static_cast<unsigned>(i)
+            << "-delivered-fuel=" << usage.deliveredFuel << '\n'
+            << "  supply-" << static_cast<unsigned>(i)
+            << "-first-refuel-step=" << usage.firstRefuelStep << '\n'
+            << "  supply-" << static_cast<unsigned>(i)
+            << "-last-refuel-step=" << usage.lastRefuelStep << '\n'
+            << "  supply-" << static_cast<unsigned>(i)
+            << "-idle-after-last-refuel="
+            << usage.idleStepsAfterLastRefuel << '\n';
+    }
     out << '\n';
     printConsoleAgents(out, setting, finalAgents);
     if (config.showFinalMap) {

@@ -15,6 +15,8 @@ int main() {
     assert(parse({"main"}).beam.safetyMarginMs == 5000);
     assert(parse({"main"}).beam.coordinatedRefinement);
     assert(!parse({"main", "--coordinated-refinement", "0"}).beam.coordinatedRefinement);
+    assert(parse({"main", "--supply-wait-steps", "5"})
+        .beam.maxSupplyWaitSteps == 5);
     assert(parse({"main"}).beam.adaptiveSmallBoardBrandRescue);
     const auto smallRescue = parse({"main", "--small-board-brand-rescue", "0",
         "--small-board-beam-budget-percent", "80",

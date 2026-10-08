@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
             (compareUdonAlns ? "no-udon-alns" :
              (compareSpotRouteLns ? "no-spot-route-lns" :
               (compareRouteColumns ? "no-route-columns" : "baseline")));
-        const std::vector<std::string> allowed = {"improved", "no-route-columns", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
+        const std::vector<std::string> allowed = {"improved", "no-route-columns", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -104,6 +104,9 @@ int main(int argc, char** argv) {
             std::int64_t supplyBacktracks = 0;
             std::int64_t supplyMoves = 0;
             std::int64_t removedSupplyLoops = 0;
+            std::int64_t supplyMoveSteps = 0, supplyWaitSteps = 0;
+            std::int64_t supplyRefuels = 0, suppliedFuel = 0;
+            std::int64_t supplyIdleAfterLastRefuel = 0;
             std::int64_t repairAttempts = 0, repairExpanded = 0, repairImprovements = 0;
             std::int64_t alnsAttempts = 0, alnsExpanded = 0, alnsImprovements = 0;
             std::vector<std::int64_t> times;
@@ -111,7 +114,7 @@ int main(int argc, char** argv) {
         std::map<std::string, Summary> summaries;
         using Score = std::tuple<int, int, int>;
         int wins = 0, ties = 0, losses = 0;
-        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements,day_beam_candidates,day_beam_expanded,day_beam_complete\n";
+        std::cout << "size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assignment_computations,supply_moves,supply_backtracks,removed_supply_loops,valid,plan_hash,assignment_ns,flow_ns,rendezvous_ns,repair_attempts,repair_expanded,repair_improvements,alns_attempts,alns_expanded,alns_improvements,route_columns_generated,route_columns_master_nodes,route_columns_improvements,day_beam_candidates,day_beam_expanded,day_beam_complete,supply_move_steps,supply_wait_steps,supply_refuels,supplied_fuel,supply_idle_after_last_refuel\n";
         for (const int size : {8, 16, 24, 32}) {
             if (sizeOnly != 0 && size != sizeOnly) continue;
             for (int seed = seedStart; seed - seedStart < seeds; ++seed) {
@@ -169,6 +172,16 @@ int main(int argc, char** argv) {
                             name != "baseline" && name != "no-patrol-replan";
                         beam.simplifySupplyRoutes = name != "no-supply-cleanup";
                         beam.allowUnassignedSupplyMoves = name == "wandering-supply";
+                        if (name == "unbounded-supply-wait")
+                            beam.maxSupplyWaitSteps = 0;
+                        if (name == "legacy-supply-schedules") {
+                            beam.routeColumns.maxStationSchedules = 1;
+                            beam.routeColumns.maxMeetingsPerSchedule = 2;
+                        }
+                        if (name == "terminal-wait-fill")
+                            beam.spotRouteLns.terminalWaitFill = true;
+                        if (name == "no-transit-pickup-ranking")
+                            beam.routeColumns.rankTransitPickups = false;
                         beam.comparePeriodicReplanPlans =
                             name != "baseline" && name != "no-route-portfolio";
                         if (name == "replan-2") beam.macroReplanInterval = 2;
@@ -213,6 +226,9 @@ int main(int argc, char** argv) {
                             std::uint64_t fingerprint = UINT64_C(1469598103934665603);
                             std::size_t supplyMoves = 0;
                             std::size_t supplyBacktracks = 0;
+                            std::int64_t supplyMoveSteps = 0, supplyWaitSteps = 0;
+                            std::int64_t supplyRefuels = 0, suppliedFuel = 0;
+                            std::int64_t supplyIdle = 0;
                             for (AgentIndex agent = 0;
                                  agent < day.plan.size(); ++agent) {
                                 if (!day.startState.agents[agent].isSupply()) continue;
@@ -226,6 +242,16 @@ int main(int argc, char** argv) {
                                     }
                                     previous = action;
                                 }
+                            }
+                            for (AgentIndex agent = 0;
+                                 agent < day.startState.agents.size(); ++agent) {
+                                if (!day.startState.agents[agent].isSupply()) continue;
+                                const auto& usage = day.supplyUtilization[agent];
+                                supplyMoveSteps += usage.moveSteps;
+                                supplyWaitSteps += usage.waitSteps;
+                                supplyRefuels += usage.refuelEvents;
+                                suppliedFuel += usage.deliveredFuel;
+                                supplyIdle += usage.idleStepsAfterLastRefuel;
                             }
                             for (const auto& agent : day.plan) {
                                 fingerprint = (fingerprint ^ agent.size()) * UINT64_C(1099511628211);
@@ -248,7 +274,10 @@ int main(int argc, char** argv) {
                                 << day.routeColumnsMasterNodes << ','
                                 << day.routeColumnsImprovements << ','
                                 << day.dayBeamCandidates << ',' << day.dayBeamExpanded << ','
-                                << day.dayBeamComplete << '\n';
+                                << day.dayBeamComplete << ','
+                                << supplyMoveSteps << ',' << supplyWaitSteps << ','
+                                << supplyRefuels << ',' << suppliedFuel << ','
+                                << supplyIdle << '\n';
                             if (!valid) return 1;
                             previous = day.endState.score;
                             elapsed += day.elapsedMs;
@@ -264,8 +293,20 @@ int main(int argc, char** argv) {
                         summary.nodes += nodes;
                         summary.supplyMoves += matchSupplyMoves;
                         summary.supplyBacktracks += matchSupplyBacktracks;
-                        for (const auto& day : match.days)
+                        for (const auto& day : match.days) {
                             summary.removedSupplyLoops += day.removedSupplyLoops;
+                            for (AgentIndex agent = 0;
+                                 agent < day.startState.agents.size(); ++agent) {
+                                if (!day.startState.agents[agent].isSupply()) continue;
+                                const auto& usage = day.supplyUtilization[agent];
+                                summary.supplyMoveSteps += usage.moveSteps;
+                                summary.supplyWaitSteps += usage.waitSteps;
+                                summary.supplyRefuels += usage.refuelEvents;
+                                summary.suppliedFuel += usage.deliveredFuel;
+                                summary.supplyIdleAfterLastRefuel +=
+                                    usage.idleStepsAfterLastRefuel;
+                            }
+                        }
                         for (const auto& day : match.days) {
                             summary.repairAttempts += day.brandRepairAttempts;
                             summary.repairExpanded += day.brandRepairExpanded;
@@ -294,6 +335,12 @@ int main(int argc, char** argv) {
                 << " supply_moves=" << summary.supplyMoves
                 << " supply_backtracks=" << summary.supplyBacktracks
                 << " removed_supply_loops=" << summary.removedSupplyLoops
+                << " supply_move_steps=" << summary.supplyMoveSteps
+                << " supply_wait_steps=" << summary.supplyWaitSteps
+                << " supply_refuels=" << summary.supplyRefuels
+                << " supplied_fuel=" << summary.suppliedFuel
+                << " supply_idle_after_last_refuel="
+                << summary.supplyIdleAfterLastRefuel
                 << " repair_attempts=" << summary.repairAttempts
                 << " repair_expanded=" << summary.repairExpanded
                 << " repair_improvements=" << summary.repairImprovements
