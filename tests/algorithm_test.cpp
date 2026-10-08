@@ -975,6 +975,38 @@ void testConsoleReport() {
     assert(jammed.str().find(" 5 ") != std::string::npos);
 }
 
+void testFutureFuelDivisorValidation() {
+    const auto s = line(3, {4, 4}, 2, {0}, {{1, 2, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol});
+    auto cfg = smallBeam();
+    cfg.futureFuelDivisor = 0;
+    auto result = Brain1::search(s, ms, {}, cfg);
+    assert(!result.success && result.stopReason == SearchStopReason::NoValidPlan);
+    cfg.futureFuelDivisor = 20;
+    cfg.tightFuelFutureDivisor = 0;
+    result = Brain1::search(s, ms, {}, cfg);
+    assert(!result.success && result.stopReason == SearchStopReason::NoValidPlan);
+}
+
+void testDynamicFuelRiskDetection() {
+    const auto s = line(4, {20, 20}, 100, {0, 3},
+                        {{0, 1, 1, -1}, {1, 2, 1, -1}});
+    auto healthy = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    assert(!detail::isFuelRiskDay(s, healthy));
+    healthy.agents[0].fuel = 10;
+    assert(detail::isFuelRiskDay(s, healthy));
+
+    auto depleted = stateFor(s, {AgentKind::Patrol, AgentKind::Supply});
+    depleted.agents[0].fuel = 20;
+    assert(detail::isFuelRiskDay(s, depleted));
+
+    auto severe = s;
+    severe.fuelLimit = 8;
+    auto severeState = stateFor(severe,
+        {AgentKind::Patrol, AgentKind::Supply});
+    assert(detail::isFuelRiskDay(severe, severeState));
+}
+
 } // namespace
 
 int main() {
@@ -996,5 +1028,7 @@ int main() {
     testDistanceCache();
     testDetourRendezvousAndTwoSpots();
     testTrialsAndTuning();
+    testFutureFuelDivisorValidation();
+    testDynamicFuelRiskDetection();
     testConsoleReport();
 }

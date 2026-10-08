@@ -9,8 +9,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "visualizer"))
-from backend import (AutomaticMatch, ConnectionConfig, SearchParameters,
-                     Workflow, WorkflowError, default_solver_path, read_json)
+from backend import (
+    AutomaticMatch,
+    ConnectionConfig,
+    DEFAULT_TIMEOUT_SECONDS,
+    SearchParameters,
+    Workflow,
+    WorkflowError,
+    default_solver_path,
+    read_json,
+)
 from get_problem import load_configured_dotenv
 
 
@@ -24,7 +32,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--work-dir", type=Path, default=Path("runtime"))
     result.add_argument("--wait", type=float, default=3600.0)
     result.add_argument("--interval", type=float, default=0.5)
-    result.add_argument("--timeout", type=float, default=3.0)
+    result.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     result.add_argument("--resume", action="store_true",
                         help="送信結果不明の場合は同じ日・同じ回答だけを再送")
     result.add_argument("--start-day", type=int)

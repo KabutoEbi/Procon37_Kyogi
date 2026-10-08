@@ -11,6 +11,7 @@ import unittest
 import threading
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -19,6 +20,7 @@ sys.path.insert(0, str(ROOT / "visualizer"))
 
 from backend import (  # noqa: E402
     ConnectionConfig,
+    DEFAULT_TIMEOUT_SECONDS,
     Workflow,
     WorkflowError,
     AgentView,
@@ -27,6 +29,7 @@ from backend import (  # noqa: E402
     SearchParameters,
     RandomSettingParameters,
     SimpleServer,
+    SolverResultSummary,
     Paused,
     ApiError,
     file_hash,
@@ -45,6 +48,16 @@ from backend import (  # noqa: E402
     trace_answer_routes,
     simple_server_teams,
 )
+from app import (  # noqa: E402
+    SolverGUI,
+    TEAM_ROLE_TIME_LIMITS,
+    automatic_phase_is_waiting,
+    compact_clock_status,
+    duration_text,
+    match_clock_values,
+    official_score_text,
+)
+from server_client.auto_submit import parser as auto_submit_parser  # noqa: E402
 
 
 class BackendTest(unittest.TestCase):
@@ -73,6 +86,141 @@ class BackendTest(unittest.TestCase):
 
         self.assertIn("0xC00000FD", process_exit_detail(3221225725))
         self.assertEqual(process_exit_detail(7), "終了コード 7")
+
+    def test_default_connection_timeout_is_ten_seconds(self) -> None:
+        self.assertEqual(ConnectionConfig("http://example", "secret").timeout, 10.0)
+        self.assertEqual(auto_submit_parser().parse_args([]).timeout, 10.0)
+
+    def test_three_person_presets_and_spoken_score(self) -> None:
+        self.assertEqual(
+            TEAM_ROLE_TIME_LIMITS,
+            {"lead": 20000, "middle": 40000, "long": 60000},
+        )
+        summary = SolverResultSummary(
+            day=2, stop="completed", elapsed_ms=1, expanded=2,
+            daily_udon=7, daily_brands=5, total_udon=31,
+            match_brands=11, total_daily_brands=27,
+        )
+        self.assertEqual(official_score_text(summary), "11 / 27 / 31")
+
+    def test_compact_clock_status(self) -> None:
+        values = {"phase": "開始前（エージェント選択）", "progress": "0/8日"}
+        self.assertEqual(
+            compact_clock_status(values, "自動: エージェント種別選択 / day=1"),
+            "0/8日 エージェント選択",
+        )
+        values = {"phase": "3日目", "progress": "3/8日"}
+        self.assertEqual(
+            compact_clock_status(values, "自動: 探索 / day=3"),
+            "3/8日 探索中",
+        )
+        self.assertEqual(compact_clock_status(values, "未実行"), "3/8日 待機中")
+        self.assertTrue(automatic_phase_is_waiting(
+            "自動: 問題情報の公開待ち・取得 / day=1"
+        ))
+        self.assertTrue(automatic_phase_is_waiting(
+            "自動: 当日マップの公開待ち・取得 / day=3"
+        ))
+        self.assertFalse(automatic_phase_is_waiting("自動: 探索 / day=3"))
+        self.assertEqual(
+            compact_clock_status(
+                values, "自動: 当日マップの公開待ち・取得 / day=3"
+            ),
+            "3/8日 待機中",
+        )
+
+    def test_waiting_resubmission_uses_previous_accepted_day(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            workflow = Workflow(
+                ConnectionConfig("http://example", "test"), ROOT / "main", work
+            )
+            setting = work / "setting.json"
+            for path, value in (
+                (setting, {}),
+                (work / "answer.json", [[]]),
+                (work / "score-next.json", {"nextDay": 2}),
+                (work / "state-day1.json", {"day": 1}),
+                (work / "prepared-answer.json", {"day": 1}),
+                (work / "submission-day1.json", {"status": "accepted"}),
+            ):
+                path.write_text(json.dumps(value), encoding="utf-8")
+            gui = SolverGUI.__new__(SolverGUI)
+            gui._busy = True
+            gui._submission_busy = False
+            gui._automatic_phase = "自動: 当日マップの公開待ち・取得 / day=3"
+            gui._automatic_workflow = workflow
+            gui._automatic_runner = SimpleNamespace(
+                phase="state", day=2, setting=setting
+            )
+
+            candidate = gui._waiting_resubmission_candidate()
+            self.assertIsNotNone(candidate)
+            self.assertEqual(candidate[1], 1)
+            self.assertEqual(candidate[4], (work / "state-day1.json").resolve())
+
+            gui._automatic_runner.phase = "solve"
+            self.assertIsNone(gui._waiting_resubmission_candidate())
+
+    def test_match_clock_values(self) -> None:
+        self.assertEqual(duration_text(3661.9), "01:01:01")
+        before = match_clock_values(1000, (60, 90), 970, 990)
+        self.assertEqual(before["phase"], "開始前（エージェント選択）")
+        self.assertEqual(before["selection"], "残り 00:00:20")
+        self.assertIn("開始まで 00:00:30", before["match"])
+        self.assertEqual(before["timer"], "00:00:20")
+
+        waiting = match_clock_values(1000, (60, 90), 995, 990)
+        self.assertEqual(waiting["phase"], "開始前（試合待機）")
+        self.assertEqual(waiting["timer"], "00:00:05")
+
+        first = match_clock_values(1000, (60, 90), 1025, 990)
+        self.assertEqual(first["phase"], "1日目")
+        self.assertEqual(first["progress"], "1/2日")
+        self.assertIn("残り 00:00:35", first["day"])
+        self.assertEqual(first["timer"], "00:00:35")
+
+        second = match_clock_values(1000, (60, 90), 1080, 990)
+        self.assertEqual(second["phase"], "2日目")
+        self.assertEqual(second["progress"], "2/2日")
+        self.assertIn("経過 00:00:20", second["day"])
+
+        finished = match_clock_values(1000, (60, 90), 1160, 990)
+        self.assertEqual(finished["phase"], "全日程終了")
+        self.assertEqual(finished["day"], "終了後 00:00:10")
+        self.assertEqual(finished["timer"], "00:00:10")
+
+        unknown = match_clock_values(0, (60, 60), 100)
+        self.assertEqual(unknown["phase"], "時刻情報待ち")
+        self.assertEqual(unknown["match"], "予定 00:02:00")
+        self.assertEqual(unknown["timer"], "--:--:--")
+
+        deadline_only = match_clock_values(
+            0, (60, 90), 1025, current_day=1, day_ends_at=1090
+        )
+        self.assertEqual(deadline_only["phase"], "2日目")
+        self.assertEqual(deadline_only["progress"], "2/2日")
+        self.assertIn("残り 00:01:05", deadline_only["day"])
+        self.assertEqual(deadline_only["timer"], "00:01:05")
+
+        deadline_passed = match_clock_values(
+            0, (60, 90), 1100, current_day=1, day_ends_at=1090
+        )
+        self.assertEqual(deadline_passed["phase"], "2日目終了")
+        self.assertEqual(deadline_passed["timer"], "00:00:10")
+
+    def test_unknown_setting_keeps_simple_server_clock(self) -> None:
+        gui = SimpleNamespace(
+            _clock_starts_at=1000.0,
+            _clock_selection_ends_at=990.0,
+            _clock_day_seconds=(),
+            _milestones={"match-start": (1000.0, "試合開始")},
+        )
+        SolverGUI._set_setting_milestones(gui, 0, (60, 90))
+        self.assertEqual(gui._clock_starts_at, 1000.0)
+        self.assertEqual(gui._clock_selection_ends_at, 990.0)
+        self.assertEqual(gui._clock_day_seconds, (60, 90))
+        self.assertIn("match-start", gui._milestones)
 
     def test_app_icon_assets(self) -> None:
         svg = ROOT / "visualizer/assets/app_icon.svg"
@@ -296,6 +444,8 @@ result
                 config = connection_from_env(path)
             self.assertEqual(config.url, "http://env.example")
             self.assertEqual(config.token, "file-token")
+            self.assertEqual(config.timeout, DEFAULT_TIMEOUT_SECONDS)
+            self.assertEqual(config.timeout, 10.0)
 
     def test_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -364,6 +514,16 @@ result
                 workflow.send_answer(0, answer, score)
                 post.assert_not_called()
             self.assertTrue(checkpoint.exists())
+
+            # 3台のうちこの候補が最良だった場合、他端末の送信後にも
+            # 受理済みの同一回答を明示的に再POSTできる。
+            with mock.patch("backend.send", return_value=5) as post:
+                revision, _, _ = workflow.send_answer(
+                    0, answer, score, force=True
+                )
+                self.assertEqual(revision, 5)
+                post.assert_called_once()
+            self.assertEqual(read_json(work / "submission-day0.json")["revision"], 5)
 
             checkpoint.unlink()
             (work / "submission-day0.json").unlink()
@@ -718,7 +878,7 @@ result
             logs = "\n".join(value for kind, value in events if kind == "log")
             self.assertIn(
                 "beam-width=16 joint-beam-width=64 threads=1 "
-                "time-limit-ms=5400 safety-margin-ms=5200",
+                "time-limit-ms=12400 safety-margin-ms=12200",
                 logs,
             )
             current_day = 2

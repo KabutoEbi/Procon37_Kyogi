@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_TIMEOUT_SECONDS = 10.0
 SERVER_CLIENT_DIR = PROJECT_ROOT / "server_client"
 if str(SERVER_CLIENT_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_CLIENT_DIR))
@@ -127,7 +128,7 @@ class RandomSettingParameters:
 class ConnectionConfig:
     url: str
     token: str
-    timeout: float = 3.0
+    timeout: float = DEFAULT_TIMEOUT_SECONDS
 
     def validate(self) -> None:
         if not self.url.strip():
@@ -525,7 +526,9 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def connection_from_env(path: Path, timeout: float = 3.0) -> ConnectionConfig:
+def connection_from_env(
+    path: Path, timeout: float = DEFAULT_TIMEOUT_SECONDS
+) -> ConnectionConfig:
     values = read_env_file(path)
     # シェルから一時的に上書きできるよう、実環境を優先する。
     url = os.environ.get("PROCON_URL", values.get("PROCON_URL", ""))
@@ -746,6 +749,9 @@ class Workflow:
         self.log_dir = self.work_dir / "logs"
         self.parameters = parameters or SearchParameters()
         self.stop = stop or threading.Event()
+        # 全自動の翌日待機中には、GUIから前日のベスト候補を再送できる。
+        # 再送と次日の探索が同じ answer/score ファイルを同時に扱わないようにする。
+        self.artifact_lock = threading.RLock()
 
     def check_stop(self) -> None:
         if self.stop.is_set():
@@ -963,6 +969,53 @@ class Workflow:
         downloaded.replace(output)
         return output
 
+    def wait_for_state(
+        self,
+        day: int,
+        output: Path,
+        *,
+        interval: float = 0.5,
+        wait_seconds: float = 3600,
+    ) -> Path:
+        """前日の状態が返る間は待ち、指定日の状態だけを確定保存する。"""
+        if not math.isfinite(interval) or interval < 0.2:
+            raise WorkflowError("取得間隔は0.2秒以上にしてください")
+        if not math.isfinite(wait_seconds) or wait_seconds <= 0:
+            raise WorkflowError("待機上限は0より大きくしてください")
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            self.check_stop()
+            downloaded = output.with_name(output.name + ".poll")
+            try:
+                self.connection.validate()
+                daily = fetch(
+                    self.connection.url,
+                    self.connection.token,
+                    "state",
+                    downloaded,
+                    timeout=self.connection.timeout,
+                    log_dir=self.log_dir,
+                )
+                actual = daily.get("day")
+                if type(actual) is not int:
+                    raise WorkflowError("当日状態のdayが不正です")
+                if actual > day:
+                    raise WorkflowError(
+                        f"サーバーはday={actual + 1}です。"
+                        f"期待したday={day + 1}を過ぎました"
+                    )
+                if actual == day:
+                    downloaded.replace(output)
+                    return output
+                downloaded.unlink(missing_ok=True)
+            except (WorkflowError, ApiError) as error:
+                cause = error if isinstance(error, ApiError) else error.__cause__
+                if not isinstance(cause, ApiError) or cause.status not in (0, 403):
+                    raise
+            if time.monotonic() >= deadline:
+                raise WorkflowError("stateの公開待ちがタイムアウトしました")
+            self.stop.wait(interval)
+
     def select_agents(self, setting: Path, output: Path) -> CommandResult:
         self._require_no_pending("agents")
         marker = self.work_dir / "selected-agents.json"
@@ -1138,6 +1191,8 @@ class Workflow:
         candidate_score: Path,
         state: Path | None = None,
         setting: Path | None = None,
+        *,
+        force: bool = False,
     ) -> tuple[int, Path, Path]:
         self.connection.validate()
         receipt = read_json(self.work_dir / "prepared-answer.json")
@@ -1160,12 +1215,13 @@ class Workflow:
             raise WorkflowError("保存済み送信候補が変更されています")
         atomic_write(archived_answer, frozen_answer.read_bytes())
         checkpoint = self.work_dir / f"score-day{day + 1}.json"
-        if saved["status"] == "accepted":
+        was_accepted = saved["status"] == "accepted"
+        if was_accepted and not force:
             atomic_write(checkpoint, frozen_score.read_bytes())
             return saved["revision"], archived_answer, checkpoint
         deadline = self._submission_deadline(receipt.get("endsAt", 0))
         # 再送は明示的な再開時だけ。同じ日でなければ結果不明のまま停止。
-        if saved.get("attempted"):
+        if saved.get("attempted") and not was_accepted:
             current = self.work_dir / "recovery-state.json"
             self.fetch_state(day, current)
             if state is None or read_json(current) != read_json(state):
@@ -1270,6 +1326,13 @@ class AutomaticMatch:
 
     def _wait_fetch(self, kind: str, path: Path) -> None:
         w = self.workflow
+        if kind == "state":
+            w.wait_for_state(
+                self.day, path,
+                interval=self.interval,
+                wait_seconds=self.wait_seconds,
+            )
+            return
         deadline = time.monotonic() + self.wait_seconds
         while True:
             w.check_stop()
@@ -1277,23 +1340,6 @@ class AutomaticMatch:
                 if kind == "setting":
                     w.fetch_setting(path)
                     return
-                # fetch_stateの期待日検査前に古い日か先の日かを区別する。
-                downloaded = path.with_name(path.name + ".poll")
-                w.connection.validate()
-                daily = fetch(w.connection.url, w.connection.token, "state", downloaded,
-                              timeout=w.connection.timeout, log_dir=w.log_dir)
-                actual = daily.get("day")
-                if type(actual) is not int:
-                    raise WorkflowError("当日状態のdayが不正です")
-                if actual > self.day:
-                    raise WorkflowError(
-                        f"サーバーはday={actual + 1}です。"
-                        f"期待したday={self.day + 1}を過ぎました"
-                    )
-                if actual == self.day:
-                    downloaded.replace(path)
-                    return
-                downloaded.unlink(missing_ok=True)
             except (WorkflowError, ApiError) as error:
                 cause = error if isinstance(error, ApiError) else error.__cause__
                 if not isinstance(cause, ApiError) or cause.status not in (0, 403):
@@ -1308,6 +1354,19 @@ class AutomaticMatch:
         self._started = True
         try:
             self._run_loop()
+        except WorkflowError as error:
+            if str(error).startswith("connection failed:"):
+                guidance = (
+                    "通信timeout(s)を15へ増やし、作業フォルダを消さずに"
+                    "「試合終了まで全自動」をもう一度押してください。"
+                )
+                if not self.retryable:
+                    guidance += (
+                        " 送信結果が不明なため自動再送はしていません。再開時は"
+                        "保存済みの同一回答だけを検査して送信します。"
+                    )
+                raise WorkflowError(f"{error}\n{guidance}") from error
+            raise
         finally:
             self._save()
 
@@ -1347,7 +1406,8 @@ class AutomaticMatch:
                 self.emit("state", self.state)
             elif phase == "solve":
                 self.emit("solve_start", self.day)
-                result = w.solve_day(self.setting, self.state, self.checkpoint)
+                with w.artifact_lock:
+                    result = w.solve_day(self.setting, self.state, self.checkpoint)
                 self.emit("log", result.output)
                 self.emit("solved", result)
                 self.phase = "send_answer"
@@ -1355,10 +1415,11 @@ class AutomaticMatch:
             elif phase == "send_answer":
                 w.check_stop()
                 self.retryable = False
-                revision, _, self.checkpoint = w.send_answer(
-                    self.day, w.work_dir / "answer.json", w.work_dir / "score-next.json",
-                    self.state, self.setting,
-                )
+                with w.artifact_lock:
+                    revision, _, self.checkpoint = w.send_answer(
+                        self.day, w.work_dir / "answer.json", w.work_dir / "score-next.json",
+                        self.state, self.setting,
+                    )
                 self.day += 1
                 self.phase = "done" if self.day == self.days else "state"
                 self.retryable = True

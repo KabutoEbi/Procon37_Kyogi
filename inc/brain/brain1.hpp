@@ -107,6 +107,10 @@ struct BeamSearchConfig {
     bool autoTuneWeights = true;
     // 燃料制約が厳しく、有効予算300ms以下の場合だけ使う重み補正。
     bool fuelAwareWeights = true;
+    // 同一の公式得点を持つ中間日終端で、翌日距離と残燃料を比較する尺度。
+    // 小さいほど残燃料を強く評価する。
+    std::int32_t futureFuelDivisor = 20;
+    std::int32_t tightFuelFutureDivisor = 10;
     bool useMacroActions = true;
     std::size_t macroTargetLimit = 3;
     // マクロ継続を残しつつ、定期的に別経路も探索する。0なら再検討しない。
@@ -153,6 +157,44 @@ struct BeamSearchConfig {
     // 上位解を残しつつ、この割合を異なる系列・位置の候補へ確保する。
     double diversityFraction = 0.25;
 };
+
+namespace detail {
+
+inline bool isFuelRiskDay(const MatchSetting& setting,
+                          const MatchState& matchState) {
+    if (matchState.day < 0 ||
+        static_cast<std::size_t>(matchState.day) >= setting.daySteps.size())
+        return false;
+    if (static_cast<std::int64_t>(setting.fuelLimit) * 2 <=
+        setting.daySteps[static_cast<std::size_t>(matchState.day)])
+        return true;
+    const int lowFuel = std::max(2, setting.fuelLimit / 10);
+    std::int64_t totalFuel = 0;
+    std::int64_t patrols = 0;
+    for (const Agent& agent : matchState.agents) {
+        if (!agent.isPatrol()) continue;
+        ++patrols;
+        totalFuel += agent.fuel;
+        if (agent.fuel <= lowFuel) return true;
+        bool canMove = false;
+        for (int raw = 0; raw < 6; ++raw) {
+            const CellPos next = setting.field.neighbor(
+                agent.pos, static_cast<Direction>(raw));
+            if (!setting.field.contains(next) ||
+                !setting.field.at(next).isPassable()) continue;
+            if (moveFuelCost(setting, AgentKind::Patrol, agent.pos) <=
+                agent.fuel) {
+                canMove = true;
+                break;
+            }
+        }
+        if (!canMove) return true;
+    }
+    return patrols > 0 && totalFuel * 3 <
+        patrols * static_cast<std::int64_t>(setting.fuelLimit);
+}
+
+} // namespace detail
 
 enum class SearchStopReason : std::uint8_t {
     Completed,
@@ -2352,6 +2394,9 @@ public:
         BeamSearchResult routeBest;
         const bool finalDay = ms.day >= 0 &&
             static_cast<std::size_t>(ms.day + 1) >= s.dayCount();
+        const bool tightFuelDay = detail::isFuelRiskDay(s, ms);
+        const int futureFuelDivisor = tightFuelDay
+            ? cfg.tightFuelFutureDivisor : cfg.futureFuelDivisor;
         const auto officialScore = [](const GameState& state) {
             return std::make_tuple(countBits(state.score.matchBrands),
                 state.score.sumOfDailyBrandCounts, state.score.totalUdon);
@@ -2369,7 +2414,8 @@ public:
                 state.score.totalUdon,
                 future.reachableBrands,
                 -future.strandedPatrols, future.readyBrands, future.readyUdon,
-                finalDay ? 0 : -future.distanceSum + future.patrolFuel / 20);
+                finalDay ? 0 : -future.distanceSum +
+                    future.patrolFuel / futureFuelDivisor);
         };
         auto cache = std::make_shared<AssignmentCache>();
         auto timings = std::make_shared<PlanningTimings>();
@@ -2422,6 +2468,8 @@ public:
             cfg.timeLimitMs < 0 || cfg.safetyMarginMs < 0 ||
             cfg.routePortfolioMinTimeMs < 0 ||
             cfg.quantityEnhancementsMinTimeMs < 0 ||
+            cfg.futureFuelDivisor <= 0 ||
+            cfg.tightFuelFutureDivisor <= 0 ||
             cfg.incumbentInterval == 0 || !std::isfinite(cfg.diversityFraction) ||
             cfg.diversityFraction < 0 || cfg.diversityFraction > 1) {
             return finish(SearchStopReason::NoValidPlan);
@@ -3292,6 +3340,9 @@ inline BeamSearchResult brain1Beam(
 
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
+    const bool tightFuelDay = detail::isFuelRiskDay(setting, matchState);
+    const int futureFuelDivisor = tightFuelDay
+        ? config.tightFuelFutureDivisor : config.futureFuelDivisor;
     std::vector<DijkstraTable> selectionCache(setting.field.cellCount());
     std::vector<bool> selectionCached(setting.field.cellCount(), false);
     auto resultScore = [&](const BeamSearchResult& result) {
@@ -3304,7 +3355,8 @@ inline BeamSearchResult brain1Beam(
             result.finalState.score.totalUdon,
             future.reachableBrands,
             -future.strandedPatrols, future.readyBrands, future.readyUdon,
-            finalDay ? 0 : -future.distanceSum + future.patrolFuel / 20);
+            finalDay ? 0 : -future.distanceSum +
+                future.patrolFuel / futureFuelDivisor);
     };
     auto better = [&](const BeamSearchResult& lhs,
                       const BeamSearchResult& rhs) {

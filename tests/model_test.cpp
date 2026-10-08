@@ -602,6 +602,29 @@ void testSelectorKeepsAtLeastHalfPatrolsByDefault() {
 }
 
 void testSelectorTrialsPreferredSupplyCountFirst() {
+    MatchSetting five;
+    five.daySteps = {2};
+    five.daySeconds = {60};
+    five.fuelLimit = 2;
+    five.playerCount = 2;
+    five.field.width = 6;
+    five.field.height = 1;
+    five.field.cells.assign(6, Cell{CellType::Plain, -1});
+    five.field.spots = {{0, 5, 1, -1}};
+    five.agentStarts = {0, 1, 2, 3, 4};
+    assert(five.field.rebuildSpotIndex());
+
+    AgentSelectorConfig fiveCfg;
+    fiveCfg.trialCandidateLimit = 1;
+    fiveCfg.trialBeamWidth = 4;
+    fiveCfg.trialJointBeamWidth = 16;
+    fiveCfg.trialScenarioCount = 1;
+    const auto fiveSelected = selectAgentKinds(five, fiveCfg);
+    assert(fiveSelected.success);
+    assert(fiveSelected.trialAssignments == 1);
+    // 公開試合の在庫上限を満たせる4巡回+1補給を最初に試す。
+    assert(fiveSelected.supplyCount == 1);
+
     MatchSetting s;
     s.daySteps = {2};
     s.daySeconds = {60};
@@ -624,6 +647,23 @@ void testSelectorTrialsPreferredSupplyCountFirst() {
     assert(selected.trialAssignments == 1);
     // 7台では補給2台・巡回5台を最初に試す。
     assert(selected.supplyCount == 2);
+
+    // 長期戦では試走を省略しても、僅かな初日上限差だけで補給1台へ
+    // 戻らない。翌日以降の燃料連鎖を避ける中心構成を維持する。
+    MatchSetting longMatch = s;
+    longMatch.daySteps.assign(10, 98);
+    longMatch.daySeconds.assign(10, 60);
+    longMatch.fuelLimit = 101;
+    longMatch.field.spots.clear();
+    for (int pos = 0; pos < 8; ++pos)
+        longMatch.field.spots.push_back({pos % 4, pos, 7, -1});
+    assert(longMatch.field.rebuildSpotIndex());
+    AgentSelectorConfig heuristicOnly = cfg;
+    heuristicOnly.trialCandidateLimit = 0;
+    heuristicOnly.timeLimitMs = 0;
+    const auto longSelected = selectAgentKinds(longMatch, heuristicOnly);
+    assert(longSelected.success);
+    assert(longSelected.supplyCount == 2);
 
     // 実時間の上限がある場合は候補数を初期枠として扱い、余った時間で
     // 未試走の配置も比較する。

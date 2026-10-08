@@ -17,7 +17,7 @@ make .build/tools/saved_day_benchmark
 
 引数は設定、開始状態、前日までの得点（初日は `-` 可）、時間上限ms（省略時50000）、追加改善の有効化0/1（省略時既定値）。設定は現在の `runtime/setting.json` ではなく、その試合の保存設定を指定すること。
 
-複数サイズ・複数シード・複数回の実行で、探索改善の有無による全日程の得点と速度を比較する。種別は巡回車と補給車1台に固定し、種別選択の差を混ぜない。
+複数サイズ・複数シード・複数回の実行で、探索改善の有無による全日程の得点と速度を比較する。既定は補給車1台に固定し、`--supplies N`で補給車数だけを変更できるため、種別選択の差を混ぜず経路探索を比較できる。
 
 2026-09-27の計測結果は[比較記録](benchmark-results-2026-09-27.md)を参照。
 
@@ -44,6 +44,12 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 /tmp/solver_benchmark --fixed-work --seeds 3 --repeats 2 > fixed.csv
 # ボトルネックの計測（速度比較とは分けて実行）
 /tmp/solver_benchmark --fixed-work --profile --seeds 2 --repeats 1 > profile.csv
+# 厳燃料日の残燃料評価（除数10対20）だけを交互比較
+/tmp/solver_benchmark --compare-tight-future-fuel --tight-fuel \
+  --size 24 --seeds 16 --repeats 1 --time-ms 300
+# 燃料切れ巡回車への直接救援だけを交互比較
+/tmp/solver_benchmark --compare-stranded-rescue --agents 7 --supplies 2 \
+  --size 32 --days 10 --mixed-traffic --time-ms 5000
 ```
 
 出力は次のCSV形式である。
@@ -95,10 +101,11 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `--compare-brand-repair`: 連鎖再計画だけを切り替えた`no-brand-repair`と`brand-repair`を同じ時間予算・問題で交互に実行する。他の探索機能は両方で有効。`--current-only`との併用は不可。
 - `--compare-udon-alns`: ALNSだけを切り替えた`no-udon-alns`と`udon-alns`を同じ条件で交互に実行する。`--compare-brand-repair`との併用は不可。
 - `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
-- `--agents N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、スポット数、系列数、日数を上書きする。
+- `--agents N`, `--supplies N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、補給車数、スポット数、系列数、日数を上書きする。補給車数は台数未満でなければならない。
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。
 - `--no-completion`: 途中解の未実行マクロ経路の完了を無効にする。
 - `--tight-fuel`: 燃料上限を初日ステップ数の半分にする。
+- `--compare-tight-future-fuel`: 厳燃料日の残燃料評価だけを切り替え、除数10の既定版と従来相当の20を交互に比較する。`tight-future-fuel-5/10/20/40`は係数調整用variant。
 
 ```sh
 .build/tools/solver_benchmark --current-only --seed-start 3001 --seeds 3 \
@@ -111,6 +118,8 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 `--current-only`では別バイナリ間の実行順を自動交替しない。比較側で順序を変えた反復も行う。
 
 `--compare-route-columns`は`no-route-columns`と`improved`を同じ生成問題・予算で交互に実行する。この比較モードでは5秒未満でも新方式を評価できるよう、適用下限を0msへ変更する。通常のCLIでの既定適用条件とは異なる。個別構成の比較には`--variant no-route-columns`も使える。結果と限界は[経路候補組合せの検証記録](route-column-results-2026-10-05.md)を参照する。
+
+`--compare-stranded-rescue`は他の経路候補探索を共通にしたまま、`maxStrandedRescueSchedules=0`の`no-stranded-rescue`と既定値2の`improved`を交互に実行する。
 
 系列救済型の連鎖再計画だけを比較する例:
 
