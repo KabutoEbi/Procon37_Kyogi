@@ -60,6 +60,26 @@ from backend import (
 
 APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
 
+TEAM_ROLE_LABELS = {
+    "normal": "通常",
+    "lead": "担当1 先行（約15秒）",
+    "middle": "担当2 追走（約35秒）",
+    "long": "担当3 本命（約55秒）",
+}
+TEAM_ROLE_TIME_LIMITS = {
+    "lead": 20000,
+    "middle": 40000,
+    "long": 60000,
+}
+
+
+def official_score_text(summary: SolverResultSummary) -> str:
+    """口頭比較用の公式辞書順スコアを返す。"""
+    return (
+        f"{summary.match_brands:,} / {summary.total_daily_brands:,} / "
+        f"{summary.total_udon:,}"
+    )
+
 
 def duration_text(seconds: float) -> str:
     """経過・残り時間を、長時間でも桁落ちしない時分秒で表示する。"""
@@ -257,6 +277,11 @@ class SolverGUI(tk.Tk):
 
         self._messages: queue.Queue[tuple[str, Any, Any]] = queue.Queue()
         self._busy = False
+        self._submission_busy = False
+        self._automatic_runner: AutomaticMatch | None = None
+        self._automatic_workflow: Workflow | None = None
+        self._prefetching_days: set[tuple] = set()
+        self._prefetch_stop = threading.Event()
         self._action_buttons: list[ttk.Button] = []
         self._current_snapshot: MapSnapshot | None = None
         self._answer_routes: tuple[tuple[int, ...], ...] | None = None
@@ -281,6 +306,7 @@ class SolverGUI(tk.Tk):
         self._simple_server = SimpleServer(PROJECT_ROOT / "runtime/simple-server")
         self._simple_teams: tuple[tuple[str, str], ...] = ()
         self.mode_var = tk.StringVar(value="manual")
+        self.team_role_var = tk.StringVar(value=TEAM_ROLE_LABELS["normal"])
         self.parameter_vars = {
             name: tk.StringVar(value=str(value))
             for name, value in vars(SearchParameters()).items()
@@ -324,6 +350,7 @@ class SolverGUI(tk.Tk):
             "total_count": tk.StringVar(value="-"),
             "daily_brands": tk.StringVar(value="-"),
             "total_brands": tk.StringVar(value="-"),
+            "official_score": tk.StringVar(value="-"),
         }
         self.simple_config_var = tk.StringVar(value=str(DEFAULT_SIMPLE_CONFIG))
         self.simple_visible_var = tk.BooleanVar(value=False)
@@ -427,6 +454,17 @@ class SolverGUI(tk.Tk):
         for value, label in (("manual", "手動"), ("auto", "探索後に自動")):
             ttk.Radiobutton(mode, text=label, variable=self.mode_var, value=value,
                             command=self._mode_changed).pack(side=tk.LEFT, padx=4)
+        ttk.Label(mode, text="3人運用").pack(side=tk.LEFT, padx=(14, 4))
+        self.team_role_box = ttk.Combobox(
+            mode,
+            textvariable=self.team_role_var,
+            values=tuple(TEAM_ROLE_LABELS.values()),
+            state="readonly",
+            width=22,
+        )
+        self.team_role_box.pack(side=tk.LEFT, padx=4)
+        self.team_role_box.bind("<<ComboboxSelected>>", self._team_role_changed)
+        self.team_role_box.set(TEAM_ROLE_LABELS["normal"])
         self.stop_button = ttk.Button(mode, text="停止", command=self._request_stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=6)
         ttk.Label(mode, text="dayは1始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
@@ -664,7 +702,8 @@ class SolverGUI(tk.Tk):
 
         actions = [
             ("0  mainをビルド", self._build_solver, False),
-            ("1  設定取得・種別選択・送信", self._prepare_match, True),
+            ("1a 設定のみ取得（追走端末）", self._fetch_setting_only, False),
+            ("1b 設定取得・種別選択・送信", self._prepare_match, True),
         ]
         row = 1
         for text, command, primary in actions:
@@ -729,7 +768,8 @@ class SolverGUI(tk.Tk):
             ("daily_count", "当日総獲得数"),
             ("total_count", "全日程合計獲得数"),
             ("daily_brands", "当日獲得系列"),
-            ("total_brands", "全日程獲得系列"),
+            ("total_brands", "日別系列累計"),
+            ("official_score", "口頭比較（試合系列 / 日別系列累計 / 総獲得数）"),
         ]):
             ttk.Label(result, text=label).grid(
                 row=result_row, column=0, sticky=tk.W, pady=2
@@ -945,6 +985,24 @@ class SolverGUI(tk.Tk):
                 if kind == "event":
                     self._auto_event(context, payload)
                     continue
+                if kind == "submission_ok":
+                    label, callback = context
+                    self._submission_busy = False
+                    if callback is not None:
+                        callback(payload)
+                    self._log(f"✓ {label} 完了")
+                    self.status_var.set(self._automatic_phase)
+                    self._mode_changed()
+                    continue
+                if kind == "submission_error":
+                    label = context
+                    self._submission_busy = False
+                    self._log(f"{label}: {payload}")
+                    self.status_var.set(self._automatic_phase)
+                    self._mode_changed()
+                    if not self._closing:
+                        messagebox.showerror(label, self._redact(str(payload)), parent=self)
+                    continue
                 if kind == "ok":
                     label, callback = context
                     if isinstance(payload, CommandResult) and payload.output:
@@ -957,6 +1015,8 @@ class SolverGUI(tk.Tk):
                     self._log(f"✓ {label} 完了")
                     if label == "試合終了まで全自動":
                         self._finish_automatic_phase("完了")
+                        self._automatic_runner = None
+                        self._automatic_workflow = None
                     self._set_busy(False, f"{label} 完了")
                 else:
                     label, callback = context
@@ -970,6 +1030,8 @@ class SolverGUI(tk.Tk):
                         self._finish_automatic_phase(
                             "一時停止" if isinstance(payload, Paused) else "停止"
                         )
+                        self._automatic_runner = None
+                        self._automatic_workflow = None
                     self._set_busy(False, "停止しました" if isinstance(payload, Paused) else f"{label} 失敗")
                     if not isinstance(payload, Paused) and not self._closing:
                         messagebox.showerror(label, self._redact(str(payload)), parent=self)
@@ -980,7 +1042,7 @@ class SolverGUI(tk.Tk):
         self._emit_due_milestones()
         self._update_match_clock()
         self._advance_finished_day()
-        if self._closing and not self._busy:
+        if self._closing and not self._busy and not self._submission_busy:
             self._simple_server.stop()
             self.destroy()
             return
@@ -1006,9 +1068,73 @@ class SolverGUI(tk.Tk):
             self._set_controls(widget, disabled)
 
     def _mode_changed(self) -> None:
+        role = self._team_role()
+        team_mode = role != "normal"
+        if role == "lead":
+            self.mode_var.set("auto")
+        elif team_mode:
+            self.mode_var.set("manual")
+        waiting_candidate = self._waiting_resubmission_candidate()
         self.send_answer_button.configure(
-            state=tk.DISABLED if self._busy or self.mode_var.get() == "auto" else tk.NORMAL
+            text="3  前日の回答を再送（ベスト解）" if waiting_candidate else "3  日次回答を送信",
+            state=(tk.NORMAL if waiting_candidate else
+                   tk.DISABLED if self._busy or self._submission_busy
+                   or self.mode_var.get() == "auto" else tk.NORMAL),
         )
+        if hasattr(self, "automatic_match_button"):
+            self.automatic_match_button.configure(
+                text="3人運用は日次ボタンを使用" if team_mode else "試合終了まで全自動",
+                state=tk.DISABLED if self._busy or team_mode else tk.NORMAL,
+            )
+
+    def _team_role(self) -> str:
+        selected = self.team_role_var.get()
+        return next(
+            (key for key, label in TEAM_ROLE_LABELS.items() if label == selected),
+            "normal",
+        )
+
+    def _team_role_changed(self, _event: object | None = None) -> None:
+        role = self._team_role()
+        if role != "normal":
+            self.mode_var.set("auto" if role == "lead" else "manual")
+            self.parameter_vars["auto_beam_width"].set("1")
+            self.parameter_vars["time_limit_ms"].set(
+                str(TEAM_ROLE_TIME_LIMITS[role])
+            )
+            send_mode = "自動送信" if role == "lead" else "手動送信"
+            self._log(
+                f"3人運用: {TEAM_ROLE_LABELS[role]} / {send_mode}"
+            )
+        else:
+            self._sync_day_time_limit()
+        self._mode_changed()
+
+    def _waiting_resubmission_candidate(
+        self,
+    ) -> tuple[Workflow, int, Path, Path, Path, Path] | None:
+        """全自動が翌日待ちの間だけ、直前の受理済み候補を返す。"""
+        runner = self._automatic_runner
+        workflow = self._automatic_workflow
+        if (not self._busy or self._submission_busy or runner is None or workflow is None
+                or runner.phase != "state"
+                or not automatic_phase_is_waiting(self._automatic_phase)
+                or runner.day <= 0):
+            return None
+        day = runner.day - 1
+        answer = workflow.work_dir / "answer.json"
+        score = workflow.work_dir / "score-next.json"
+        state = workflow.work_dir / f"state-day{day}.json"
+        setting = runner.setting
+        try:
+            receipt = read_json(workflow.work_dir / "prepared-answer.json")
+            journal = read_json(workflow.work_dir / f"submission-day{day}.json")
+            if (receipt.get("day") != day or journal.get("status") != "accepted"
+                    or any(not path.is_file() for path in (answer, score, state, setting))):
+                return None
+        except (WorkflowError, OSError, AttributeError):
+            return None
+        return workflow, day, answer, score, state, setting
 
     def _request_stop(self) -> None:
         self._stop.set()
@@ -1016,8 +1142,9 @@ class SolverGUI(tk.Tk):
 
     def _close(self) -> None:
         self._closing = True
+        self._prefetch_stop.set()
         self._simple_server.stop()
-        if self._busy:
+        if self._busy or self._submission_busy:
             self._request_stop()
         else:
             self.destroy()
@@ -1250,6 +1377,7 @@ class SolverGUI(tk.Tk):
                 0.0 if automatic_phase_is_waiting(label) else now
             )
         self._update_match_clock()
+        self._mode_changed()
 
     def _finish_automatic_phase(self, label: str) -> None:
         if self._automatic_phase_started > 0:
@@ -1300,6 +1428,23 @@ class SolverGUI(tk.Tk):
 
         self._run_task("設定取得・種別選択・送信", prepare)
 
+    def _fetch_setting_only(self) -> None:
+        """追走端末用。担当1が確定するエージェント種別を上書きしない。"""
+        workflow = self._workflow_or_dialog()
+        if workflow is None:
+            return
+        setting = self._work_path("setting.json")
+
+        def completed(_path: Path) -> None:
+            self._setting_loaded(setting)
+            self._show_json(setting)
+
+        self._run_task(
+            "設定のみ取得",
+            lambda: workflow.fetch_setting(setting),
+            completed,
+        )
+
     def _run_automatic_match(self) -> None:
         workflow = self._workflow_or_dialog()
         if workflow is None:
@@ -1327,6 +1472,8 @@ class SolverGUI(tk.Tk):
         except (WorkflowError, OSError, ValueError) as error:
             messagebox.showerror("試合終了まで全自動", str(error), parent=self)
             return
+        self._automatic_runner = runner
+        self._automatic_workflow = workflow
         self._run_task("試合終了まで全自動", runner.run)
 
     def _auto_event(self, key: str, data: Any) -> None:
@@ -1371,6 +1518,13 @@ class SolverGUI(tk.Tk):
             self.score_var.set(str(checkpoint))
             self.day_var.set(next_day + 1)
             self._log(f"revision={revision}\n次日チェックポイント: {checkpoint}")
+        elif key == "prefetch_done":
+            self._prefetching_days.discard(data)
+        elif key == "prefetch_error":
+            context, error = data
+            self._prefetching_days.discard(context)
+            if not isinstance(error, Paused):
+                self._log(f"翌日状態の自動取得: {error}")
 
     def _day(self) -> int:
         displayed = self.day_var.get()
@@ -1458,6 +1612,9 @@ class SolverGUI(tk.Tk):
         if getattr(self, "_input_identity", None) == identity:
             return
         self._input_identity = identity
+        self._prefetch_stop.set()
+        self._prefetch_stop = threading.Event()
+        self._prefetching_days.clear()
         self._daily_inputs.clear()
         self._day_deadlines.clear()
         self._logged_schedule = None
@@ -1502,6 +1659,51 @@ class SolverGUI(tk.Tk):
             return None
         return cached
 
+    def _start_next_day_prefetch(self, completed_day: int) -> None:
+        """3人運用では探索後すぐ、次日の状態公開を裏で待つ。"""
+        if self._team_role() == "normal" or completed_day + 1 >= self._day_count:
+            return
+        next_day = completed_day + 1
+        try:
+            context = self._day_context(next_day)
+            if self._cached_day(context) is not None or context in self._prefetching_days:
+                return
+            source = self._workflow()
+        except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+            self._log(f"翌日状態の自動取得を開始できません: {error}")
+            return
+        stop = self._prefetch_stop
+        workflow = Workflow(
+            source.connection,
+            source.solver,
+            source.work_dir,
+            source.parameters,
+            stop,
+        )
+        state = workflow.work_dir / f"state-day{next_day}.json"
+        checkpoint = workflow.work_dir / f"score-day{next_day}.json"
+        self._prefetching_days.add(context)
+        self._log(f"▶ day={next_day + 1} 状態の公開待ち（自動取得）")
+
+        def worker() -> None:
+            try:
+                workflow.wait_for_state(next_day, state)
+                digest = file_hash(state)
+                self._messages.put((
+                    "event", "day_state",
+                    (context, state, checkpoint if checkpoint.is_file() else None, digest),
+                ))
+                self._messages.put((
+                    "event", "log",
+                    f"✓ day={next_day + 1} 状態を自動取得しました",
+                ))
+            except Exception as error:
+                self._messages.put(("event", "prefetch_error", (context, error)))
+            finally:
+                self._messages.put(("event", "prefetch_done", context))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _sync_day_button(self) -> None:
         try:
             day = self._day()
@@ -1523,6 +1725,12 @@ class SolverGUI(tk.Tk):
 
     def _sync_day_time_limit(self) -> None:
         """設定済みの対象日の試合時間を探索上限の初期値にする。"""
+        role = self._team_role()
+        if role in TEAM_ROLE_TIME_LIMITS:
+            self.parameter_vars["time_limit_ms"].set(
+                str(TEAM_ROLE_TIME_LIMITS[role])
+            )
+            return
         try:
             setting = read_json(Path(self.setting_var.get()).expanduser())
             day = self._day()
@@ -1561,7 +1769,9 @@ class SolverGUI(tk.Tk):
             checkpoint = Path(score_text)
 
         if cached is not None:
-            state, checkpoint, _digest = cached
+            state, cached_checkpoint, _digest = cached
+            if cached_checkpoint is not None:
+                checkpoint = cached_checkpoint
 
         def fetch_and_solve() -> CommandResult:
             if cached is None:
@@ -1585,8 +1795,13 @@ class SolverGUI(tk.Tk):
             self._show_json(self._work_path("answer.json"))
             if auto_send:
                 self.after_idle(
-                    lambda: self._submit_answer(workflow, day, state, setting, confirm=False)
+                    lambda: self._submit_answer(
+                        workflow, day, state, setting, confirm=False,
+                        after_accepted=lambda: self._start_next_day_prefetch(day),
+                    )
                 )
+            else:
+                self._start_next_day_prefetch(day)
 
         self._run_task(
             f"day={day + 1} " + ("探索" if cached else "状態取得・探索"),
@@ -1645,6 +1860,10 @@ class SolverGUI(tk.Tk):
         )
 
     def _send_answer(self) -> None:
+        waiting_candidate = self._waiting_resubmission_candidate()
+        if waiting_candidate is not None:
+            self._resubmit_waiting_answer(*waiting_candidate)
+            return
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
@@ -1654,10 +1873,58 @@ class SolverGUI(tk.Tk):
         self._submit_answer(
             workflow, day, Path(self.state_var.get()), Path(self.setting_var.get()),
             confirm=True,
+            after_accepted=lambda: self._start_next_day_prefetch(day),
         )
 
+    def _resubmit_waiting_answer(
+        self,
+        workflow: Workflow,
+        day: int,
+        answer: Path,
+        score: Path,
+        state: Path,
+        setting: Path,
+    ) -> None:
+        if not messagebox.askyesno(
+            "ベスト解の再送確認",
+            f"day={day + 1} の受理済み回答をもう一度送信します。\n\n{answer}\n\n"
+            "3人の候補を比較し、この端末の回答が最良であることを確認してください。",
+            parent=self,
+        ):
+            return
+        self._submission_busy = True
+        self._mode_changed()
+        label = f"day={day + 1} ベスト解再送"
+        self.status_var.set(f"{label}中…")
+        self._log(f"▶ {label}")
+
+        def accepted(result: tuple[int, Path, Path]) -> None:
+            revision, archived, checkpoint = result
+            self._log(
+                f"revision={revision}\n再送: {archived}\n次日チェックポイント: {checkpoint}"
+            )
+
+        def worker() -> None:
+            try:
+                with workflow.artifact_lock:
+                    result = workflow.send_answer(
+                        day, answer, score, state, setting, force=True
+                    )
+                self._messages.put(("submission_ok", (label, accepted), result))
+            except Exception as error:
+                self._messages.put(("submission_error", label, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _submit_answer(
-        self, workflow: Workflow, day: int, state: Path, setting: Path, *, confirm: bool
+        self,
+        workflow: Workflow,
+        day: int,
+        state: Path,
+        setting: Path,
+        *,
+        confirm: bool,
+        after_accepted: Callable[[], None] | None = None,
     ) -> None:
         answer = workflow.work_dir / "answer.json"
         score = workflow.work_dir / "score-next.json"
@@ -1673,6 +1940,8 @@ class SolverGUI(tk.Tk):
             self._log(
                 f"revision={revision}\n保存: {archived}\n次日チェックポイント: {checkpoint}"
             )
+            if after_accepted is not None:
+                after_accepted()
 
         self._run_task(
             f"day={day + 1} 回答送信",
@@ -1749,6 +2018,7 @@ class SolverGUI(tk.Tk):
             "total_count": "-",
             "daily_brands": "-",
             "total_brands": "-",
+            "official_score": "-",
         }.items():
             self.search_result_vars[key].set(value)
 
@@ -1809,6 +2079,9 @@ class SolverGUI(tk.Tk):
         )
         self.search_result_vars["total_brands"].set(
             f"{summary.total_daily_brands:,}/{total_brand_denominator}系列"
+        )
+        self.search_result_vars["official_score"].set(
+            official_score_text(summary)
         )
 
     def _show_answer_route(

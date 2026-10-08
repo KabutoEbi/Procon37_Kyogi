@@ -29,6 +29,7 @@ from backend import (  # noqa: E402
     SearchParameters,
     RandomSettingParameters,
     SimpleServer,
+    SolverResultSummary,
     Paused,
     ApiError,
     file_hash,
@@ -46,10 +47,12 @@ from backend import (  # noqa: E402
 )
 from app import (  # noqa: E402
     SolverGUI,
+    TEAM_ROLE_TIME_LIMITS,
     automatic_phase_is_waiting,
     compact_clock_status,
     duration_text,
     match_clock_values,
+    official_score_text,
 )
 from server_client.auto_submit import parser as auto_submit_parser  # noqa: E402
 
@@ -58,6 +61,18 @@ class BackendTest(unittest.TestCase):
     def test_default_connection_timeout_is_ten_seconds(self) -> None:
         self.assertEqual(ConnectionConfig("http://example", "secret").timeout, 10.0)
         self.assertEqual(auto_submit_parser().parse_args([]).timeout, 10.0)
+
+    def test_three_person_presets_and_spoken_score(self) -> None:
+        self.assertEqual(
+            TEAM_ROLE_TIME_LIMITS,
+            {"lead": 20000, "middle": 40000, "long": 60000},
+        )
+        summary = SolverResultSummary(
+            day=2, stop="completed", elapsed_ms=1, expanded=2,
+            daily_udon=7, daily_brands=5, total_udon=31,
+            match_brands=11, total_daily_brands=27,
+        )
+        self.assertEqual(official_score_text(summary), "11 / 27 / 31")
 
     def test_compact_clock_status(self) -> None:
         values = {"phase": "開始前（エージェント選択）", "progress": "0/8日"}
@@ -84,6 +99,39 @@ class BackendTest(unittest.TestCase):
             ),
             "3/8日 待機中",
         )
+
+    def test_waiting_resubmission_uses_previous_accepted_day(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            workflow = Workflow(
+                ConnectionConfig("http://example", "test"), ROOT / "main", work
+            )
+            setting = work / "setting.json"
+            for path, value in (
+                (setting, {}),
+                (work / "answer.json", [[]]),
+                (work / "score-next.json", {"nextDay": 2}),
+                (work / "state-day1.json", {"day": 1}),
+                (work / "prepared-answer.json", {"day": 1}),
+                (work / "submission-day1.json", {"status": "accepted"}),
+            ):
+                path.write_text(json.dumps(value), encoding="utf-8")
+            gui = SolverGUI.__new__(SolverGUI)
+            gui._busy = True
+            gui._submission_busy = False
+            gui._automatic_phase = "自動: 当日マップの公開待ち・取得 / day=3"
+            gui._automatic_workflow = workflow
+            gui._automatic_runner = SimpleNamespace(
+                phase="state", day=2, setting=setting
+            )
+
+            candidate = gui._waiting_resubmission_candidate()
+            self.assertIsNotNone(candidate)
+            self.assertEqual(candidate[1], 1)
+            self.assertEqual(candidate[4], (work / "state-day1.json").resolve())
+
+            gui._automatic_runner.phase = "solve"
+            self.assertIsNone(gui._waiting_resubmission_candidate())
 
     def test_match_clock_values(self) -> None:
         self.assertEqual(duration_text(3661.9), "01:01:01")
@@ -437,6 +485,16 @@ result
                 workflow.send_answer(0, answer, score)
                 post.assert_not_called()
             self.assertTrue(checkpoint.exists())
+
+            # 3台のうちこの候補が最良だった場合、他端末の送信後にも
+            # 受理済みの同一回答を明示的に再POSTできる。
+            with mock.patch("backend.send", return_value=5) as post:
+                revision, _, _ = workflow.send_answer(
+                    0, answer, score, force=True
+                )
+                self.assertEqual(revision, 5)
+                post.assert_called_once()
+            self.assertEqual(read_json(work / "submission-day0.json")["revision"], 5)
 
             checkpoint.unlink()
             (work / "submission-day0.json").unlink()

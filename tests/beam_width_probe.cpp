@@ -1,6 +1,7 @@
 #include "application.hpp"
 #include "solver_options.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -11,8 +12,8 @@
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 5) {
-            std::cerr << "usage: beam_width_probe setting state-or-- score-or-- width-or-auto\n";
+        if (argc < 5 || argc > 6) {
+            std::cerr << "usage: beam_width_probe setting state-or-- score-or-- width-or-auto [time-ms]\n";
             return 2;
         }
         const std::string_view widthText(argv[4]);
@@ -50,10 +51,24 @@ int main(int argc, char** argv) {
         config.timeLimitMs = 0;
         config.useStateDeadline = false;
         config.adaptiveBeamWidth = false;
-        config.iterativeDeepening = widthText == "auto";
-        config.comparePeriodicReplanPlans = widthText == "auto";
+        const bool timed = argc == 6;
+        if (timed) {
+            const std::string_view timeText(argv[5]);
+            std::int64_t timeMs = 0;
+            const auto parsed = std::from_chars(timeText.data(),
+                timeText.data() + timeText.size(), timeMs);
+            if (parsed.ec != std::errc{} ||
+                parsed.ptr != timeText.data() + timeText.size() ||
+                timeMs <= 0) {
+                throw std::invalid_argument("invalid time limit");
+            }
+            config.timeLimitMs = timeMs;
+            config.safetyMarginMs = std::min<std::int64_t>(5000, timeMs - 1);
+        }
+        config.iterativeDeepening = widthText == "auto" || timed;
+        config.comparePeriodicReplanPlans = widthText == "auto" || timed;
         if (widthText == "auto") {
-            config.timeLimitMs = 50000;
+            if (!timed) config.timeLimitMs = 50000;
             config = benzen::SolverOptions{}.beamFor(setting, state, config);
         }
 
