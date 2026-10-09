@@ -24,10 +24,6 @@ struct ConsoleConfig {
     std::size_t maxTraceLines = 120;
 };
 
-inline const char* agentKindName(AgentKind kind) noexcept {
-    return kind == AgentKind::Patrol ? "patrol" : "supply";
-}
-
 inline const char* searchStopReasonName(SearchStopReason reason) noexcept {
     switch (reason) {
         case SearchStopReason::Completed:

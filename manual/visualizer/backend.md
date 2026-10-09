@@ -22,7 +22,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | メソッド | 処理 |
 |---|---|
 | `check_connection()` | `GET /setting`で到達・認証・形式を確認 |
-| `build_solver()` | C++17、`-O3 -DNDEBUG`、厳格警告、`-pthread`で`main.cpp`を本番ビルド |
+| `build_solver()` | C++17、`-O3 -DNDEBUG`、厳格警告、`-pthread`で担当共通の`main.cpp`を本番ビルド |
 | `generate_random_setting()` | C++の`generate`モードで公式設定形式を一時生成し、検査後に保存 |
 | `fetch_setting()` / `fetch_state()` | 公式JSONを安全に保存し、dayを検査 |
 | `wait_for_setting()` | 未公開中の403・一時的な接続失敗を1秒間隔で再試行し、停止要求へ応答 |
@@ -38,7 +38,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 
 ## 共通検証とCLI引数
 
-`SearchParameters.arguments()`と`RandomSettingParameters.arguments()`は、それぞれの値域を検証した後、共通の`_option_arguments()`でCLI引数へ変換する。Python内部の`snake_case`はC++側の`--kebab-case`へ変換され、送信専用の余裕設定やローカル交通設定は必要な呼び出し先へだけ渡す。
+`SearchParameters.arguments()`と`RandomSettingParameters.arguments()`は、それぞれの値域を検証した後、共通の`_option_arguments()`でCLI引数へ変換する。Python内部の`snake_case`はC++側の`--kebab-case`へ変換され、`udon_sa`は`--udon-sa`として渡る。送信専用の余裕設定やローカル交通設定は必要な呼び出し先へだけ渡す。
 
 日次探索とローカル探索は`_day_duration()`で`daySeconds`の存在、対象日、数値型を共通検証する。ソルバーを起動する操作は`Workflow._require_solver()`で実行ファイルの存在を同じエラー形式で確認する。これらの補助関数は内部用で、`Workflow`の公開操作手順は変わらない。
 

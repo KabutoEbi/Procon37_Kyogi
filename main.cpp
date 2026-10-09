@@ -129,13 +129,6 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " quantity-budget-percent=" << config.quantityBudgetPercent
               << " adaptive-long-search=" << (config.adaptiveLongSearch ? 1 : 0)
               << " udon-sa=" << (config.udonAlns.simulatedAnnealing ? 1 : 0)
-              << " udon-joint-destroy="
-              << (config.udonAlns.jointDestroyRepair ? 1 : 0)
-              << " quantity-upgrades=" << (config.quantityUpgrades ? 1 : 0)
-              << " coordinated-refinement=" << (config.coordinatedRefinement ? 1 : 0)
-              << " supply-wait-steps=" << config.maxSupplyWaitSteps
-              << " small-board-brand-rescue="
-              << (config.adaptiveSmallBoardBrandRescue ? 1 : 0)
               << " small-board-beam-budget-percent="
               << config.smallBoardBeamBudgetPercent
               << " small-board-brand-node-limit="

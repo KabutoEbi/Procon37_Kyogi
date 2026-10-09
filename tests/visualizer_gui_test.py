@@ -21,6 +21,7 @@ from backend import (
     ConnectionConfig,
     CommandResult,
     SimpleServerInfo,
+    WorkflowError,
     match_acquisition_theoretical,
 )
 
@@ -44,13 +45,27 @@ class GUITest(unittest.TestCase):
             self.assertTrue(gui.automatic_match_button.winfo_ismapped())
             gui.team_role_var.set(TEAM_ROLE_LABELS["lead"])
             gui._team_role_changed()
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "20000")
+            self.assertEqual(gui.parameter_vars["udon_sa"].get(), "0")
+            self.assertIn("短時間ビーム", gui.build_solver_button.cget("text"))
+            self.assertIsNotNone(gui._workflow(require_shared=False))
+            with self.assertRaisesRegex(WorkflowError, "共有フォルダ"):
+                gui._workflow()
             self.assertEqual(str(gui.automatic_match_button["state"]), "normal")
             self.assertIn("担当1", gui.automatic_match_button.cget("text"))
             self.assertTrue(gui.prepare_button.cget("text").startswith("1b"))
             gui.team_role_var.set(TEAM_ROLE_LABELS["middle"])
             gui._team_role_changed()
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "55000")
+            self.assertEqual(gui.parameter_vars["udon_sa"].get(), "0")
+            self.assertIn("約50秒ビーム", gui.build_solver_button.cget("text"))
             self.assertEqual(str(gui.automatic_match_button["state"]), "disabled")
             self.assertTrue(gui.prepare_button.cget("text").startswith("1a"))
+            gui.team_role_var.set(TEAM_ROLE_LABELS["long"])
+            gui._team_role_changed()
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "60000")
+            self.assertEqual(gui.parameter_vars["udon_sa"].get(), "1")
+            self.assertIn("約55秒SA", gui.build_solver_button.cget("text"))
             gui.team_role_var.set(TEAM_ROLE_LABELS["normal"])
             gui._team_role_changed()
             self.assertFalse(gui.settings_window.winfo_viewable())

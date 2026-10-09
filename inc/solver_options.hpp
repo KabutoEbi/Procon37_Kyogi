@@ -21,7 +21,7 @@ struct SolverOptions {
     bool autoBeamWidth = true;
     bool hasAutoBeamOption = false;
     bool hasManualBeamWidth = false;
-    bool hasQuantityBudgetOption = false;
+    bool quantityBudgetSpecified = false;
 
     SolverOptions() {
         // CLIの標準60秒枠では約55秒を探索へ使う。
@@ -42,6 +42,19 @@ private:
         return value;
     }
 
+    static bool isBooleanOption(std::string_view name) {
+        return name == "--macro-actions" || name == "--adaptive-beam" ||
+            name == "--exact-brands" || name == "--brand-repair" ||
+            name == "--udon-alns" || name == "--udon-sa" ||
+            name == "--udon-joint-destroy" || name == "--spot-route-lns" ||
+            name == "--route-columns" || name == "--adaptive-long-search" ||
+            name == "--next-day-probe" || name == "--day-beam" ||
+            name == "--quantity-upgrades" ||
+            name == "--coordinated-refinement" ||
+            name == "--small-board-brand-rescue" ||
+            name == "--auto-beam-width";
+    }
+
     void setOption(std::string_view name, std::int64_t value) {
         const bool isWidth =
             name == "--beam-width" || name == "--joint-beam-width" ||
@@ -51,17 +64,7 @@ private:
             throw std::invalid_argument(
                 "width must be positive: " + std::string(name));
         }
-        if ((name == "--macro-actions" || name == "--adaptive-beam" ||
-             name == "--exact-brands" || name == "--brand-repair" ||
-             name == "--udon-alns" || name == "--udon-sa" ||
-             name == "--udon-joint-destroy" ||
-             name == "--spot-route-lns" ||
-             name == "--route-columns" ||
-             name == "--adaptive-long-search" ||
-             name == "--next-day-probe" || name == "--day-beam" || name == "--quantity-upgrades" || name == "--coordinated-refinement" ||
-             name == "--small-board-brand-rescue" ||
-             name == "--auto-beam-width") &&
-            value > 1) {
+        if (isBooleanOption(name) && value > 1) {
             throw std::invalid_argument(
                 "expected 0 or 1: " + std::string(name));
         }
@@ -121,7 +124,7 @@ private:
         } else if (name == "--quantity-budget-percent") {
             if (value < 1 || value > 90) throw std::invalid_argument("quantity budget must be 1..90");
             beam.quantityBudgetPercent = value;
-            hasQuantityBudgetOption = true;
+            quantityBudgetSpecified = true;
             beam.adaptiveLongSearch = false;
         }
         else if (name == "--auto-beam-width") {
@@ -157,7 +160,7 @@ public:
         }
         if (!options.hasAutoBeamOption && options.hasManualBeamWidth)
             options.autoBeamWidth = false;
-        if (options.hasQuantityBudgetOption)
+        if (options.quantityBudgetSpecified)
             options.beam.adaptiveLongSearch = false;
         return options;
     }

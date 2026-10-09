@@ -21,7 +21,7 @@ import math
 import queue
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 import tkinter as tk
 from pathlib import Path
@@ -60,16 +60,28 @@ from backend import (
 
 APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
 
+@dataclass(frozen=True)
+class TeamRoleProfile:
+    label: str
+    build_label: str
+    time_limit_ms: int
+    udon_sa: int
+
+
+TEAM_ROLE_PROFILES = {
+    "lead": TeamRoleProfile(
+        "担当1 先行ビーム（約15秒）", "担当1・短時間ビーム", 20000, 0,
+    ),
+    "middle": TeamRoleProfile(
+        "担当2 追走ビーム（約50秒）", "担当2・約50秒ビーム", 55000, 0,
+    ),
+    "long": TeamRoleProfile(
+        "担当3 SA（約55秒）", "担当3・約55秒SA", 60000, 1,
+    ),
+}
 TEAM_ROLE_LABELS = {
     "normal": "通常",
-    "lead": "担当1 先行（約15秒）",
-    "middle": "担当2 追走（約35秒）",
-    "long": "担当3 本命（約55秒）",
-}
-TEAM_ROLE_TIME_LIMITS = {
-    "lead": 20000,
-    "middle": 40000,
-    "long": 60000,
+    **{role: profile.label for role, profile in TEAM_ROLE_PROFILES.items()},
 }
 
 
@@ -673,6 +685,7 @@ class SolverGUI(tk.Tk):
             ("max_actions", "各車の行動候補数", "0: 全候補"),
             ("macro_actions", "マクロ行動", "1: 有効 / 0: 無効"),
             ("adaptive_beam", "ビーム幅自動調整", "自動選択が0のときだけ使用"),
+            ("udon_sa", "玉数の焼きなまし", "担当1・2は0（ビーム系）/ 担当3は1（SA）"),
             ("trial_candidates", "種別選択の試走候補数", "0: 距離評価のみ"),
             ("trial_beam_width", "種別選択の試走ビーム幅", "1以上"),
             ("trial_joint_beam_width", "種別選択の同時行動幅", "1以上"),
@@ -698,8 +711,8 @@ class SolverGUI(tk.Tk):
                     row=row, column=2, sticky=tk.W
                 )
 
-        add_fields(daily, fields[:9])
-        add_fields(selection, fields[9:])
+        add_fields(daily, fields[:10])
+        add_fields(selection, fields[10:])
 
     def _path_row(
         self,
@@ -724,18 +737,15 @@ class SolverGUI(tk.Tk):
             row=0, column=0, sticky=tk.W, pady=(0, 8)
         )
 
-        actions = [("0  mainをビルド", self._build_solver, False)]
         row = 1
-        for text, command, primary in actions:
-            button = ttk.Button(
-                parent,
-                text=text,
-                command=command,
-                style="Primary.TButton" if primary else "TButton",
-            )
-            button.grid(row=row, column=0, sticky=tk.EW, pady=3)
-            self._action_buttons.append(button)
-            row += 1
+        self.build_solver_button = ttk.Button(
+            parent,
+            text="0  mainを最適化ビルド",
+            command=self._build_solver,
+        )
+        self.build_solver_button.grid(row=row, column=0, sticky=tk.EW, pady=3)
+        self._action_buttons.append(self.build_solver_button)
+        row += 1
 
         self.prepare_button = ttk.Button(
             parent,
@@ -944,7 +954,7 @@ class SolverGUI(tk.Tk):
         ybar.grid(row=0, column=1, sticky=tk.NS)
         xbar.grid(row=1, column=0, sticky=tk.EW)
 
-    def _workflow(self) -> Workflow:
+    def _workflow(self, *, require_shared: bool = True) -> Workflow:
         try:
             timeout = float(self.timeout_var.get())
             parameters = SearchParameters(**{
@@ -954,7 +964,7 @@ class SolverGUI(tk.Tk):
         except ValueError as error:
             raise WorkflowError("timeoutは数値、探索パラメータは整数で指定してください") from error
         shared_text = self.shared_var.get().strip()
-        if self._team_role() != "normal" and not shared_text:
+        if require_shared and self._team_role() != "normal" and not shared_text:
             raise WorkflowError("3人運用では共有フォルダを設定してください")
         shared_dir = Path(shared_text) if shared_text else None
         if shared_dir is not None and not shared_dir.expanduser().is_dir():
@@ -979,11 +989,11 @@ class SolverGUI(tk.Tk):
         except ValueError as error:
             raise WorkflowError("ランダム設定は整数で指定してください") from error
 
-    def _workflow_or_dialog(self) -> Workflow | None:
+    def _workflow_or_dialog(self, *, require_shared: bool = True) -> Workflow | None:
         if self._busy:
             return None
         try:
-            return self._workflow()
+            return self._workflow(require_shared=require_shared)
         except (WorkflowError, OSError) as error:
             messagebox.showerror("実行設定", str(error), parent=self)
             return None
@@ -1131,6 +1141,12 @@ class SolverGUI(tk.Tk):
                       if follower_mode else
                       "1b 問題公開待ち・設定取得・種別選択・送信")
             )
+        if hasattr(self, "build_solver_button"):
+            profile = TEAM_ROLE_PROFILES.get(role)
+            self.build_solver_button.configure(
+                text=(f"0  mainを最適化ビルド（{profile.build_label}）" if profile else
+                      "0  mainを最適化ビルド")
+            )
 
     def _team_role(self) -> str:
         selected = self.team_role_var.get()
@@ -1143,17 +1159,25 @@ class SolverGUI(tk.Tk):
         role = self._team_role()
         if role != "normal":
             self.mode_var.set("auto" if role == "lead" else "manual")
-            self.parameter_vars["auto_beam_width"].set("1")
-            self.parameter_vars["time_limit_ms"].set(
-                str(TEAM_ROLE_TIME_LIMITS[role])
-            )
+            self._apply_team_role_profile(role)
+            profile = TEAM_ROLE_PROFILES[role]
             send_mode = "自動送信" if role == "lead" else "手動送信"
             self._log(
-                f"3人運用: {TEAM_ROLE_LABELS[role]} / {send_mode}"
+                f"3人運用: {profile.label} / {send_mode} / "
+                f"udon-sa={profile.udon_sa}"
             )
         else:
             self._sync_day_time_limit()
         self._mode_changed()
+
+    def _apply_team_role_profile(self, role: str) -> None:
+        """担当別の時間・探索方式をGUI引数へ一括反映する。"""
+        profile = TEAM_ROLE_PROFILES.get(role)
+        if profile is None:
+            return
+        self.parameter_vars["auto_beam_width"].set("1")
+        self.parameter_vars["time_limit_ms"].set(str(profile.time_limit_ms))
+        self.parameter_vars["udon_sa"].set(str(profile.udon_sa))
 
     def _waiting_resubmission_candidate(
         self,
@@ -1446,10 +1470,14 @@ class SolverGUI(tk.Tk):
                 messagebox.showerror(".env読込", str(error), parent=self)
 
     def _build_solver(self) -> None:
-        workflow = self._workflow_or_dialog()
+        role = self._team_role()
+        self._apply_team_role_profile(role)
+        workflow = self._workflow_or_dialog(require_shared=False)
         if workflow is None:
             return
-        self._run_task("mainのビルド", workflow.build_solver)
+        profile = TEAM_ROLE_PROFILES.get(role)
+        label = profile.build_label if profile else "通常"
+        self._run_task(f"mainの最適化ビルド（{label}）", workflow.build_solver)
 
     def _check_connection(self) -> None:
         workflow = self._workflow_or_dialog()
@@ -1790,10 +1818,9 @@ class SolverGUI(tk.Tk):
     def _sync_day_time_limit(self) -> None:
         """設定済みの対象日の試合時間を探索上限の初期値にする。"""
         role = self._team_role()
-        if role in TEAM_ROLE_TIME_LIMITS:
-            self.parameter_vars["time_limit_ms"].set(
-                str(TEAM_ROLE_TIME_LIMITS[role])
-            )
+        profile = TEAM_ROLE_PROFILES.get(role)
+        if profile is not None:
+            self.parameter_vars["time_limit_ms"].set(str(profile.time_limit_ms))
             return
         try:
             setting = read_json(Path(self.setting_var.get()).expanduser())

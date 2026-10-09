@@ -60,6 +60,8 @@ class SearchParameters:
     max_actions: int = 4
     macro_actions: int = 1
     adaptive_beam: int = 1
+    # 0は従来の改善専用ALNS、1はbrain2の焼きなましを使う。
+    udon_sa: int = 1
     # 種別選択は順位の回答時間に含まれないため、基本候補を試走する。
     trial_candidates: int = 6
     trial_beam_width: int = 32
@@ -77,7 +79,8 @@ class SearchParameters:
             if name in ("beam_width", "joint_beam_width",
                         "trial_beam_width", "trial_joint_beam_width") and value == 0:
                 raise WorkflowError(f"{name}: 1以上を指定してください")
-            if name in ("macro_actions", "adaptive_beam", "auto_beam_width") and value not in (0, 1):
+            if name in ("macro_actions", "adaptive_beam", "auto_beam_width",
+                        "udon_sa") and value not in (0, 1):
                 raise WorkflowError(f"{name}: 0または1を指定してください")
         return _option_arguments(values, ("send_reserve_ms", "clock_margin_ms"))
 
