@@ -31,7 +31,7 @@ def parser() -> argparse.ArgumentParser:
                         default=default_solver_path(Path(".")))
     result.add_argument("--work-dir", type=Path, default=Path("runtime"))
     result.add_argument("--wait", type=float, default=3600.0)
-    result.add_argument("--interval", type=float, default=0.5)
+    result.add_argument("--interval", type=float, default=1.0)
     result.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     result.add_argument("--resume", action="store_true",
                         help="送信結果不明の場合は同じ日・同じ回答だけを再送")

@@ -35,7 +35,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--score", type=Path)
     result.add_argument("--expected-day", type=int)
     result.add_argument("--wait", type=float, default=3600.0)
-    result.add_argument("--interval", type=float, default=0.5)
+    result.add_argument("--interval", type=float, default=1.0)
     result.add_argument("--timeout", type=float, default=10.0)
     return result
 

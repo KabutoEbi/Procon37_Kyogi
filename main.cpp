@@ -126,6 +126,7 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " auto-beam-width=" << (config.autoSizedBeam ? 1 : 0)
               << " route-columns=" << (config.routeColumns.enabled ? 1 : 0)
               << " quantity-budget-percent=" << config.quantityBudgetPercent
+              << " adaptive-long-search=" << (config.adaptiveLongSearch ? 1 : 0)
               << " quantity-upgrades=" << (config.quantityUpgrades ? 1 : 0)
               << " coordinated-refinement=" << (config.coordinatedRefinement ? 1 : 0)
               << " supply-wait-steps=" << config.maxSupplyWaitSteps

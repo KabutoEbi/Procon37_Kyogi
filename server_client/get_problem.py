@@ -139,8 +139,16 @@ def fetch(
     log_dir: Path | None = None,
 ) -> Any:
     endpoint = "/setting" if kind == "setting" else "/"
-    value, raw, _ = request_json(
-        base_url, token, endpoint, timeout=timeout)
+    try:
+        value, raw, _ = request_json(
+            base_url, token, endpoint, timeout=timeout)
+    except ApiError as error:
+        if error.body:
+            save_raw_log(
+                log_dir, f"get-{kind}-error-response",
+                error.body.encode("utf-8", errors="replace"),
+            )
+        raise
     if not isinstance(value, dict):
         raise ApiError(200, f"{endpoint} response must be a JSON object")
     atomic_write(output, raw + (b"" if raw.endswith(b"\n") else b"\n"))
@@ -163,13 +171,28 @@ def wait_and_fetch(
     if interval < 0.2:
         raise ValueError("interval must be at least 0.2 seconds")
     deadline = time.monotonic() + wait_seconds
+    candidate = output.with_name(output.name + ".download")
     while True:
         try:
             value = fetch(
-                base_url, token, kind, output,
+                base_url, token, kind, candidate,
                 timeout=timeout, log_dir=log_dir)
-            if expected_day is None or value.get("day") == expected_day:
+            if expected_day is None:
+                candidate.replace(output)
                 return value
+            actual_day = value.get("day")
+            if type(actual_day) is not int:
+                candidate.unlink(missing_ok=True)
+                raise ValueError("state has no integer day")
+            if actual_day > expected_day:
+                candidate.unlink(missing_ok=True)
+                raise ValueError(
+                    f"server day={actual_day} has passed expected day={expected_day}"
+                )
+            if actual_day == expected_day:
+                candidate.replace(output)
+                return value
+            candidate.unlink(missing_ok=True)
         except ApiError as error:
             if error.status not in (0, 403):
                 raise
@@ -186,7 +209,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--url", default=os.environ.get("PROCON_URL"))
     result.add_argument("--token", default=os.environ.get("PROCON_TOKEN"))
     result.add_argument("--wait", type=float, default=0.0)
-    result.add_argument("--interval", type=float, default=0.5)
+    result.add_argument("--interval", type=float, default=1.0)
     result.add_argument("--timeout", type=float, default=10.0)
     result.add_argument("--expected-day", type=int)
     result.add_argument("--log-dir", type=Path)

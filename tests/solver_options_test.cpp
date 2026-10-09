@@ -25,6 +25,9 @@ int main() {
     assert(smallRescue.beam.smallBoardBeamBudgetPercent == 80);
     assert(smallRescue.beam.smallBoardBrandSearchNodeLimit == 150000);
     assert(!parse({"main"}).beam.quantityUpgrades);
+    assert(parse({"main"}).beam.adaptiveLongSearch);
+    assert(!parse({"main", "--adaptive-long-search", "0"})
+        .beam.adaptiveLongSearch);
     assert(parse({"main", "--quantity-upgrades", "1"}).beam.quantityUpgrades);
     assert(parse({"main", "--day-beam", "1"}).beam.quantityUpgrades);
     const auto quantity = parse({"main", "--day-beam", "0", "--day-beam-width", "6",
@@ -32,9 +35,13 @@ int main() {
         "--day-beam-max-udon-loss", "0"});
     assert(!quantity.beam.useDayBeam && quantity.beam.dayBeamWidth == 6);
     assert(quantity.beam.dayBeamDepth == 3 && quantity.beam.quantityBudgetPercent == 30);
+    assert(!quantity.beam.adaptiveLongSearch);
+    assert(!parse({"main", "--quantity-budget-percent", "30",
+        "--adaptive-long-search", "1"}).beam.adaptiveLongSearch);
     assert(quantity.beam.dayBeamMaxUdonLoss == 0);
     for (const auto& args : std::vector<std::vector<std::string>>{
         {"main", "--coordinated-refinement", "2"},
+        {"main", "--adaptive-long-search", "2"},
         {"main", "--small-board-brand-rescue", "2"},
         {"main", "--small-board-beam-budget-percent", "49"},
         {"main", "--small-board-beam-budget-percent", "96"},
@@ -126,6 +133,7 @@ int main() {
         {"main", "--exact-brands", "2"}, {"main", "--brand-repair", "2"},
         {"main", "--udon-alns", "2"}, {"main", "--spot-route-lns", "2"},
         {"main", "--route-columns", "2"},
+        {"main", "--adaptive-long-search", "2"},
         {"main", "--next-day-probe", "2"},
         {"main", "--auto-beam-width", "2"}}) {
         bool rejected = false;

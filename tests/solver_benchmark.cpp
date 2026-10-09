@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
     bool compareRouteColumns = false;
     bool compareStrandedRescue = false;
     bool compareTightFutureFuel = false;
+    bool compareAdaptiveLongSearch = false;
     bool noDayBeam = false;
     bool quantityUpgrades = false;
     bool noCoordinatedRefinement = false;
@@ -45,6 +46,10 @@ int main(int argc, char** argv) {
             if (option == "--compare-udon-alns") { compareUdonAlns = true; continue; }
             if (option == "--compare-spot-route-lns") { compareSpotRouteLns = true; continue; }
             if (option == "--compare-route-columns") { compareRouteColumns = true; continue; }
+            if (option == "--compare-adaptive-long-search") {
+                compareAdaptiveLongSearch = true;
+                continue;
+            }
             if (option == "--compare-stranded-rescue") {
                 compareStrandedRescue = true;
                 continue;
@@ -88,7 +93,8 @@ int main(int argc, char** argv) {
                 static_cast<int>(compareSpotRouteLns) +
                 static_cast<int>(compareRouteColumns) +
                 static_cast<int>(compareStrandedRescue) +
-                static_cast<int>(compareTightFutureFuel) > 1)
+                static_cast<int>(compareTightFutureFuel) +
+                static_cast<int>(compareAdaptiveLongSearch) > 1)
             throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
@@ -116,14 +122,21 @@ int main(int argc, char** argv) {
                     "paired comparison requires both variants");
             variant = "tight-future-fuel-10";
         }
+        if (compareAdaptiveLongSearch) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "adaptive-long-search";
+        }
         const std::string baselineName = compareBrandRepair ? "no-brand-repair" :
             (compareUdonAlns ? "no-udon-alns" :
              (compareSpotRouteLns ? "no-spot-route-lns" :
               (compareRouteColumns ? "no-route-columns" :
                (compareStrandedRescue ? "no-stranded-rescue" :
                 (compareTightFutureFuel ? "tight-future-fuel-20" :
-                "baseline")))));
-        const std::vector<std::string> allowed = {"improved", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
+                 (compareAdaptiveLongSearch ? "fixed-long-search" :
+                  "baseline"))))));
+        const std::vector<std::string> allowed = {"improved", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -174,6 +187,7 @@ int main(int argc, char** argv) {
                         auto& beam = config.beam;
                         beam.quantityUpgrades = quantityUpgrades;
                         beam.coordinatedRefinement = !noCoordinatedRefinement;
+                        beam.adaptiveLongSearch = name != "fixed-long-search";
                         beam.useDayBeam = !noDayBeam;
                         beam.stopBeamAtBrandUpperBound = !keepBeamIterations;
                         if (quantityBudgetPercent > 0) beam.quantityBudgetPercent = quantityBudgetPercent;

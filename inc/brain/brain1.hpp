@@ -59,6 +59,9 @@ struct BeamSearchConfig {
     std::size_t smallBoardBrandSearchNodeLimit = 200000;
     bool useUdonAlns = true;
     UdonAlnsConfig udonAlns{};
+    // 本選3区分と実効探索時間からビーム／改善時間、ALNS上限を調整する。
+    // falseなら従来の固定配分とUdonAlnsConfigをそのまま使う。
+    bool adaptiveLongSearch = true;
     bool useSpotRouteLns = true;
     SpotRouteLnsConfig spotRouteLns{};
     RouteColumnConfig routeColumns{};
@@ -194,6 +197,79 @@ inline bool isFuelRiskDay(const MatchSetting& setting,
         patrols * static_cast<std::int64_t>(setting.fuelLimit);
 }
 
+struct AdaptiveLongSearchProfile {
+    std::size_t quantityBudgetPercent = 25;
+    // 改善枠のうちALNSへ残す割合。残りはスポット・経路探索が使う。
+    std::size_t alnsPercentOfRefinement = 25;
+    UdonAlnsConfig udonAlns{};
+};
+
+inline AdaptiveLongSearchProfile adaptiveLongSearchProfile(
+    const MatchSetting& setting, const BeamSearchConfig& config,
+    std::int64_t effectiveBudgetMs, bool finalDay, bool severeFuel) {
+    AdaptiveLongSearchProfile profile;
+    profile.quantityBudgetPercent = std::clamp<std::size_t>(
+        config.quantityBudgetPercent, 1, 90);
+    profile.udonAlns = config.udonAlns;
+    if (!config.adaptiveLongSearch || effectiveBudgetMs <= 0 ||
+        effectiveBudgetMs == std::numeric_limits<std::int64_t>::max() ||
+        config.quantityUpgrades) {
+        return profile;
+    }
+
+    // 先行端末では早い合法解を優先し、追走端末ほど改善枠を厚くする。
+    // 厳燃料日は補給計画を浅くしないよう主ビームを優先する。
+    if (severeFuel) {
+        profile.quantityBudgetPercent = 15;
+        profile.alnsPercentOfRefinement = 20;
+    } else if (effectiveBudgetMs < 15000) {
+        profile.quantityBudgetPercent = 18;
+        profile.alnsPercentOfRefinement = 20;
+    } else if (effectiveBudgetMs < 30000) {
+        profile.quantityBudgetPercent = 25;
+        profile.alnsPercentOfRefinement = 30;
+    } else if (effectiveBudgetMs < 45000) {
+        profile.quantityBudgetPercent = finalDay ? 30 : 27;
+        profile.alnsPercentOfRefinement = finalDay ? 40 : 30;
+    } else {
+        profile.quantityBudgetPercent = finalDay ? 35 : 30;
+        profile.alnsPercentOfRefinement = finalDay ? 45 : 35;
+    }
+
+    if (effectiveBudgetMs < 15000) return profile;
+    const auto size = std::max(setting.field.width, setting.field.height);
+    const std::size_t tier = size >= 32 ? 2 : (size >= 24 ? 1 : 0);
+    const std::array<std::size_t, 3> mediumAttempts{{16, 18, 20}};
+    const std::array<std::size_t, 3> longAttempts{{18, 21, 24}};
+    const std::array<std::size_t, 3> fullAttempts{{20, 24, 28}};
+    const std::array<std::size_t, 3> mediumNodes{{1200, 1100, 1000}};
+    const std::array<std::size_t, 3> longNodes{{1500, 1350, 1200}};
+    const std::array<std::size_t, 3> fullNodes{{1800, 1600, 1400}};
+    if (effectiveBudgetMs < 30000) {
+        profile.udonAlns.maxAttempts = std::max(
+            profile.udonAlns.maxAttempts, mediumAttempts[tier]);
+        profile.udonAlns.nodesPerAttempt = std::max(
+            profile.udonAlns.nodesPerAttempt, mediumNodes[tier]);
+        profile.udonAlns.improvementBonusAttempts = std::max<std::size_t>(
+            profile.udonAlns.improvementBonusAttempts, 5);
+    } else if (effectiveBudgetMs < 45000) {
+        profile.udonAlns.maxAttempts = std::max(
+            profile.udonAlns.maxAttempts, longAttempts[tier]);
+        profile.udonAlns.nodesPerAttempt = std::max(
+            profile.udonAlns.nodesPerAttempt, longNodes[tier]);
+        profile.udonAlns.improvementBonusAttempts = std::max<std::size_t>(
+            profile.udonAlns.improvementBonusAttempts, 6);
+    } else {
+        profile.udonAlns.maxAttempts = std::max(
+            profile.udonAlns.maxAttempts, fullAttempts[tier]);
+        profile.udonAlns.nodesPerAttempt = std::max(
+            profile.udonAlns.nodesPerAttempt, fullNodes[tier]);
+        profile.udonAlns.improvementBonusAttempts = std::max<std::size_t>(
+            profile.udonAlns.improvementBonusAttempts, 8);
+    }
+    return profile;
+}
+
 } // namespace detail
 
 enum class SearchStopReason : std::uint8_t {
@@ -214,6 +290,10 @@ struct BeamSearchResult {
     std::size_t udonAlnsAttempts = 0;
     std::size_t udonAlnsExpanded = 0;
     std::size_t udonAlnsImprovements = 0;
+    std::size_t quantityBudgetPercentUsed = 0;
+    std::size_t beamBudgetPercentUsed = 0;
+    std::size_t udonAlnsAttemptLimit = 0;
+    std::size_t udonAlnsNodesPerAttempt = 0;
     std::size_t spotRouteLnsAttempts = 0;
     std::size_t spotRouteLnsImprovements = 0;
     std::size_t spotPortfolioMaxBrands = 0;
@@ -3507,13 +3587,36 @@ inline BeamSearchResult brain1(
     const auto deadline = limited ? hardDeadline - std::chrono::milliseconds(dayBeamMs + overnightMs)
                                   : hardDeadline;
     const auto searchBudget = limited ? budget - dayBeamMs - overnightMs : budget;
+    const bool finalDay = matchState.day >= 0 &&
+        static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
     const bool smallBoardTier = config.adaptiveSmallBoardBrandRescue &&
         setting.field.width == 16 && setting.field.height == 16;
-    const bool severeFuel = !setting.daySteps.empty() &&
-        static_cast<std::int64_t>(setting.fuelLimit) * 2 <=
-            setting.daySteps.front();
+    const bool severeFuel = detail::isFuelRiskDay(setting, matchState);
+    const auto longSearch = detail::adaptiveLongSearchProfile(
+        setting, config, searchBudget, finalDay, severeFuel);
     const auto quantityPercent = static_cast<std::int64_t>(
-        std::clamp<std::size_t>(config.quantityBudgetPercent, 1, 90));
+        longSearch.quantityBudgetPercent);
+    std::int64_t beamBudgetPercent = 80;
+    if (config.quantityUpgrades) {
+        beamBudgetPercent = std::max<std::int64_t>(1, 90 - quantityPercent);
+    } else if (config.autoSizedBeam) {
+        if (smallBoardTier) {
+            beamBudgetPercent = severeFuel
+                ? std::max<std::int64_t>(85,
+                      std::clamp<std::size_t>(
+                          config.smallBoardBeamBudgetPercent, 50, 95))
+                : config.adaptiveLongSearch
+                      ? std::max<std::int64_t>(70, 100 - quantityPercent)
+                      : std::clamp<std::size_t>(
+                            config.smallBoardBeamBudgetPercent, 50, 95);
+        } else {
+            beamBudgetPercent = config.coordinatedRefinement
+                ? severeFuel
+                      ? std::max<std::int64_t>(85, 100 - quantityPercent)
+                      : std::max<std::int64_t>(1, 100 - quantityPercent)
+                : 95;
+        }
+    }
     const auto brandDeadline = limited && !config.exactBrands && config.quantityUpgrades
         ? started + std::chrono::milliseconds(searchBudget - searchBudget * quantityPercent / 100)
         : deadline;
@@ -3524,20 +3627,8 @@ inline BeamSearchResult brain1(
         // receive only 5--20% of the requested budget.
         beamConfig.timeLimitMs = config.exactBrands
             ? std::max<std::int64_t>(1, searchBudget / 5)
-            : !config.quantityUpgrades ? std::max<std::int64_t>(1,
-                  searchBudget * (smallBoardTier && config.autoSizedBeam
-                      ? static_cast<std::int64_t>(severeFuel
-                            ? std::max<std::size_t>(85,
-                                  std::clamp<std::size_t>(
-                                      config.smallBoardBeamBudgetPercent, 50, 95))
-                            : std::clamp<std::size_t>(
-                                  config.smallBoardBeamBudgetPercent, 50, 95))
-                      : config.autoSizedBeam
-                          ? (config.coordinatedRefinement
-                                ? (severeFuel ? 85 : 75) : 95)
-                          : 80) / 100)
             : std::max<std::int64_t>(1,
-                  searchBudget * std::max<std::int64_t>(1, 90 - quantityPercent) / 100);
+                  searchBudget * beamBudgetPercent / 100);
         beamConfig.safetyMarginMs = 0;
         beamConfig.useStateDeadline = false;
         if ((config.quantityUpgrades || config.coordinatedRefinement) && config.autoSizedBeam) {
@@ -3554,10 +3645,13 @@ inline BeamSearchResult brain1(
     auto result = brain1Beam(setting, matchState, previousScore, beamConfig);
     if (!result.success) return result;
     result.smallBoardBrandRescue = smallBoardTier;
+    result.quantityBudgetPercentUsed = longSearch.quantityBudgetPercent;
+    result.beamBudgetPercentUsed = config.exactBrands
+        ? 20 : static_cast<std::size_t>(beamBudgetPercent);
+    result.udonAlnsAttemptLimit = longSearch.udonAlns.maxAttempts;
+    result.udonAlnsNodesPerAttempt = longSearch.udonAlns.nodesPerAttempt;
     std::vector<DayPlanCandidate> futureCandidates;
     bool changed = false;
-    const bool finalDay = matchState.day >= 0 &&
-        static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
     const auto remember = [&] {
         if (!finalDay && (config.compareNextDayPlans || runDayBeam)) {
             if (std::none_of(futureCandidates.begin(), futureCandidates.end(),
@@ -3644,7 +3738,9 @@ inline BeamSearchResult brain1(
         if (runUdonAlns && limited) {
             const auto now = Clock::now();
             routeDeadline = now +
-                std::max(Clock::duration::zero(), deadline - now) * 3 / 4;
+                std::max(Clock::duration::zero(), deadline - now) *
+                static_cast<std::int64_t>(
+                    100 - longSearch.alnsPercentOfRefinement) / 100;
         }
         // Columns get their own share even if team LNS exhausts its budget.
         const auto legacyRouteDeadline = (config.quantityUpgrades || config.coordinatedRefinement) && limited && routeColumnsActive
@@ -3761,11 +3857,14 @@ inline BeamSearchResult brain1(
         }
     }
     if (runUdonAlns) {
-        const auto normalDeadline = config.quantityUpgrades && limited && finalDay && config.udonAlns.expandedPortfolio
+        const bool reserveExpanded = limited && finalDay &&
+            longSearch.udonAlns.expandedPortfolio &&
+            (config.quantityUpgrades || searchBudget >= 30000);
+        const auto normalDeadline = reserveExpanded
             ? Clock::now() + std::max(Clock::duration::zero(),
-                deadline - Clock::now()) / 2 : deadline;
+                deadline - Clock::now()) * 2 / 3 : deadline;
         auto improved = improveDayUdon(setting, matchState, previousScore,
-            result.plan, config.udonAlns, normalDeadline);
+            result.plan, longSearch.udonAlns, normalDeadline);
         const bool reachedBrandBound =
             countBits(improved.finalState.score.matchBrands) >=
                 result.matchBrandUpperBound &&
@@ -3775,11 +3874,11 @@ inline BeamSearchResult brain1(
         // time left by the bounded normal ALNS for an independent, wider
         // neighborhood. Both passes start from the same incumbent and the
         // official lexicographic score chooses the returned plan.
-        const bool expandedQuantityPortfolio = config.udonAlns.expandedPortfolio &&
+        const bool expandedQuantityPortfolio = longSearch.udonAlns.expandedPortfolio &&
             (finalDay || (setting.field.width >= 24 && reachedBrandBound));
         if (expandedQuantityPortfolio &&
             Clock::now() < deadline) {
-            auto expandedConfig = config.udonAlns;
+            auto expandedConfig = longSearch.udonAlns;
             expandedConfig.maxAttempts = std::max<std::size_t>(
                 expandedConfig.maxAttempts, 16);
             expandedConfig.nodesPerAttempt = std::max<std::size_t>(

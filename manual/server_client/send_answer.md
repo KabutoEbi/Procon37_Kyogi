@@ -21,4 +21,4 @@ python3 server_client/send_answer.py action runtime/answer.json
 
 日次回答では、HTTP 200だけでなくレスポンスの整数`revision`が0以上であることを確認する。負の`revision`は回答拒否として失敗終了する。
 
-`--log-dir DIR`を指定するとサーバーの応答を保存する。送信前には対象ファイルと接続先を必ず確認する。
+`--log-dir DIR`を指定すると、時刻付きファイル名でPOST本文、成功レスポンス、本文のあるHTTPエラーレスポンスを保存する。送信前には対象ファイルと接続先を必ず確認する。

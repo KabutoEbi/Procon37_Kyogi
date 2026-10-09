@@ -50,6 +50,10 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 # 燃料切れ巡回車への直接救援だけを交互比較
 /tmp/solver_benchmark --compare-stranded-rescue --agents 7 --supplies 2 \
   --size 32 --days 10 --mixed-traffic --time-ms 5000
+# 実効時間別のビーム／ALNS自動配分を固定配分と交互比較
+/tmp/solver_benchmark --compare-adaptive-long-search \
+  --size 32 --agents 7 --supplies 2 --spots 32 --brands 24 \
+  --single-day --mixed-traffic --time-ms 45000
 ```
 
 出力は次のCSV形式である。
@@ -86,6 +90,8 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 
 `--fixed-work`は時間制限と幅の自動調整を無効にし、ビーム幅32・同時行動幅128で最後まで探索する。高速化前後の実行ファイルを同じ引数で実行し、`plan_hash`・得点・展開数が一致した行の`ms`を比較する。時間制限付きの比較は探索量が変わるため、これと分けて評価する。
+
+`--compare-adaptive-long-search`は、盤面・実効時間別のALNS上限と後段配分を使う`adaptive-long-search`、従来の固定上限・固定配分を使う`fixed-long-search`を交互に実行する。時間打切りの揺れを減らすため複数seed・複数反復で判断し、短時間、35秒級、55秒級を分けて記録する。
 
 各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`no-supply-cleanup`は探索後の補給車周回除去を、`wandering-supply`は合流未割当時の自由移動を有効にする。`unbounded-supply-wait`は補給車の待機上限を0にして旧方式へ戻す。`legacy-supply-schedules`は経路候補組合せの固定待機案を1件、時刻付き合流を最大2回へ戻す比較用設定である。`terminal-wait-fill`は実験的な末尾待機活用を有効化し、`no-transit-pickup-ranking`は32×32の経路ラベルにおける通過取得順位を無効化する。`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
 
