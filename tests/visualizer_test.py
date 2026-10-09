@@ -267,8 +267,8 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(SearchParameters().time_limit_ms, 60000)
         self.assertEqual(SearchParameters().safety_margin_ms, 5000)
         self.assertEqual(SearchParameters().send_reserve_ms, 5000)
-        self.assertEqual(SearchParameters().trial_candidates, 0)
-        self.assertEqual(SearchParameters().selection_time_ms, 10000)
+        self.assertEqual(SearchParameters().trial_candidates, 6)
+        self.assertEqual(SearchParameters().selection_time_ms, 0)
         self.assertIn("--auto-beam-width", SearchParameters(auto_beam_width=1).arguments())
         with self.assertRaisesRegex(WorkflowError, "auto_beam_width"):
             SearchParameters(auto_beam_width=2).arguments()
@@ -278,6 +278,23 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(day_time_limit_ms(setting, 2), 2147483647)
         with self.assertRaisesRegex(WorkflowError, "当日の試合時間"):
             day_time_limit_ms(setting, 3)
+
+    def test_gui_build_uses_release_optimization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            solver = work / "main"
+            workflow = Workflow(
+                ConnectionConfig("", ""), solver, work,
+            )
+            completed = mock.Mock(returncode=0, stdout="", stderr="")
+            with mock.patch("backend.subprocess.run", return_value=completed) as run:
+                result = workflow.build_solver()
+            command = result.command
+            self.assertIn("-O3", command)
+            self.assertIn("-DNDEBUG", command)
+            self.assertIn("-Werror", command)
+            self.assertNotIn("-O2", command)
+            run.assert_called_once()
 
     def test_agent_selection_always_reserves_submission_time(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -580,6 +597,17 @@ result
                 self.assertEqual([c for c in calls if c.startswith("send")], ["send0", "send1"])
                 self.assertEqual(calls.count("state"), 3)
                 self.assertEqual(sum(kind == "solved" for kind, _ in events), 2)
+                result_states = [
+                    Path(value) for kind, value in events
+                    if kind == "result_state"
+                ]
+                self.assertEqual(
+                    [path.resolve() for path in result_states],
+                    [(work / "result-state.json").resolve()] * 2,
+                )
+                for index, (kind, _value) in enumerate(events):
+                    if kind == "result_state":
+                        self.assertEqual(events[index - 1][0], "answer")
                 send_agents.assert_called_once()
 
             runner.phase = "send_answer"

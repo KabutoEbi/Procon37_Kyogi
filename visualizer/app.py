@@ -1564,6 +1564,8 @@ class SolverGUI(tk.Tk):
         elif key == "answer":
             self._show_answer_route(Path(data))
             self._show_json(Path(data))
+        elif key == "result_state":
+            self._state_loaded(Path(data))
         elif key == "accepted":
             revision, checkpoint, next_day = data
             self.score_var.set(str(checkpoint))

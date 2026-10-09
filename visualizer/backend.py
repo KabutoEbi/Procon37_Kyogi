@@ -60,11 +60,12 @@ class SearchParameters:
     max_actions: int = 4
     macro_actions: int = 1
     adaptive_beam: int = 1
-    # 全自動では種別受付を逃さないことを優先する。
-    trial_candidates: int = 0
+    # 種別選択は順位の回答時間に含まれないため、基本候補を試走する。
+    trial_candidates: int = 6
     trial_beam_width: int = 32
     trial_joint_beam_width: int = 128
-    selection_time_ms: int = 10000
+    # 0なら盤面別の受付終了時刻まで使う。
+    selection_time_ms: int = 0
     send_reserve_ms: int = 5000
     clock_margin_ms: int = 1000
 
@@ -863,6 +864,12 @@ class Workflow:
                 raise WorkflowError("1日の試合時間が不正です")
             # 終了処理にも必ず時間を残し、探索だけで1日分を使い切らない。
             margin = max(margin, 1000)
+        now = time.time()
+        remaining = None
+        if ends_at:
+            remaining = ends_at - now - reserve / 1000
+            if remaining <= 0:
+                raise WorkflowError("送信時間を確保できないため探索を開始しません")
         extra = margin - self.parameters.safety_margin_ms
         parameters = replace(
             self.parameters, safety_margin_ms=margin,
@@ -871,6 +878,21 @@ class Workflow:
             selection_time_ms=min(2147483647, self.parameters.selection_time_ms + extra)
                 if self.parameters.selection_time_ms else 0,
         )
+        if reserve_for_submission and ends_at:
+            # 種別選択の相対上限を0（無制限）にしても、設定取得時に
+            # 記録した公式受付時間を越えない。C++側はここからmarginを
+            # 差し引くため、残りを最大限探索しつつPOST時間を確保する。
+            selection_limit_ms = min(
+                2147483647,
+                max(1, math.floor((ends_at - now) * 1000)),
+            )
+            parameters = replace(
+                parameters,
+                selection_time_ms=min(
+                    parameters.selection_time_ms or selection_limit_ms,
+                    selection_limit_ms,
+                ),
+            )
         if day_seconds:
             day_limit_ms = min(2147483647, math.floor(day_seconds * 1000))
             if day_limit_ms <= margin:
@@ -884,9 +906,7 @@ class Workflow:
             )
         cutoff = None
         if ends_at:
-            remaining = ends_at - time.time() - reserve / 1000
-            if remaining <= 0:
-                raise WorkflowError("送信時間を確保できないため探索を開始しません")
+            assert remaining is not None
             cutoff = time.monotonic() + remaining + 1  # 検証・ファイル保存用の1秒
         command = [str(self.solver), *arguments, *parameters.arguments()]
         try:
@@ -942,8 +962,14 @@ class Workflow:
         command = [
             os.environ.get("CXX", "c++"),
             "-std=c++17",
-            "-O2",
+            "-O3",
+            "-DNDEBUG",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
             "-pthread",
+            "-Iinc",
             str(PROJECT_ROOT / "main.cpp"),
             "-o",
             str(output),
@@ -1593,6 +1619,9 @@ class AutomaticMatch:
                 self.emit("solved", result)
                 self.phase = "send_answer"
                 self.emit("answer", w.work_dir / "answer.json")
+                # 回答経路は当日開始位置から描いた後、状態表だけでなく
+                # マップ上の車両・スポット在庫も探索後状態へ更新する。
+                self.emit("result_state", w.work_dir / "result-state.json")
             elif phase == "send_answer":
                 w.check_stop()
                 self.retryable = False

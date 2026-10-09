@@ -22,7 +22,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | メソッド | 処理 |
 |---|---|
 | `check_connection()` | `GET /setting`で到達・認証・形式を確認 |
-| `build_solver()` | C++17、`-O2`、`-pthread`で`main.cpp`をビルド |
+| `build_solver()` | C++17、`-O3 -DNDEBUG`、厳格警告、`-pthread`で`main.cpp`を本番ビルド |
 | `generate_random_setting()` | C++の`generate`モードで公式設定形式を一時生成し、検査後に保存 |
 | `fetch_setting()` / `fetch_state()` | 公式JSONを安全に保存し、dayを検査 |
 | `wait_for_setting()` | 未公開中の403・一時的な接続失敗を1秒間隔で再試行し、停止要求へ応答 |
@@ -32,7 +32,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | `publish_checkpoint()` / `import_checkpoint()` | 受理済み得点を共有し、次日に最大revisionを取り込む |
 | `solve_local()` | 通信せずサンプル設定を探索し、`result-state.json`の生成を確認 |
 
-設定取得時刻と設定ハッシュを`setting-received.json`へ保存し、盤面幅に対応する公式の種別選択時間（60／90／120秒）から受付終了を求める。同じ設定を再取得しても時刻を延長しない。`startsAt`がそれより早い場合だけ上限として使う。種別選択後は設定・種別・接続先・受付終了時刻を`selected-agents.json`へ保存する。全自動の既定は種別試走を0件とし、全日程の軽量評価後すぐ送信段階へ進む。日次探索後は設定・状態・回答・得点候補・締切・接続先を`prepared-answer.json`へ保存する。送信前に一致を検証し、回答受理後だけ`score-dayN.json`を確定する。
+設定取得時刻と設定ハッシュを`setting-received.json`へ保存し、盤面幅に対応する公式の種別選択時間（60／90／120秒）から受付終了を求める。同じ設定を再取得しても時刻を延長しない。`startsAt`がそれより早い場合だけ上限として使う。種別選択後は設定・種別・接続先・受付終了時刻を`selected-agents.json`へ保存する。全自動の既定は6候補を試走し、通信timeout・時計ずれ・保存処理の余裕を除いて受付終了直前まで探索する。日次探索後は設定・状態・回答・得点候補・締切・接続先を`prepared-answer.json`へ保存する。送信前に一致を検証し、回答受理後だけ`score-dayN.json`を確定する。
 
 通常の接続timeoutは10秒。SSLハンドシェイクを含む接続timeoutでPOST結果が不明になった場合、全自動は自動再送せず停止する。エラーには`timeout(s)`を15へ増やし、作業フォルダを維持したまま再開する手順を表示する。再開処理は保存済みハッシュを検査し、同じ種別・回答だけを扱う。
 

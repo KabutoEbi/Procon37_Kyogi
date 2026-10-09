@@ -22,7 +22,7 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 | `make test-brand-repair` | 役割交換、補給、固定行動、巻き戻しの系列救済を検証 |
 | `make test-udon-alns` | 系列マスクを固定したALNSの玉数改善と非退行を検証 |
 | `make test-quantity-search` | 途中取得、時刻付き補給、日跨ぎ候補と中断時の元計画保持を検証 |
-| `make test-python` | Python 53テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
+| `make test-python` | Python 55テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |
 | `make test-sanitize` | モデル・探索・引数・公式Q&A・プロパティテストをASan/UBSanでビルド・実行 |

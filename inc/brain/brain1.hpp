@@ -3469,7 +3469,8 @@ inline BeamSearchResult brain1Beam(
         const bool timedOut = current.stopReason == SearchStopReason::TimeLimit;
         if (better(current, best)) best = std::move(current);
         if (timedOut) break;
-        if (config.quantityUpgrades && config.stopBeamAtBrandUpperBound && best.success &&
+        if ((config.quantityUpgrades || config.coordinatedRefinement) &&
+            config.stopBeamAtBrandUpperBound && best.success &&
             (config.useSpotRouteLns || config.useUdonAlns) &&
             Clock::now() - started >= std::chrono::milliseconds(effectiveMs / 2)) {
             BrandMask all = 0;

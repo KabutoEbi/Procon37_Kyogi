@@ -125,6 +125,15 @@ int main(int argc, char** argv) {
                               << agent.pos << '/' << agent.fuel;
                 }
                 std::cerr << '\n';
+                std::cerr << "  refine spot=" << day.spotRouteLnsAttempts
+                          << '/' << day.spotRouteLnsImprovements
+                          << " portfolio=" << day.spotPortfolioMaxBrands
+                          << '/' << day.spotPortfolioMaxUdon
+                          << '/' << day.spotPortfolioMaxValidUdon
+                          << " columns=" << day.routeColumnsGenerated
+                          << '/' << day.routeColumnsImprovements
+                          << " alns=" << day.udonAlnsAttempts
+                          << '/' << day.udonAlnsImprovements << '\n';
             }
         }
         std::cout << "result=" << countBits(match.score.matchBrands) << '/'

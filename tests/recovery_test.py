@@ -239,6 +239,30 @@ class RecoveryTest(unittest.TestCase):
                     w._run([], ends_at=time.time() + 1)
                 spawn.assert_not_called()
 
+    def test_agent_selection_uses_recorded_window_until_submission_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            w = Workflow(
+                ConnectionConfig("http://example", "secret", 10),
+                Path(sys.executable), Path(directory),
+                SearchParameters(
+                    selection_time_ms=0, safety_margin_ms=5000,
+                    send_reserve_ms=0,
+                ),
+            )
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ("", "")
+            with mock.patch("backend.time.time", return_value=40.0), \
+                 mock.patch("backend.subprocess.Popen", return_value=process):
+                result = w._run(
+                    [], ends_at=100.0, reserve_for_submission=True,
+                )
+            command = result.command
+            margin = int(command[command.index("--safety-margin-ms") + 1])
+            limit = int(command[command.index("--selection-time-ms") + 1])
+            self.assertEqual(margin, 12200)
+            self.assertEqual(limit, 60000)
+            self.assertEqual(limit - margin, 47800)
+
     def test_solver_time_is_capped_below_day_duration(self):
         with tempfile.TemporaryDirectory() as directory:
             w = Workflow(

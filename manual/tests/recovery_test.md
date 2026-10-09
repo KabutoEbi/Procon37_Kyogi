@@ -14,4 +14,4 @@ python3 -m unittest tests/recovery_test.py
 
 2026-09-30の`make test-python`では、本ファイルを含むPython31テストが成功した。
 
-2026-10-09の`make test-core`では、本ファイルの19件を含むPython 53件が成功した。
+2026-10-09の`make test-core`では、種別選択の受付枠を相対上限へ変換する検査を含む本ファイル20件、全体でPython 55件が成功した。

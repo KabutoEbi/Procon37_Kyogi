@@ -12,6 +12,7 @@ benzen::SolverOptions parse(std::vector<std::string> values) {
 }
 
 int main() {
+    assert(parse({"main"}).selection.trialCandidateLimit == 6);
     assert(parse({"main"}).beam.safetyMarginMs == 5000);
     assert(parse({"main"}).beam.coordinatedRefinement);
     assert(!parse({"main", "--coordinated-refinement", "0"}).beam.coordinatedRefinement);

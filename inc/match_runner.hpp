@@ -38,6 +38,8 @@ struct MatchDayResult {
     std::size_t brandRepairAttempts = 0, brandRepairExpanded = 0, brandRepairImprovements = 0;
     std::size_t udonAlnsAttempts = 0, udonAlnsExpanded = 0, udonAlnsImprovements = 0;
     std::size_t spotRouteLnsAttempts = 0, spotRouteLnsImprovements = 0;
+    std::size_t spotPortfolioMaxBrands = 0, spotPortfolioMaxUdon = 0;
+    std::size_t spotPortfolioMaxValidUdon = 0;
     std::size_t routeColumnsGenerated = 0, routeColumnsMasterNodes = 0;
     std::size_t routeColumnsImprovements = 0;
     std::size_t dayBeamExpanded = 0, dayBeamCandidates = 0;
@@ -212,6 +214,10 @@ public:
             record.udonAlnsImprovements = search.udonAlnsImprovements;
             record.spotRouteLnsAttempts = search.spotRouteLnsAttempts;
             record.spotRouteLnsImprovements = search.spotRouteLnsImprovements;
+            record.spotPortfolioMaxBrands = search.spotPortfolioMaxBrands;
+            record.spotPortfolioMaxUdon = search.spotPortfolioMaxUdon;
+            record.spotPortfolioMaxValidUdon =
+                search.spotPortfolioMaxValidUdon;
             record.routeColumnsGenerated = search.routeColumnsGenerated;
             record.routeColumnsMasterNodes = search.routeColumnsMasterNodes;
             record.routeColumnsImprovements = search.routeColumnsImprovements;

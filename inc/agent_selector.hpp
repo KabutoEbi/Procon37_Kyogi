@@ -26,11 +26,15 @@ struct AgentSelectorConfig {
     std::int32_t maxSupplyCount = -1;
 
     // 距離評価後にbrain1で試走する候補数。0なら距離評価だけを使う。
-    std::size_t trialCandidateLimit = 12;
+    // 公式受付時間では候補を増やすより1候補あたりの探索を深くする。
+    // 各補給台数の最良・広域配置を先に並べるため、6件でも台数比較を保つ。
+    std::size_t trialCandidateLimit = 6;
     std::size_t trialBeamWidth = 32;
     std::size_t trialJointBeamWidth = 128;
     EvaluationWeights trialWeights{};
-    std::size_t trialDays = 0; // 0なら全日。実際の各日のステップ数を使う。
+    // 0なら自動。通常は全日だが、期限付き・燃料余裕・5日以上では
+    // 先頭4日へ時間を集中する。正数なら常にその日数を使う。
+    std::size_t trialDays = 0;
     std::size_t trialScenarioCount = 3;
     std::vector<TrialTraffic> trialScenarios;
 
@@ -623,6 +627,21 @@ public:
         const std::size_t baseTrialCount =
             std::min(cfg.trialCandidateLimit, trials.size());
         const std::size_t plannedRuns = baseTrialCount * scenarios.size();
+        // A deadline split over every day of a long, fuel-rich match makes
+        // each daily search too shallow.  That systematically favors extra
+        // supply agents because their joint action space is smaller, even
+        // when another patrol has a much larger stock ceiling.  Four days
+        // still expose endpoint/refuel interactions while giving each trial
+        // enough depth to compare patrol capacity.  Fuel-tight matches keep
+        // the full horizon so late fuel exhaustion remains visible.
+        const bool fuelRich =
+            static_cast<std::int64_t>(s.fuelLimit) * 4 >=
+            static_cast<std::int64_t>(maxDaySteps) * 5;
+        const std::size_t trialDayLimit = cfg.trialDays != 0
+            ? cfg.trialDays
+            : limited && fuelRich && s.dayCount() > 4
+                  ? std::size_t{4}
+                  : std::size_t{0};
         for (std::size_t trialIndex = 0;
              trialIndex < trials.size(); ++trialIndex) {
             const std::size_t i = trials[trialIndex];
@@ -659,7 +678,7 @@ public:
                         deadline, now + std::chrono::milliseconds(sliceMs));
                 }
                 const auto trial = runTrial(
-                    s, c.kinds, traffic, beam, cfg.trialDays, trialDeadline,
+                    s, c.kinds, traffic, beam, trialDayLimit, trialDeadline,
                     &firstDay);
                 ++completedRuns;
                 ++res.trialSimulations;
