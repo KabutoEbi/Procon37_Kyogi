@@ -24,12 +24,12 @@
 ## 探索
 
 - [`brain/brain0.hpp`](brain/brain0.md): ダイクストラ法と燃料制約付き最短路
-- [`brain/brain1.hpp`](brain/brain1.md): ビームサーチ、後段の改善探索、最終日の経路方式比較
+- [`brain/brain1.hpp`](brain/brain1.md): ビームサーチ、実効時間別の後段改善配分、最終日の経路方式比較
 - [`brand_repair.hpp`](brand_repair.md): 未獲得系列を救済する連鎖再計画
 - [`brand_search.hpp`](brand_search.md): 全車の系列最大化と最適性証明
 - [`spot_route_lns.hpp`](spot_route_lns.md): スポット単位ビームと複数巡回車の訪問列再編
 - [`route_column_search.hpp`](route_column_search.md): 巡回車別の経路候補生成と在庫制約付き組合せ探索
-- [`udon_alns.hpp`](udon_alns.md): 系列を固定して玉数を増やす適応的大規模近傍探索
+- [`udon_alns.hpp`](udon_alns.md): 系列を固定し、盤面・時間別の上限で玉数を増やす適応的大規模近傍探索
 - [`overnight_refinement.hpp`](overnight_refinement.md): 当日得点を保った翌日向け終端再配置
 - [`day_beam.hpp`](day_beam.md): 当日候補の多様性保持と限定的な複数日先読み
 - [`agent_selector.hpp`](agent_selector.md): 中心補給台数・交通シナリオを使うエージェント種別の自動選択

@@ -318,6 +318,12 @@ inline void printConsoleReport(
         << "  udon-alns-attempts=" << result.udonAlnsAttempts << '\n'
         << "  udon-alns-expanded=" << result.udonAlnsExpanded << '\n'
         << "  udon-alns-improvements=" << result.udonAlnsImprovements << '\n'
+        << "  quantity-budget-percent-used="
+        << result.quantityBudgetPercentUsed << '\n'
+        << "  beam-budget-percent-used=" << result.beamBudgetPercentUsed << '\n'
+        << "  udon-alns-attempt-limit=" << result.udonAlnsAttemptLimit << '\n'
+        << "  udon-alns-nodes-per-attempt="
+        << result.udonAlnsNodesPerAttempt << '\n'
         << "  expanded=" << result.expandedNodes << '\n'
         << "  evaluations=" << result.fullEvaluations << '\n'
         << "  skipped-evaluations=" << result.reusedEvaluations << '\n'

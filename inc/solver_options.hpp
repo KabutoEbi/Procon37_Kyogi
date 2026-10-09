@@ -21,6 +21,7 @@ struct SolverOptions {
     bool autoBeamWidth = true;
     bool hasAutoBeamOption = false;
     bool hasManualBeamWidth = false;
+    bool hasQuantityBudgetOption = false;
 
     SolverOptions() {
         // CLIの標準60秒枠では約55秒を探索へ使う。
@@ -54,6 +55,7 @@ private:
              name == "--exact-brands" || name == "--brand-repair" ||
              name == "--udon-alns" || name == "--spot-route-lns" ||
              name == "--route-columns" ||
+             name == "--adaptive-long-search" ||
              name == "--next-day-probe" || name == "--day-beam" || name == "--quantity-upgrades" || name == "--coordinated-refinement" ||
              name == "--small-board-brand-rescue" ||
              name == "--auto-beam-width") &&
@@ -83,6 +85,7 @@ private:
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
+        else if (name == "--adaptive-long-search") beam.adaptiveLongSearch = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
         else if (name == "--quantity-upgrades") beam.quantityUpgrades = value != 0;
         else if (name == "--coordinated-refinement") beam.coordinatedRefinement = value != 0;
@@ -113,6 +116,8 @@ private:
         } else if (name == "--quantity-budget-percent") {
             if (value < 1 || value > 90) throw std::invalid_argument("quantity budget must be 1..90");
             beam.quantityBudgetPercent = value;
+            hasQuantityBudgetOption = true;
+            beam.adaptiveLongSearch = false;
         }
         else if (name == "--auto-beam-width") {
             autoBeamWidth = value != 0;
@@ -147,6 +152,8 @@ public:
         }
         if (!options.hasAutoBeamOption && options.hasManualBeamWidth)
             options.autoBeamWidth = false;
+        if (options.hasQuantityBudgetOption)
+            options.beam.adaptiveLongSearch = false;
         return options;
     }
 

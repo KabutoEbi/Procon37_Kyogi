@@ -187,6 +187,53 @@ void checkNearestSupplyUsesTrafficTravelTime() {
                blocked, blockedState, blockedGame, 0, cache, cached) ==
            blockedGame.agentCount);
 }
+
+void checkAdaptiveLongSearchProfile() {
+    MatchSetting setting;
+    setting.field.width = setting.field.height = 16;
+    BeamSearchConfig config;
+    const auto shortRun = detail::adaptiveLongSearchProfile(
+        setting, config, 10000, true, false);
+    assert(shortRun.quantityBudgetPercent == 18);
+    assert(shortRun.alnsPercentOfRefinement == 20);
+    assert(shortRun.udonAlns.maxAttempts == 12);
+    assert(shortRun.udonAlns.nodesPerAttempt == 800);
+
+    setting.field.width = setting.field.height = 24;
+    const auto middleFinal = detail::adaptiveLongSearchProfile(
+        setting, config, 35000, true, false);
+    assert(middleFinal.quantityBudgetPercent == 30);
+    assert(middleFinal.alnsPercentOfRefinement == 40);
+    assert(middleFinal.udonAlns.maxAttempts == 21);
+    assert(middleFinal.udonAlns.nodesPerAttempt == 1350);
+    assert(middleFinal.udonAlns.improvementBonusAttempts == 6);
+
+    setting.field.width = setting.field.height = 32;
+    const auto longFinal = detail::adaptiveLongSearchProfile(
+        setting, config, 55000, true, false);
+    assert(longFinal.quantityBudgetPercent == 35);
+    assert(longFinal.alnsPercentOfRefinement == 45);
+    assert(longFinal.udonAlns.maxAttempts == 28);
+    assert(longFinal.udonAlns.nodesPerAttempt == 1400);
+    assert(longFinal.udonAlns.improvementBonusAttempts == 8);
+    const auto longIntermediate = detail::adaptiveLongSearchProfile(
+        setting, config, 55000, false, false);
+    assert(longIntermediate.quantityBudgetPercent == 30);
+    assert(longIntermediate.alnsPercentOfRefinement == 35);
+
+    const auto fuelRisk = detail::adaptiveLongSearchProfile(
+        setting, config, 55000, true, true);
+    assert(fuelRisk.quantityBudgetPercent == 15);
+    assert(fuelRisk.alnsPercentOfRefinement == 20);
+
+    config.adaptiveLongSearch = false;
+    const auto disabled = detail::adaptiveLongSearchProfile(
+        setting, config, 55000, true, false);
+    assert(disabled.quantityBudgetPercent == 25);
+    assert(disabled.alnsPercentOfRefinement == 25);
+    assert(disabled.udonAlns.maxAttempts == 12);
+    assert(disabled.udonAlns.nodesPerAttempt == 800);
+}
 }  // namespace
 
 void checkReassignConsumedStock() {
@@ -215,4 +262,5 @@ int main() {
     checkIntermediateDayPreservesFutureState();
     checkRandomValidityAndPreservedBrandCounts();
     checkNearestSupplyUsesTrafficTravelTime();
+    checkAdaptiveLongSearchProfile();
 }
