@@ -10,7 +10,7 @@
 
 通常実行の`brain2()`は同じALNSを再構築器として使い、系列数をハード制約として固定した焼きなましを適用する。温度・destroy遷移・現在解と最良解の分離は[`brain2.hpp`](brain/brain2.md)を参照する。CLI の `--udon-sa 0` では`brain2()`もこのファイルの従来方式を使用する。
 
-`stockWeightedSpotSelection`は公開試合1866までの得点傾向から導いた高在庫スポット選択で既定有効。`arenaGuidedNeighborhoods`は近傍種別の確率変更で、公開盤面の切り分け結果から既定無効としている。
+`stockWeightedSpotSelection`は公開試合1905までの得点傾向から導いた高在庫スポット選択で既定有効。`differentialInsertionEvaluation`は挿入前後の辺だけを使う厳密な局所差分評価で既定有効。`detourAwareSpotSelection`は利益÷迂回量による狙い撃ち、`arenaGuidedNeighborhoods`は近傍種別の確率変更で、公開・生成問題の切り分け結果から両方とも既定無効としている。
 
 `brain2()`では`jointDestroyRepair=true`を既定とし、残り1.5秒以上の場合にこのファイルのALNSをSA前段として実行する。24×24以上では巡回車最大3台と最寄り補給車を共同解放し、改善後の補給時刻表をSAへ渡す。
 

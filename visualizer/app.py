@@ -318,6 +318,7 @@ class SolverGUI(tk.Tk):
         self._clock_day_ends_at = 0.0
         self._automatic_phase = "未実行"
         self._automatic_phase_started = 0.0
+        self._final_answer_accepted = False
         self._simple_server = SimpleServer(PROJECT_ROOT / "runtime/simple-server")
         self._simple_teams: tuple[tuple[str, str], ...] = ()
         self.mode_var = tk.StringVar(value="manual")
@@ -1354,6 +1355,7 @@ class SolverGUI(tk.Tk):
         self.day_var.set(1)
         self._selected_kinds = []
         self._day_count = 0
+        self._final_answer_accepted = False
         self._current_snapshot = None
         self._logged_schedule = None
         self._milestones.clear()
@@ -1532,10 +1534,20 @@ class SolverGUI(tk.Tk):
         text = self._spoken_checkpoint_text(value)
         self.spoken_result_var.set(text)
         next_day = value["nextDay"]
-        self.status_var.set(f"口頭共有 day={next_day + 1}: {text}")
-        self._log(
-            f"✓ 口頭共有3値（系列mask 玉数 日別系列累計）: {text}"
+        self._final_answer_accepted = bool(
+            self._day_count and next_day >= self._day_count
         )
+        if self._final_answer_accepted:
+            self.status_var.set("最終日回答受理: 3値の取込不要")
+            self._log(
+                "✓ 最終結果3値（次日への取込不要、系列mask 玉数 "
+                f"日別系列累計）: {text}"
+            )
+        else:
+            self.status_var.set(f"口頭共有 day={next_day + 1}: {text}")
+            self._log(
+                f"✓ 口頭共有3値（系列mask 玉数 日別系列累計）: {text}"
+            )
 
     def _show_spoken_candidate(self, checkpoint: Path) -> None:
         try:
@@ -1551,6 +1563,18 @@ class SolverGUI(tk.Tk):
             self._log(f"探索結果の伝達3値を表示できません: {error}")
 
     def _import_spoken_checkpoint(self) -> None:
+        try:
+            past_last_day = bool(
+                self._day_count and self.day_var.get() > self._day_count
+            )
+        except tk.TclError:
+            past_last_day = False
+        if self._final_answer_accepted or past_last_day:
+            message = "最終日の回答後は次の日がないため、3値の取込は不要です。"
+            self.status_var.set("全日程終了: 3値の取込不要")
+            self._log(f"✓ {message}")
+            messagebox.showinfo("口頭引継ぎ", message, parent=self)
+            return
         waiting = self._waiting_resubmission_candidate()
         workflow = waiting[0] if waiting is not None else self._workflow_or_dialog()
         if workflow is None:
@@ -1563,6 +1587,7 @@ class SolverGUI(tk.Tk):
                 output = workflow.import_spoken_checkpoint(
                     self.spoken_checkpoint_var.get(), next_day,
                 )
+            self.spoken_checkpoint_var.set("")
             self.score_var.set(str(output))
             for context, (state, _checkpoint, digest) in list(self._daily_inputs.items()):
                 if context[-1] == next_day:
@@ -1739,6 +1764,7 @@ class SolverGUI(tk.Tk):
         self.score_var.set("")
         self._selected_kinds = []
         self._day_count = 0
+        self._final_answer_accepted = False
         self.day_spinbox.configure(to=10)
         self.day_var.set(1)
         self._sync_day_time_limit()

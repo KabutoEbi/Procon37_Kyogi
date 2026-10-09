@@ -23,6 +23,9 @@ int main(int argc, char** argv) {
     bool compareTightFutureFuel = false;
     bool compareAdaptiveLongSearch = false;
     bool compareQuantityAwareSa = false;
+    bool compareDetourAwareSa = false;
+    bool compareDifferentialInsertion = false;
+    bool compareReachabilityRarity = false;
     bool noDayBeam = false;
     bool quantityUpgrades = false;
     bool noCoordinatedRefinement = false;
@@ -55,6 +58,18 @@ int main(int argc, char** argv) {
             }
             if (option == "--compare-quantity-aware-sa") {
                 compareQuantityAwareSa = true;
+                continue;
+            }
+            if (option == "--compare-detour-aware-sa") {
+                compareDetourAwareSa = true;
+                continue;
+            }
+            if (option == "--compare-differential-insertion") {
+                compareDifferentialInsertion = true;
+                continue;
+            }
+            if (option == "--compare-reachability-rarity") {
+                compareReachabilityRarity = true;
                 continue;
             }
             if (option == "--compare-stranded-rescue") {
@@ -103,7 +118,10 @@ int main(int argc, char** argv) {
                 static_cast<int>(compareStrandedRescue) +
                 static_cast<int>(compareTightFutureFuel) +
                 static_cast<int>(compareAdaptiveLongSearch) +
-                static_cast<int>(compareQuantityAwareSa) > 1)
+                static_cast<int>(compareQuantityAwareSa) +
+                static_cast<int>(compareDetourAwareSa) +
+                static_cast<int>(compareDifferentialInsertion) +
+                static_cast<int>(compareReachabilityRarity) > 1)
             throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
@@ -147,7 +165,28 @@ int main(int argc, char** argv) {
                     "paired comparison requires both variants");
             variant = "quantity-aware-sa";
         }
-        const std::string baselineName = compareQuantityAwareSa
+        if (compareDetourAwareSa) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "detour-aware-sa";
+        }
+        if (compareDifferentialInsertion) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "differential-insertion";
+        }
+        if (compareReachabilityRarity) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "reachability-rarity";
+        }
+        const std::string baselineName = compareReachabilityRarity
+            ? "no-reachability-rarity" : compareDifferentialInsertion
+            ? "full-route-insertion" : compareDetourAwareSa
+            ? "no-detour-aware-sa" : compareQuantityAwareSa
             ? "no-quantity-aware-sa" : compareBrandRepair ? "no-brand-repair" :
             (compareUdonAlns ? "no-udon-alns" :
              (compareUdonSa ? "no-udon-sa" :
@@ -157,7 +196,7 @@ int main(int argc, char** argv) {
                 (compareTightFutureFuel ? "tight-future-fuel-20" :
                  (compareAdaptiveLongSearch ? "fixed-long-search" :
                   "baseline")))))));
-        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
+        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "detour-aware-sa", "no-detour-aware-sa", "differential-insertion", "full-route-insertion", "reachability-rarity", "no-reachability-rarity", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -226,6 +265,12 @@ int main(int argc, char** argv) {
                             name == "arena-both-guidance";
                         beam.udonAlns.quantityAwareNeighborhoods =
                             name != "no-quantity-aware-sa";
+                        beam.udonAlns.detourAwareSpotSelection =
+                            name == "detour-aware-sa";
+                        beam.udonAlns.differentialInsertionEvaluation =
+                            name != "full-route-insertion";
+                        beam.spotRouteLns.spotPortfolioReachabilityRarity =
+                            name != "no-reachability-rarity";
                         beam.coordinatedAssignments = name != "baseline" && name != "no-coordination";
                         beam.detourRendezvous = name != "baseline" && name != "no-detour";
                         beam.exhaustFeasibleDetours = name != "limited-detour-scan";

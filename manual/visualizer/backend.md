@@ -92,7 +92,7 @@ finally:
 
 通常モードと担当1は全自動を最終日まで利用できる。担当1は問題公開待ちから種別選択・送信、全日の探索・回答送信までを実行する。担当2・3だけGUI側で全自動起動を無効化し、手動送信を個別操作として実行する。担当2・3の次日状態先行取得は全自動とは独立したバックグラウンド処理である。
 
-現在のGUIは口頭引継ぎを使用する。`parse_spoken_checkpoint()`は空白区切りの`系列mask 玉数 日別系列累計`を3個の10進整数として検査し、GUIで選んだ対象dayから得た`nextDay`を付ける。`Workflow.import_spoken_checkpoint()`はその4項目を`score-dayN.json`へ原子的に保存する。day 1相当の`nextDay=0`は、直前日のチェックポイントが存在しないため拒否する。
+現在のGUIは口頭引継ぎを使用する。`parse_spoken_checkpoint()`は空白区切りの`系列mask 玉数 日別系列累計`を3個の10進整数として検査し、GUIで選んだ対象dayから得た`nextDay`を付ける。`Workflow.import_spoken_checkpoint()`はその4項目を`score-dayN.json`へ原子的に保存する。day 1相当の`nextDay=0`は、直前日のチェックポイントが存在しないため拒否する。GUIは保存成功後だけ入力欄を空にし、検査エラー時は修正できるよう入力を残す。最終回答受理後または対象dayが総日数を越えた状態では、バックエンドを呼ばずに取込不要と案内して新しいチェックポイントを作らない。
 
 `Workflow.export_checkpoint_code()`と`import_checkpoint_code()`は旧方式との互換用に残るが、現在のGUIには表示しない。前者は設定hash・接続先とTOKENから作るチーム識別hash・`nextDay`・revision・得点チェックポイントを署名付き`P37C1:`コードにし、後者は検証後に取り込む。
 

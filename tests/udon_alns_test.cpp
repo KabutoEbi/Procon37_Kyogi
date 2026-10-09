@@ -349,6 +349,8 @@ void checkArenaGuidedNeighborhoodSampling() {
     assert(!defaults.arenaGuidedNeighborhoods);
     assert(defaults.stockWeightedSpotSelection);
     assert(defaults.quantityAwareNeighborhoods);
+    assert(defaults.differentialInsertionEvaluation);
+    assert(!defaults.detourAwareSpotSelection);
     const auto s = line(2, 4, {0},
         {{0, 0, 1, -1}, {0, 1, 5, -1}});
     brain2_detail::SpotRoutes routes;
@@ -394,10 +396,71 @@ void checkQuantityAwareSpotSelectionAndInsertion() {
         s, ms, s.agentStarts[0], route, {1}, kInvalidCell,
         cache, cached, randomState);
     assert(at == 0);
+    randomState = 13579;
+    assert(brain2_detail::bestInsertionPosition(
+        s, ms, s.agentStarts[0], route, {1}, kInvalidCell,
+        cache, cached, randomState, false) == at);
+
+    const auto insertionSetting = line(8, 12, {0},
+        {{0, 1, 1, -1}, {1, 3, 1, -1},
+         {2, 5, 1, -1}, {3, 7, 1, -1}});
+    const auto insertionState = stateFor(
+        insertionSetting, {AgentKind::Patrol});
+    const std::vector<std::size_t> insertionRoute{0, 2};
+    for (const auto& block : std::vector<std::vector<std::size_t>>{
+             {1}, {3}, {1, 3}}) {
+        for (const CellPos anchor : {
+                 kInvalidCell, insertionSetting.field.spots[3].pos}) {
+            std::vector<DijkstraTable> differentialCache(
+                insertionSetting.field.cellCount());
+            std::vector<bool> differentialCached(
+                insertionSetting.field.cellCount(), false);
+            std::vector<DijkstraTable> fullCache(
+                insertionSetting.field.cellCount());
+            std::vector<bool> fullCached(
+                insertionSetting.field.cellCount(), false);
+            std::uint64_t differentialRandom = 11223344;
+            std::uint64_t fullRandom = differentialRandom;
+            assert(brain2_detail::bestInsertionPosition(
+                       insertionSetting, insertionState,
+                       insertionSetting.agentStarts[0], insertionRoute,
+                       block, anchor, differentialCache, differentialCached,
+                       differentialRandom, true) ==
+                   brain2_detail::bestInsertionPosition(
+                       insertionSetting, insertionState,
+                       insertionSetting.agentStarts[0], insertionRoute,
+                       block, anchor, fullCache, fullCached, fullRandom,
+                       false));
+        }
+    }
+
     route.insert(route.begin() + static_cast<std::ptrdiff_t>(at), 1);
     assert(brain2_detail::routeTravelSteps(
                s, ms, s.agentStarts[0], route, kInvalidCell,
                cache, cached) == 8);
+
+    const auto detourSetting = line(7, 10, {0},
+        {{0, 1, 2, -1}, {1, 6, 2, -1}});
+    const auto detourState = stateFor(
+        detourSetting, {AgentKind::Patrol});
+    GameState detourStart;
+    assert(detourStart.initialize(detourSetting, detourState));
+    brain2_detail::SpotRoutes detourRoutes;
+    std::vector<DijkstraTable> detourCache(
+        detourSetting.field.cellCount());
+    std::vector<bool> detourCached(
+        detourSetting.field.cellCount(), false);
+    std::array<int, 2> detourDraws{};
+    randomState = 97531;
+    for (int sample = 0; sample < 10000; ++sample) {
+        const auto spot = brain2_detail::chooseDetourAwareSpot(
+            detourSetting, detourState, detourRoutes, 0,
+            detourSetting.agentStarts[0], kInvalidCell, detourStart,
+            detourCache, detourCached, randomState);
+        assert(spot < detourSetting.field.spots.size());
+        ++detourDraws[spot];
+    }
+    assert(detourDraws[0] > detourDraws[1]);
 }
 }  // namespace
 

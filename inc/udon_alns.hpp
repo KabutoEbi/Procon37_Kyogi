@@ -79,6 +79,13 @@ struct UdonAlnsConfig {
     // Use remaining stock, travel-aware insertion positions and short block
     // moves. The official lexicographic guard still decides every best plan.
     bool quantityAwareNeighborhoods = true;
+    // Evaluate an insertion from the two replaced route edges instead of
+    // rebuilding and rescoring the entire visit sequence at every position.
+    bool differentialInsertionEvaluation = true;
+    // AHC-style low-frequency targeted move: prefer remaining stock and
+    // uncovered brands only when they can be inserted with a small exact
+    // traffic-aware route detour. Broad stock-weighted moves remain dominant.
+    bool detourAwareSpotSelection = false;
     double initialTemperature = 2.0;
     double finalTemperature = 0.05;
     std::uint64_t randomSeed = 0x9e3779b97f4a7c15ULL;

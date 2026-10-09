@@ -38,6 +38,7 @@ if (result.success) {
 - `udonAlns`: ALNSの基準上限は12試行・各800展開・解放巡回車2台。有限時間では`adaptiveLongSearch`が本選盤面と実効予算に応じて試行数・展開上限を増やす。最終日と、系列上限へ達した24×24以上の残時間では巡回車3台までの拡張近傍も比較する。中間日の追加近傍は終端位置・燃料を固定する。詳細は[玉数ALNS](../udon_alns.md)
 - `adaptiveLongSearch`: 16／24／32盤面と実効探索時間に応じ、ビーム・後段探索の配分、ALNS試行数・展開上限を自動調整する。既定true。厳燃料日はビームを優先する
 - `useSpotRouteLns` / `spotRouteLns`: スポット単位ビーム、訪問列の局所改善、複数巡回車間の移送・交換。既定で全日有効。詳細は[スポット再探索](../spot_route_lns.md)
+- `spotRouteLns.spotPortfolioReachabilityRarity`: 当日の時間・燃料で系列店へ到達できる巡回車数が少ない系列を、経路ポートフォリオ後半2本のタイブレークで優先する比較機能。拡大比較で玉数が退行したため既定false
 - `routeColumns`: 巡回車別の完成経路候補を在庫制約付きで組み合わせる追加探索。既定で有効だが、日次予算5秒以上かつ`useSpotRouteLns=true`で、従来の改善後に時間が残る場合のみ実行。詳細は[経路候補組合せ探索](../route_column_search.md)
 - `compareNextDayPlans`: 翌日を2種類の交通条件で短時間試走する実験機能。実測退行があるため既定false
 - `quantityBudgetPercent`: 自動調整を無効にした場合、または実験的`quantityUpgrades`で使う玉数改善の基準割合。既定25。未使用時間は後段へ渡す

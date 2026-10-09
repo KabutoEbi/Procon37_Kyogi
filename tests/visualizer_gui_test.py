@@ -356,12 +356,15 @@ result
                     drain(expected_posts=2)
                 gui.day_var.set(2)
                 gui.spoken_checkpoint_var.set(spoken)
-                gui.spoken_import_button.invoke()
+                gui.spoken_checkpoint_entry.focus_force()
+                gui.update()
+                gui.spoken_checkpoint_entry.event_generate("<KeyPress-Return>")
                 gui.update()
                 self.assertEqual(
                     json.loads((Path(directory) / "score-day1.json").read_text())["nextDay"],
                     1,
                 )
+                self.assertEqual(gui.spoken_checkpoint_var.get(), "")
                 gui.day_var.set(1)
                 self.assertEqual(gui.day_var.get(), 1)
                 self.assertEqual(gui.solve_day_button.cget("text"), "2  探索")
@@ -427,6 +430,13 @@ result
                     gui._advance_finished_day()
                     self.assertEqual(gui.day_var.get(), 5)
                     self.assertEqual(str(gui.solve_day_button["state"]), "disabled")
+                with mock.patch("app.messagebox.showinfo") as info_dialog:
+                    gui.spoken_checkpoint_var.set("15 42 12")
+                    gui.spoken_import_button.invoke()
+                    gui.update()
+                    info_dialog.assert_called_once()
+                    self.assertIn("取込不要", gui.status_var.get())
+                    self.assertFalse((Path(directory) / "score-day4.json").exists())
                 gui.day_var.set(1)
                 gui.url_var.set("http://another-match")
                 self.assertFalse(gui._daily_inputs)

@@ -164,12 +164,85 @@ inline std::int32_t routeTravelSteps(
         total, kImpassableCost));
 }
 
-inline std::size_t bestInsertionPosition(
+struct InsertionChoice {
+    std::size_t position = 0;
+    std::int32_t extraSteps = kImpassableCost;
+};
+
+inline InsertionChoice bestInsertionChoice(
     const MatchSetting& setting, const MatchState& matchState,
     CellPos start, const std::vector<std::size_t>& route,
     const std::vector<std::size_t>& block, CellPos endAnchor,
     std::vector<DijkstraTable>& cache, std::vector<bool>& cached,
     std::uint64_t& randomState) {
+    InsertionChoice best;
+    if (block.empty()) {
+        best.extraSteps = 0;
+        return best;
+    }
+    const auto distance = [&](CellPos from, CellPos to) {
+        const auto index = static_cast<std::size_t>(from);
+        if (!cached[index]) {
+            cache[index] = Brain0::dijkstra(setting, matchState, from);
+            cached[index] = true;
+        }
+        return cache[index].distances[static_cast<std::size_t>(to)];
+    };
+    std::int64_t internal = 0;
+    for (std::size_t i = 1; i < block.size(); ++i) {
+        if (block[i - 1] >= setting.field.spots.size() ||
+            block[i] >= setting.field.spots.size()) return best;
+        const auto leg = distance(setting.field.spots[block[i - 1]].pos,
+                                  setting.field.spots[block[i]].pos);
+        if (leg >= kImpassableCost) return best;
+        internal += leg;
+    }
+    if (block.front() >= setting.field.spots.size() ||
+        block.back() >= setting.field.spots.size()) return best;
+
+    std::size_t ties = 0;
+    for (std::size_t at = 0; at <= route.size(); ++at) {
+        const CellPos before = at == 0
+            ? start : setting.field.spots[route[at - 1]].pos;
+        const CellPos after = at < route.size()
+            ? setting.field.spots[route[at]].pos : endAnchor;
+        const auto firstLeg = distance(
+            before, setting.field.spots[block.front()].pos);
+        if (firstLeg >= kImpassableCost) continue;
+        std::int64_t candidate = firstLeg + internal;
+        std::int64_t replaced = 0;
+        if (after != kInvalidCell) {
+            const auto lastLeg = distance(
+                setting.field.spots[block.back()].pos, after);
+            const auto oldLeg = distance(before, after);
+            if (lastLeg >= kImpassableCost || oldLeg >= kImpassableCost)
+                continue;
+            candidate += lastLeg;
+            replaced = oldLeg;
+        }
+        const auto extra = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+            candidate - replaced, 0, kImpassableCost));
+        if (extra < best.extraSteps) {
+            best = {at, extra};
+            ties = 1;
+        } else if (extra == best.extraSteps &&
+                   nextAnnealingRandom(randomState) % ++ties == 0) {
+            best.position = at;
+        }
+    }
+    return best;
+}
+
+inline std::size_t bestInsertionPosition(
+    const MatchSetting& setting, const MatchState& matchState,
+    CellPos start, const std::vector<std::size_t>& route,
+    const std::vector<std::size_t>& block, CellPos endAnchor,
+    std::vector<DijkstraTable>& cache, std::vector<bool>& cached,
+    std::uint64_t& randomState, bool differential = true) {
+    if (differential) {
+        return bestInsertionChoice(setting, matchState, start, route, block,
+            endAnchor, cache, cached, randomState).position;
+    }
     std::size_t best = 0;
     std::int32_t bestCost = kImpassableCost;
     std::size_t ties = 0;
@@ -189,6 +262,59 @@ inline std::size_t bestInsertionPosition(
         }
     }
     return best;
+}
+
+inline std::size_t chooseDetourAwareSpot(
+    const MatchSetting& setting, const MatchState& matchState,
+    const SpotRoutes& routes, AgentIndex patrol, CellPos start,
+    CellPos endAnchor, const GameState& dayStart,
+    std::vector<DijkstraTable>& cache, std::vector<bool>& cached,
+    std::uint64_t& randomState) {
+    if (patrol >= routes.size()) return setting.field.spots.size();
+    std::array<std::uint64_t, kMaxSpots> weights{};
+    std::uint64_t total = 0;
+    for (std::size_t spot = 0; spot < setting.field.spots.size(); ++spot) {
+        if (std::find(routes[patrol].begin(), routes[patrol].end(), spot) !=
+            routes[patrol].end()) continue;
+        unsigned assigned = 0;
+        bool brandAssigned = false;
+        const int brand = setting.field.spots[spot].brandIndex;
+        for (const auto& route : routes) {
+            for (const std::size_t visit : route) {
+                assigned += visit == spot;
+                if (visit < setting.field.spots.size() &&
+                    setting.field.spots[visit].brandIndex == brand) {
+                    brandAssigned = true;
+                }
+            }
+        }
+        const unsigned stock = static_cast<unsigned>(std::max(0,
+            spot < dayStart.remainingStocks.size()
+                ? dayStart.remainingStocks[spot]
+                : setting.field.spots[spot].maxStock));
+        const unsigned freeCopies = stock > assigned ? stock - assigned : 0;
+        if (freeCopies == 0) continue;
+        const auto insertion = bestInsertionChoice(
+            setting, matchState, start, routes[patrol], {spot}, endAnchor,
+            cache, cached, randomState);
+        if (insertion.extraSteps >= kImpassableCost) continue;
+        const std::uint64_t gain =
+            1 + 4 * freeCopies + (brandAssigned ? 0 : 10);
+        // Squaring keeps high-stock or missing-brand targets relevant, while
+        // the exact marginal travel time suppresses attractive but remote
+        // proposals that repeatedly fail to fit in the day.
+        weights[spot] = std::max<std::uint64_t>(
+            1, gain * gain * 16 /
+                static_cast<std::uint64_t>(4 + insertion.extraSteps));
+        total += weights[spot];
+    }
+    if (total == 0) return setting.field.spots.size();
+    std::uint64_t draw = nextAnnealingRandom(randomState) % total;
+    for (std::size_t spot = 0; spot < setting.field.spots.size(); ++spot) {
+        if (draw < weights[spot]) return spot;
+        draw -= weights[spot];
+    }
+    return setting.field.spots.size() - 1;
 }
 
 // The official score is kept lexicographically dominant.  These diagnostics
@@ -607,9 +733,20 @@ inline UdonAlnsResult improveDayUdonAnnealed(
             return finalDay || config.allowFuturePositionChange
                 ? kInvalidCell : initialState.agents[agent].pos;
         };
+        // Keep broad stock-weighted exploration as the default proposal and
+        // inject the more exploitative gain/detour target at low frequency.
+        // This mirrors the successful AHC pattern of many cheap moves plus an
+        // occasional targeted move, and avoids collapsing onto one route.
+        const bool targetedSpot = config.detourAwareSpotSelection &&
+            config.quantityAwareNeighborhoods &&
+            nextAnnealingRandom(randomState) % 4 == 0;
         const std::size_t randomSpot = config.stockWeightedSpotSelection
-            ? chooseStockWeightedSpot(setting, trialRoutes, randomState,
-                  &dayStart, config.quantityAwareNeighborhoods)
+            ? (targetedSpot
+                ? chooseDetourAwareSpot(setting, matchState, trialRoutes,
+                      first, dayStart.agents[first].pos, endAnchor(first),
+                      dayStart, pathCache, pathCached, randomState)
+                : chooseStockWeightedSpot(setting, trialRoutes, randomState,
+                      &dayStart, config.quantityAwareNeighborhoods))
             : nextAnnealingRandom(randomState) % setting.field.spots.size();
         bool changed = false;
         if (operation == 0) { // add an assigned spot
@@ -619,7 +756,8 @@ inline UdonAlnsResult improveDayUdonAnnealed(
                 const std::size_t at = config.quantityAwareNeighborhoods
                     ? bestInsertionPosition(setting, matchState,
                           dayStart.agents[first].pos, firstRoute, {randomSpot},
-                          endAnchor(first), pathCache, pathCached, randomState)
+                          endAnchor(first), pathCache, pathCached, randomState,
+                          config.differentialInsertionEvaluation)
                     : nextAnnealingRandom(randomState) % (firstRoute.size() + 1);
                 firstRoute.insert(firstRoute.begin() + at, randomSpot);
                 changed = true;
@@ -653,7 +791,8 @@ inline UdonAlnsResult improveDayUdonAnnealed(
             const std::size_t at = config.quantityAwareNeighborhoods
                 ? bestInsertionPosition(setting, matchState,
                       dayStart.agents[first].pos, firstRoute, block,
-                      endAnchor(first), pathCache, pathCached, randomState)
+                      endAnchor(first), pathCache, pathCached, randomState,
+                      config.differentialInsertionEvaluation)
                 : nextAnnealingRandom(randomState) % (firstRoute.size() + 1);
             firstRoute.insert(firstRoute.begin() + static_cast<std::ptrdiff_t>(at),
                               block.begin(), block.end());
@@ -681,7 +820,8 @@ inline UdonAlnsResult improveDayUdonAnnealed(
                 const std::size_t at = config.quantityAwareNeighborhoods
                     ? bestInsertionPosition(setting, matchState,
                           dayStart.agents[second].pos, secondRoute, block,
-                          endAnchor(second), pathCache, pathCached, randomState)
+                          endAnchor(second), pathCache, pathCached, randomState,
+                          config.differentialInsertionEvaluation)
                     : nextAnnealingRandom(randomState) % (secondRoute.size() + 1);
                 secondRoute.insert(
                     secondRoute.begin() + static_cast<std::ptrdiff_t>(at),
@@ -707,7 +847,8 @@ inline UdonAlnsResult improveDayUdonAnnealed(
             const std::size_t at = config.quantityAwareNeighborhoods
                 ? bestInsertionPosition(setting, matchState,
                       dayStart.agents[first].pos, firstRoute, {randomSpot},
-                      endAnchor(first), pathCache, pathCached, randomState)
+                      endAnchor(first), pathCache, pathCached, randomState,
+                      config.differentialInsertionEvaluation)
                 : std::min(replaced, firstRoute.size());
             firstRoute.insert(firstRoute.begin() +
                 static_cast<std::ptrdiff_t>(at), randomSpot);

@@ -3820,6 +3820,12 @@ inline BeamSearchResult brain1(
                 // transit/refuel model: their finite beams explore different routes.
                 portfolioConfig.reflectTransit = pass != 0 && config.spotRouteLns.reflectTransit;
                 portfolioConfig.spotPortfolioHardnessWeight = hardnessWeights[pass];
+                // Preserve the established route rankings in the first two
+                // passes. The later, wider passes diversify toward brands
+                // that only a few patrols can still reach today.
+                portfolioConfig.spotPortfolioReachabilityRarity =
+                    config.spotRouteLns.spotPortfolioReachabilityRarity &&
+                    pass >= 2;
                 const auto maxPortfolioWidth = setting.field.cellCount() >= 1024
                     ? std::size_t{512} : std::size_t{2048};
                 portfolioConfig.spotPortfolioBeamWidth = std::min<std::size_t>(
