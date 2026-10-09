@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import random
 import secrets
 import hashlib
+import hmac
 import math
 import os
 import platform
@@ -22,6 +25,7 @@ from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TIMEOUT_SECONDS = 10.0
+CHECKPOINT_CODE_PREFIX = "P37C1:"
 SERVER_CLIENT_DIR = PROJECT_ROOT / "server_client"
 if str(SERVER_CLIENT_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_CLIENT_DIR))
@@ -62,6 +66,9 @@ class SearchParameters:
     adaptive_beam: int = 1
     # 0は従来の改善専用ALNS、1はbrain2の焼きなましを使う。
     udon_sa: int = 1
+    # 3人運用の担当2・3だけが早期終了判定を有効にする。
+    stable_beam_stop: int = 0
+    sa_stagnation_stop: int = 0
     # 種別選択は順位の回答時間に含まれないため、基本候補を試走する。
     trial_candidates: int = 6
     trial_beam_width: int = 32
@@ -80,7 +87,8 @@ class SearchParameters:
                         "trial_beam_width", "trial_joint_beam_width") and value == 0:
                 raise WorkflowError(f"{name}: 1以上を指定してください")
             if name in ("macro_actions", "adaptive_beam", "auto_beam_width",
-                        "udon_sa") and value not in (0, 1):
+                        "udon_sa", "stable_beam_stop",
+                        "sa_stagnation_stop") and value not in (0, 1):
                 raise WorkflowError(f"{name}: 0または1を指定してください")
         return _option_arguments(values, ("send_reserve_ms", "clock_margin_ms"))
 
@@ -748,6 +756,108 @@ class Workflow:
             raise WorkflowError(f"共有フォルダを開けません: {self.shared_dir}")
         return self.shared_dir
 
+    def _checkpoint_package(
+        self, checkpoint: Path, setting: Path, revision: int
+    ) -> dict[str, Any]:
+        value = read_json(checkpoint)
+        next_day = value.get("nextDay") if isinstance(value, dict) else None
+        if type(next_day) is not int or next_day <= 0:
+            raise WorkflowError("共有するチェックポイントのnextDayが不正です")
+        if type(revision) is not int or revision < 0:
+            raise WorkflowError("共有するrevisionが不正です")
+        package = {
+            "version": 1,
+            "setting": file_hash(setting),
+            "identity": self.identity(),
+            "nextDay": next_day,
+            "revision": revision,
+            "publishedAt": time.time(),
+            "checkpoint": value,
+        }
+        package["signature"] = self._checkpoint_signature(package)
+        return package
+
+    def _checkpoint_signature(self, package: dict[str, Any]) -> str:
+        signed = {key: value for key, value in package.items() if key != "signature"}
+        payload = json.dumps(signed, separators=(",", ":"), sort_keys=True).encode()
+        return hmac.new(
+            self.connection.token.encode(), payload, hashlib.sha256
+        ).hexdigest()
+
+    def _validate_checkpoint_package(
+        self, package: Any, setting: Path
+    ) -> tuple[int, int, dict[str, Any]]:
+        if not isinstance(package, dict):
+            raise WorkflowError("共有コードの形式が不正です")
+        revision = package.get("revision")
+        next_day = package.get("nextDay")
+        checkpoint = package.get("checkpoint")
+        signature = package.get("signature")
+        if (package.get("version") != 1
+                or package.get("setting") != file_hash(setting)
+                or package.get("identity") != self.identity()
+                or type(next_day) is not int or next_day <= 0
+                or type(revision) is not int or revision < 0
+                or not isinstance(checkpoint, dict)
+                or checkpoint.get("nextDay") != next_day
+                or not isinstance(signature, str)
+                or not hmac.compare_digest(
+                    signature, self._checkpoint_signature(package)
+                )):
+            raise WorkflowError("共有コードが別の試合・チーム、または不正な内容です")
+        return revision, next_day, checkpoint
+
+    def export_checkpoint_code(
+        self, checkpoint: Path, setting: Path, revision: int
+    ) -> str:
+        """受理済み得点をチャットで渡せる1行コードにする。"""
+        package = self._checkpoint_package(checkpoint, setting, revision)
+        raw = json.dumps(package, separators=(",", ":"), sort_keys=True).encode()
+        encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        return CHECKPOINT_CODE_PREFIX + encoded
+
+    def import_checkpoint_code(
+        self, code: str, setting: Path
+    ) -> tuple[int, int, Path]:
+        """共有コードを検証し、次日用チェックポイントへ保存する。"""
+        text = code.strip()
+        if not text.startswith(CHECKPOINT_CODE_PREFIX):
+            raise WorkflowError("共有コードはP37C1:から始まる必要があります")
+        encoded = "".join(text[len(CHECKPOINT_CODE_PREFIX):].split())
+        try:
+            padding = "=" * ((4 - len(encoded) % 4) % 4)
+            package = json.loads(base64.urlsafe_b64decode(encoded + padding))
+        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WorkflowError("共有コードを読み取れません") from error
+        revision, next_day, checkpoint = self._validate_checkpoint_package(
+            package, setting
+        )
+        record = self.work_dir / f"checkpoint-code-day{next_day}.json"
+        if record.is_file():
+            previous = read_json(record)
+            old_revision, _, old_checkpoint = self._validate_checkpoint_package(
+                previous, setting
+            )
+            if revision < old_revision:
+                raise WorkflowError(
+                    f"古いrevision={revision}は取り込みません（現在={old_revision}）"
+                )
+            if revision == old_revision and checkpoint != old_checkpoint:
+                raise WorkflowError("同じrevisionの共有コード内容が一致しません")
+        journal = self.work_dir / f"submission-day{next_day - 1}.json"
+        if journal.is_file():
+            submitted = read_json(journal)
+            local_revision = submitted.get("revision")
+            if (submitted.get("status") == "accepted"
+                    and type(local_revision) is int and local_revision > revision):
+                raise WorkflowError(
+                    f"ローカルのrevision={local_revision}より古いコードは取り込みません"
+                )
+        output = self.work_dir / f"score-day{next_day}.json"
+        atomic_write(output, json.dumps(checkpoint).encode())
+        atomic_write(record, json.dumps(package).encode())
+        return revision, next_day, output
+
     def publish_checkpoint(
         self, checkpoint: Path, setting: Path, revision: int
     ) -> Path | None:
@@ -755,23 +865,10 @@ class Workflow:
         if self.shared_dir is None:
             return None
         directory = self._require_shared_dir()
-        value = read_json(checkpoint)
-        next_day = value.get("nextDay") if isinstance(value, dict) else None
-        if type(next_day) is not int or next_day <= 0:
-            raise WorkflowError("共有するチェックポイントのnextDayが不正です")
-        if type(revision) is not int or revision < 0:
-            raise WorkflowError("共有するrevisionが不正です")
-        setting_digest = file_hash(setting)
-        identity_digest = self.identity()
-        package = {
-            "version": 1,
-            "setting": setting_digest,
-            "identity": identity_digest,
-            "nextDay": next_day,
-            "revision": revision,
-            "publishedAt": time.time(),
-            "checkpoint": value,
-        }
+        package = self._checkpoint_package(checkpoint, setting, revision)
+        setting_digest = package["setting"]
+        identity_digest = package["identity"]
+        next_day = package["nextDay"]
         output = directory / (
             f"checkpoint-{setting_digest[:12]}-{identity_digest[:12]}-day{next_day}-"
             f"revision{revision}.json"

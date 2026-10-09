@@ -65,9 +65,12 @@ class BackendTest(unittest.TestCase):
 
     def test_three_person_presets_and_spoken_score(self) -> None:
         self.assertEqual(
-            {role: (profile.time_limit_ms, profile.udon_sa)
+            {role: (profile.time_limit_ms, profile.udon_sa,
+                    profile.stable_beam_stop, profile.sa_stagnation_stop)
              for role, profile in TEAM_ROLE_PROFILES.items()},
-            {"lead": (20000, 0), "middle": (55000, 0), "long": (60000, 1)},
+            {"lead": (20000, 0, 0, 0),
+             "middle": (55000, 0, 1, 0),
+             "long": (60000, 1, 0, 1)},
         )
         summary = SolverResultSummary(
             day=2, stop="completed", elapsed_ms=1, expanded=2,
@@ -272,10 +275,18 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(SearchParameters().selection_time_ms, 0)
         self.assertIn("--auto-beam-width", SearchParameters(auto_beam_width=1).arguments())
         self.assertIn("--udon-sa", SearchParameters(udon_sa=0).arguments())
+        self.assertIn("--stable-beam-stop", SearchParameters(
+            stable_beam_stop=1).arguments())
+        self.assertIn("--sa-stagnation-stop", SearchParameters(
+            sa_stagnation_stop=1).arguments())
         with self.assertRaisesRegex(WorkflowError, "auto_beam_width"):
             SearchParameters(auto_beam_width=2).arguments()
         with self.assertRaisesRegex(WorkflowError, "udon_sa"):
             SearchParameters(udon_sa=2).arguments()
+        with self.assertRaisesRegex(WorkflowError, "stable_beam_stop"):
+            SearchParameters(stable_beam_stop=2).arguments()
+        with self.assertRaisesRegex(WorkflowError, "sa_stagnation_stop"):
+            SearchParameters(sa_stagnation_stop=2).arguments()
         setting = {"daySeconds": [60, 12.5, 3_000_000]}
         self.assertEqual(day_time_limit_ms(setting, 0), 60000)
         self.assertEqual(day_time_limit_ms(setting, 1), 12500)

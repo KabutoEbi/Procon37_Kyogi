@@ -51,6 +51,8 @@ private:
             name == "--next-day-probe" || name == "--day-beam" ||
             name == "--quantity-upgrades" ||
             name == "--coordinated-refinement" ||
+            name == "--stable-beam-stop" ||
+            name == "--sa-stagnation-stop" ||
             name == "--small-board-brand-rescue" ||
             name == "--auto-beam-width";
     }
@@ -97,6 +99,9 @@ private:
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
         else if (name == "--quantity-upgrades") beam.quantityUpgrades = value != 0;
         else if (name == "--coordinated-refinement") beam.coordinatedRefinement = value != 0;
+        else if (name == "--stable-beam-stop") beam.stopOnStableBeam = value != 0;
+        else if (name == "--sa-stagnation-stop")
+            beam.udonAlns.stopOnStagnation = value != 0;
         else if (name == "--supply-wait-steps") beam.maxSupplyWaitSteps = value;
         else if (name == "--small-board-brand-rescue") {
             beam.adaptiveSmallBoardBrandRescue = value != 0;

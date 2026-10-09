@@ -290,6 +290,8 @@ inline void printConsoleReport(
         << "  success=" << std::boolalpha << result.success << '\n'
         << "  stop=" << searchStopReasonName(result.stopReason) << '\n'
         << "  elapsed-ms=" << result.elapsedMs << '\n'
+        << "  stable-beam-stopped=" << result.stableBeamStopped << '\n'
+        << "  selected-beam-width=" << result.selectedBeamWidth << '\n'
         << "  brand-optimal=" << result.brandOptimal << '\n'
         << "  match-brand-upper-bound=" << result.matchBrandUpperBound << '\n'
         << "  daily-brand-upper-bound=" << result.dailyBrandUpperBound << '\n'
@@ -319,6 +321,8 @@ inline void printConsoleReport(
         << result.udonAlnsAcceptedWorseMoves << '\n'
         << "  udon-alns-greedy-attempts="
         << result.udonAlnsGreedyAttempts << '\n'
+        << "  udon-sa-stagnation-stopped="
+        << result.udonSaStagnationStopped << '\n'
         << "  udon-joint-destroy="
         << result.udonJointDestroyAttempts << '/'
         << result.udonJointDestroyExpanded << '/'

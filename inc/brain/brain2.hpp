@@ -33,6 +33,19 @@ inline double annealingAcceptanceProbability(double energyDelta, double temperat
     return std::exp(energyDelta / temperature);
 }
 
+inline bool annealingHasStagnated(
+    const UdonAlnsConfig& config, std::size_t annealingAttempts,
+    std::size_t attemptsSinceBest,
+    const std::array<std::size_t, 7>& neighborhoodAttempts) {
+    return config.stopOnStagnation && config.stagnationAttempts > 0 &&
+        annealingAttempts >= config.minimumAnnealingAttempts &&
+        attemptsSinceBest >= config.stagnationAttempts &&
+        std::all_of(neighborhoodAttempts.begin(), neighborhoodAttempts.end(),
+            [&](std::size_t attempts) {
+                return attempts >= config.minimumAttemptsPerNeighborhood;
+            });
+}
+
 inline std::uint64_t nextAnnealingRandom(std::uint64_t& state) {
     state += 0x9e3779b97f4a7c15ULL;
     std::uint64_t value = state;
@@ -475,6 +488,8 @@ inline UdonAlnsResult improveDayUdonAnnealed(
               (config.maxAttempts + config.improvementBonusAttempts) * 256)
         : std::max<std::size_t>(256,
               (config.maxAttempts + config.improvementBonusAttempts) * 16);
+    std::size_t annealingAttempts = 0;
+    std::size_t attemptsAtBest = 0;
     for (std::size_t iteration = 0;
          iteration < annealingLimit && Clock::now() < deadline; ++iteration) {
         auto trialRoutes = greedyRoutes;
@@ -556,18 +571,35 @@ inline UdonAlnsResult improveDayUdonAnnealed(
         if (!changed || hasDuplicateVisits(firstRoute) ||
             hasDuplicateVisits(secondRoute)) continue;
         ++result.neighborhoodAttempts[static_cast<std::size_t>(operation)];
+        ++annealingAttempts;
 
         DailyPlan trialPlan;
         SimulationResult trialReplay;
         if (!rebuildRoutes(trialRoutes, trialPlan, trialReplay) ||
-            !preservesFuture(trialReplay.state)) continue;
+            !preservesFuture(trialReplay.state)) {
+            if (annealingHasStagnated(config, annealingAttempts,
+                    annealingAttempts - attemptsAtBest,
+                    result.neighborhoodAttempts)) {
+                result.stagnationStopped = true;
+                break;
+            }
+            continue;
+        }
         const GameState& trialState = trialReplay.state;
         ++result.attempts;
         ++result.expanded;
         if (countBits(trialState.score.matchBrands) <
                 countBits(result.finalState.score.matchBrands) ||
             countBits(trialState.dayBrands) <
-                countBits(result.finalState.dayBrands)) continue;
+                countBits(result.finalState.dayBrands)) {
+            if (annealingHasStagnated(config, annealingAttempts,
+                    annealingAttempts - attemptsAtBest,
+                    result.neighborhoodAttempts)) {
+                result.stagnationStopped = true;
+                break;
+            }
+            continue;
+        }
 
         const auto kickedScore = officialScore(trialState);
         const auto currentScore = officialScore(currentState);
@@ -606,6 +638,13 @@ inline UdonAlnsResult improveDayUdonAnnealed(
             result.finalState = trialState;
             bestEvaluation = currentEvaluation;
             ++result.improvements;
+            attemptsAtBest = annealingAttempts;
+        }
+        if (annealingHasStagnated(config, annealingAttempts,
+                annealingAttempts - attemptsAtBest,
+                result.neighborhoodAttempts)) {
+            result.stagnationStopped = true;
+            break;
         }
     }
     if (Clock::now() >= deadline) result.interrupted = true;

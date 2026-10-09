@@ -106,6 +106,10 @@ struct BeamSearchConfig {
     std::size_t minimumJointBeamWidth = 64;
     // 固定幅を早く完走した場合、締切まで幅と候補数を広げて再探索する。
     bool iterativeDeepening = true;
+    // 追走ビームでは、完成した幅を広げても探索結果が連続して変わらなければ
+    // 時刻上限を待たず、その安定幅の結果を採用する。
+    bool stopOnStableBeam = false;
+    std::size_t stableBeamPasses = 2;
 
     // 有効な途中解を再シミュレーションして保存する間隔。
     std::size_t incumbentInterval = 4;
@@ -306,6 +310,9 @@ struct BeamSearchResult {
     std::size_t udonJointDestroyImprovements = 0;
     std::array<std::size_t, 7> udonAlnsNeighborhoodAttempts{};
     std::array<std::size_t, 7> udonAlnsNeighborhoodAccepted{};
+    bool stableBeamStopped = false;
+    bool udonSaStagnationStopped = false;
+    std::size_t selectedBeamWidth = 0;
     std::size_t quantityBudgetPercentUsed = 0;
     std::size_t beamBudgetPercentUsed = 0;
     std::size_t udonAlnsAttemptLimit = 0;
@@ -3406,7 +3413,9 @@ inline BeamSearchResult brain1Beam(
     const auto started = Clock::now();
 
     if (!config.iterativeDeepening) {
-        return brain1Pass(setting, matchState, previousScore, config);
+        auto result = brain1Pass(setting, matchState, previousScore, config);
+        result.selectedBeamWidth = config.beamWidth;
+        return result;
     }
 
     std::int64_t effectiveMs = std::numeric_limits<std::int64_t>::max();
@@ -3424,15 +3433,23 @@ inline BeamSearchResult brain1Beam(
             std::max<std::int64_t>(0, left - config.safetyMarginMs));
     }
     if (effectiveMs == std::numeric_limits<std::int64_t>::max()) {
-        return brain1Pass(setting, matchState, previousScore, config);
+        auto result = brain1Pass(setting, matchState, previousScore, config);
+        result.selectedBeamWidth = config.beamWidth;
+        return result;
     }
     if (effectiveMs <= 0) {
-        return brain1Pass(setting, matchState, previousScore, config);
+        auto result = brain1Pass(setting, matchState, previousScore, config);
+        result.selectedBeamWidth = config.beamWidth;
+        return result;
     }
 
     const auto deadline = started + std::chrono::milliseconds(effectiveMs);
     BeamSearchResult best;
     BeamSearchResult totalWork;
+    using StabilitySignature = std::tuple<int, int, int, int, int, int, int, int>;
+    StabilitySignature previousCompletedSignature{};
+    bool haveCompletedSignature = false;
+    std::size_t unchangedCompletedPasses = 0;
 
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
@@ -3479,12 +3496,30 @@ inline BeamSearchResult brain1Beam(
         pass.timeLimitMs = remaining;
         BeamSearchResult current = brain1Pass(
             setting, matchState, previousScore, pass);
+        current.selectedBeamWidth = pass.beamWidth;
 
         totalWork.addSearchWork(current);
 
         const bool timedOut = current.stopReason == SearchStopReason::TimeLimit;
+        const bool completed = current.success && !timedOut;
+        if (config.stopOnStableBeam && completed) {
+            const auto signature = resultScore(current);
+            if (haveCompletedSignature && signature == previousCompletedSignature) {
+                ++unchangedCompletedPasses;
+            } else {
+                unchangedCompletedPasses = 0;
+            }
+            previousCompletedSignature = signature;
+            haveCompletedSignature = true;
+        }
         if (better(current, best)) best = std::move(current);
         if (timedOut) break;
+        if (config.stopOnStableBeam && config.stableBeamPasses > 0 &&
+            unchangedCompletedPasses >= config.stableBeamPasses) {
+            best.stableBeamStopped = true;
+            best.selectedBeamWidth = pass.beamWidth;
+            break;
+        }
         if ((config.quantityUpgrades || config.coordinatedRefinement) &&
             config.stopBeamAtBrandUpperBound && best.success &&
             (config.useSpotRouteLns || config.useUdonAlns) &&
@@ -3546,6 +3581,7 @@ inline BeamSearchResult brain1Beam(
         fallback.safetyMarginMs = 1;
         fallback.useStateDeadline = false;
         best = brain1Pass(setting, matchState, previousScore, fallback);
+        best.selectedBeamWidth = fallback.beamWidth;
         totalWork.addSearchWork(best);
     }
     best.copySearchWork(totalWork);
@@ -3667,6 +3703,14 @@ inline BeamSearchResult brain1(
         ? 20 : static_cast<std::size_t>(beamBudgetPercent);
     result.udonAlnsAttemptLimit = longSearch.udonAlns.maxAttempts;
     result.udonAlnsNodesPerAttempt = longSearch.udonAlns.nodesPerAttempt;
+    // 担当2は、安定した幅を見つけた時点のビーム解をそのまま採用する。
+    // 後段改善へ残り時間を渡すと結局ハード上限まで探索してしまうため、
+    // このモードだけは収束を日次探索全体の終了条件とする。
+    if (result.stableBeamStopped) {
+        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - started).count();
+        return result;
+    }
     std::vector<DayPlanCandidate> futureCandidates;
     bool changed = false;
     const auto remember = [&] {
@@ -3903,7 +3947,7 @@ inline BeamSearchResult brain1(
         // official lexicographic score chooses the returned plan.
         const bool expandedQuantityPortfolio = longSearch.udonAlns.expandedPortfolio &&
             (finalDay || (setting.field.width >= 24 && reachedBrandBound));
-        if (expandedQuantityPortfolio &&
+        if (expandedQuantityPortfolio && !improved.stagnationStopped &&
             Clock::now() < deadline) {
             auto expandedConfig = longSearch.udonAlns;
             expandedConfig.maxAttempts = std::max<std::size_t>(
@@ -3938,6 +3982,8 @@ inline BeamSearchResult brain1(
                     expanded.neighborhoodAccepted[i];
             }
             improved.interrupted = improved.interrupted || expanded.interrupted;
+            improved.stagnationStopped =
+                improved.stagnationStopped || expanded.stagnationStopped;
             const auto score = [](const GameState& state) {
                 return std::make_tuple(
                     countBits(state.score.matchBrands),
@@ -3961,6 +4007,7 @@ inline BeamSearchResult brain1(
             improved.jointDestroyImprovements;
         result.udonAlnsNeighborhoodAttempts = improved.neighborhoodAttempts;
         result.udonAlnsNeighborhoodAccepted = improved.neighborhoodAccepted;
+        result.udonSaStagnationStopped = improved.stagnationStopped;
         if (improved.improvements) {
             result.plan = improved.plan;
             result.finalState = improved.finalState;

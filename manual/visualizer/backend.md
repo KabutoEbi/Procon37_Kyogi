@@ -91,7 +91,9 @@ finally:
 
 通常モードと担当1は全自動を最終日まで利用できる。担当1は問題公開待ちから種別選択・送信、全日の探索・回答送信までを実行する。担当2・3だけGUI側で全自動起動を無効化し、手動送信を個別操作として実行する。担当2・3の次日状態先行取得は全自動とは独立したバックグラウンド処理である。
 
-`Workflow.shared_dir`を指定した場合、回答受理後に`checkpoint-<設定hash>-<接続先・TOKEN hash>-dayN-revisionR.json`を共有フォルダへ一時ファイル経由で配置する。共有ファイルはrevision別に残し、他端末の書き込みで上書きしない。次日の状態取得後はチーム識別hash・設定ハッシュ・`nextDay`を検証し、最大revisionのチェックポイントだけをローカルの`score-dayN.json`へ取り込む。TOKENそのものは共有しない。共有失敗は回答受理記録を維持したままエラーとし、再開時に同じ受理済み回答から再共有できる。
+`Workflow.export_checkpoint_code()`は、設定hash・接続先とTOKENから作るチーム識別hash・`nextDay`・revision・得点チェックポイントをJSON化し、TOKENを鍵にHMAC-SHA256署名してURL-safe Base64の`P37C1:`コードとして返す。`import_checkpoint_code()`は署名・各hash・内容を検証し、ローカルの受理済みrevisionより古いコード、以前に取り込んだrevisionより古いコード、同一revisionで内容が異なるコードを拒否して、`score-dayN.json`と取込メタデータを原子的に保存する。TOKENそのものと回答の行動列はコードへ含めない。
+
+`Workflow.shared_dir`を指定した場合、回答受理後に`checkpoint-<設定hash>-<接続先・TOKEN hash>-dayN-revisionR.json`を共有フォルダへ一時ファイル経由で配置する。共有ファイルはrevision別に残し、他端末の書き込みで上書きしない。次日の状態取得後はチーム識別hash・設定ハッシュ・`nextDay`を検証し、最大revisionのチェックポイントだけをローカルの`score-dayN.json`へ取り込む。TOKENそのものは共有しない。共有フォルダは任意であり、未設定時は共有コードを使う。共有失敗は回答受理記録を維持したままエラーとし、再開時に同じ受理済み回答から再共有できる。
 
 POST前に`submission-agents.json`／`submission-dayN.json`と不変の候補`submitted-*.json`を保存する。受理記録を先に保存し、その後にチェックポイントを確定するため、途中終了しても受理済み候補から復元できる。結果不明の別回答への置換を拒否し、明示再開時だけ当日状態を再取得して同一回答を再送する。締切後や日程進行後は未確定のまま停止する。APIには最後の有効回答を照会する機能がないため、その場合の自動確定は行わない。
 

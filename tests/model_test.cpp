@@ -275,6 +275,17 @@ void testBeamSearch() {
     assert(iterative.expandedNodes > onePass.expandedNodes);
     assert(validateDailyPlan(s, st, iterative.plan).valid);
 
+    auto stableCfg = iterativeCfg;
+    stableCfg.timeLimitMs = 1000;
+    stableCfg.stopOnStableBeam = true;
+    stableCfg.stableBeamPasses = 2;
+    const auto stable = brain1(s, st, {}, stableCfg);
+    assert(stable.success);
+    assert(stable.stableBeamStopped);
+    assert(stable.selectedBeamWidth > stableCfg.beamWidth);
+    assert(stable.elapsedMs < stableCfg.timeLimitMs);
+    assert(validateDailyPlan(s, st, stable.plan).valid);
+
     cfg.timeLimitMs = 1;
     cfg.safetyMarginMs = 1;
     const auto timed = brain1(s, st, {}, cfg);

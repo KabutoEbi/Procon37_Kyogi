@@ -62,6 +62,12 @@ struct UdonAlnsConfig {
     bool expandedPortfolio = true;
     // brain2がこのALNSを再構築器として使う際の焼きなまし設定。
     bool simulatedAnnealing = true;
+    // SA担当では、全近傍を十分に試した後に最良解の更新が止まれば、
+    // ハードな時刻上限を待たずに終了する。
+    bool stopOnStagnation = false;
+    std::size_t stagnationAttempts = 512;
+    std::size_t minimumAnnealingAttempts = 1024;
+    std::size_t minimumAttemptsPerNeighborhood = 8;
     // Before patrol-route SA, jointly rebuild several patrol suffixes and the
     // nearest supply route. This is the large-neighborhood phase of brain2.
     bool jointDestroyRepair = true;
@@ -89,6 +95,7 @@ struct UdonAlnsResult {
     std::size_t jointDestroyImprovements = 0;
     std::array<std::size_t, 7> neighborhoodAttempts{};
     std::array<std::size_t, 7> neighborhoodAccepted{};
+    bool stagnationStopped = false;
     bool interrupted = false;
 };
 

@@ -129,6 +129,9 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " quantity-budget-percent=" << config.quantityBudgetPercent
               << " adaptive-long-search=" << (config.adaptiveLongSearch ? 1 : 0)
               << " udon-sa=" << (config.udonAlns.simulatedAnnealing ? 1 : 0)
+              << " stable-beam-stop=" << (config.stopOnStableBeam ? 1 : 0)
+              << " sa-stagnation-stop="
+              << (config.udonAlns.stopOnStagnation ? 1 : 0)
               << " small-board-beam-budget-percent="
               << config.smallBoardBeamBudgetPercent
               << " small-board-brand-node-limit="

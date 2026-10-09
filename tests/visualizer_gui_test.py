@@ -21,7 +21,6 @@ from backend import (
     ConnectionConfig,
     CommandResult,
     SimpleServerInfo,
-    WorkflowError,
     match_acquisition_theoretical,
 )
 
@@ -47,10 +46,12 @@ class GUITest(unittest.TestCase):
             gui._team_role_changed()
             self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "20000")
             self.assertEqual(gui.parameter_vars["udon_sa"].get(), "0")
+            self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "0")
+            self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "0")
             self.assertIn("短時間ビーム", gui.build_solver_button.cget("text"))
-            self.assertIsNotNone(gui._workflow(require_shared=False))
-            with self.assertRaisesRegex(WorkflowError, "共有フォルダ"):
-                gui._workflow()
+            self.assertIsNone(gui._workflow().shared_dir)
+            self.assertTrue(gui.share_copy_button.winfo_ismapped())
+            self.assertTrue(gui.share_paste_button.winfo_ismapped())
             self.assertEqual(str(gui.automatic_match_button["state"]), "normal")
             self.assertIn("担当1", gui.automatic_match_button.cget("text"))
             self.assertTrue(gui.prepare_button.cget("text").startswith("1b"))
@@ -58,16 +59,22 @@ class GUITest(unittest.TestCase):
             gui._team_role_changed()
             self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "55000")
             self.assertEqual(gui.parameter_vars["udon_sa"].get(), "0")
-            self.assertIn("約50秒ビーム", gui.build_solver_button.cget("text"))
+            self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "1")
+            self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "0")
+            self.assertIn("収束ビーム", gui.build_solver_button.cget("text"))
             self.assertEqual(str(gui.automatic_match_button["state"]), "disabled")
             self.assertTrue(gui.prepare_button.cget("text").startswith("1a"))
             gui.team_role_var.set(TEAM_ROLE_LABELS["long"])
             gui._team_role_changed()
             self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "60000")
             self.assertEqual(gui.parameter_vars["udon_sa"].get(), "1")
-            self.assertIn("約55秒SA", gui.build_solver_button.cget("text"))
+            self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "0")
+            self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "1")
+            self.assertIn("収束SA", gui.build_solver_button.cget("text"))
             gui.team_role_var.set(TEAM_ROLE_LABELS["normal"])
             gui._team_role_changed()
+            self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "0")
+            self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "0")
             self.assertFalse(gui.settings_window.winfo_viewable())
             gui._show_settings_window()
             gui.update()
@@ -341,6 +348,10 @@ result
                      mock.patch("backend.send", side_effect=send):
                     gui._send_answer()
                     drain(expected_posts=2)
+                self.assertTrue(gui.clipboard_get().startswith("P37C1:"))
+                gui.share_paste_button.invoke()
+                gui.update()
+                self.assertTrue((Path(directory) / "checkpoint-code-day1.json").is_file())
                 self.assertEqual(gui.day_var.get(), 1)
                 self.assertEqual(gui.solve_day_button.cget("text"), "2  探索")
                 # 同じ日の再探索はGETなし。自動モードでは新しい回答を送信する。

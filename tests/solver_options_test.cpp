@@ -29,6 +29,12 @@ int main() {
     assert(parse({"main"}).beam.adaptiveLongSearch);
     assert(parse({"main"}).beam.udonAlns.simulatedAnnealing);
     assert(parse({"main"}).beam.udonAlns.jointDestroyRepair);
+    assert(!parse({"main"}).beam.stopOnStableBeam);
+    assert(!parse({"main"}).beam.udonAlns.stopOnStagnation);
+    assert(parse({"main", "--stable-beam-stop", "1"})
+        .beam.stopOnStableBeam);
+    assert(parse({"main", "--sa-stagnation-stop", "1"})
+        .beam.udonAlns.stopOnStagnation);
     assert(!parse({"main", "--udon-sa", "0"})
         .beam.udonAlns.simulatedAnnealing);
     assert(!parse({"main", "--udon-joint-destroy", "0"})
@@ -51,6 +57,8 @@ int main() {
         {"main", "--adaptive-long-search", "2"},
         {"main", "--udon-sa", "2"},
         {"main", "--udon-joint-destroy", "2"},
+        {"main", "--stable-beam-stop", "2"},
+        {"main", "--sa-stagnation-stop", "2"},
         {"main", "--small-board-brand-rescue", "2"},
         {"main", "--small-board-beam-budget-percent", "49"},
         {"main", "--small-board-beam-budget-percent", "96"},

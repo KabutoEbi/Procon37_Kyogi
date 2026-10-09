@@ -280,6 +280,24 @@ void checkAnnealingScheduleAndAcceptance() {
     }
 }
 
+void checkAnnealingStagnationRule() {
+    UdonAlnsConfig cfg;
+    cfg.stopOnStagnation = true;
+    cfg.minimumAnnealingAttempts = 100;
+    cfg.stagnationAttempts = 40;
+    cfg.minimumAttemptsPerNeighborhood = 3;
+    std::array<std::size_t, 7> covered{};
+    covered.fill(3);
+    assert(!brain2_detail::annealingHasStagnated(cfg, 99, 50, covered));
+    assert(!brain2_detail::annealingHasStagnated(cfg, 100, 39, covered));
+    auto missing = covered;
+    missing[6] = 2;
+    assert(!brain2_detail::annealingHasStagnated(cfg, 100, 40, missing));
+    assert(brain2_detail::annealingHasStagnated(cfg, 100, 40, covered));
+    cfg.stopOnStagnation = false;
+    assert(!brain2_detail::annealingHasStagnated(cfg, 1000, 1000, covered));
+}
+
 void checkExtendedTourEvaluationUsesOfficialReplay() {
     auto smoothSetting = line(2, 4, {0}, {{0, 1, 1, -1}});
     for (auto& cell : smoothSetting.field.cells) cell.type = CellType::Road;
@@ -373,6 +391,7 @@ int main() {
     checkNearestSupplyUsesTrafficTravelTime();
     checkAdaptiveLongSearchProfile();
     checkAnnealingScheduleAndAcceptance();
+    checkAnnealingStagnationRule();
     checkExtendedTourEvaluationUsesOfficialReplay();
     checkArenaGuidedNeighborhoodSampling();
 }

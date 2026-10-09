@@ -66,6 +66,8 @@ class TeamRoleProfile:
     build_label: str
     time_limit_ms: int
     udon_sa: int
+    stable_beam_stop: int = 0
+    sa_stagnation_stop: int = 0
 
 
 TEAM_ROLE_PROFILES = {
@@ -73,10 +75,10 @@ TEAM_ROLE_PROFILES = {
         "担当1 先行ビーム（約15秒）", "担当1・短時間ビーム", 20000, 0,
     ),
     "middle": TeamRoleProfile(
-        "担当2 追走ビーム（約50秒）", "担当2・約50秒ビーム", 55000, 0,
+        "担当2 収束ビーム（上限約50秒）", "担当2・収束ビーム", 55000, 0, 1, 0,
     ),
     "long": TeamRoleProfile(
-        "担当3 SA（約55秒）", "担当3・約55秒SA", 60000, 1,
+        "担当3 収束SA（上限約55秒）", "担当3・収束SA", 60000, 1, 0, 1,
     ),
 }
 TEAM_ROLE_LABELS = {
@@ -589,7 +591,7 @@ class SolverGUI(tk.Tk):
             self._choose_shared_dir,
         )
         ttk.Label(
-            config, text="有線LAN共有フォルダ（3人運用では必須）"
+            config, text="任意：設定するとLAN経由で自動共有"
         ).grid(row=3, column=3, columnspan=3, sticky=tk.W, padx=(12, 0))
         self._build_file_panel(config)
         self._build_random_setting_panel(config)
@@ -686,6 +688,8 @@ class SolverGUI(tk.Tk):
             ("macro_actions", "マクロ行動", "1: 有効 / 0: 無効"),
             ("adaptive_beam", "ビーム幅自動調整", "自動選択が0のときだけ使用"),
             ("udon_sa", "玉数の焼きなまし", "担当1・2は0（ビーム系）/ 担当3は1（SA）"),
+            ("stable_beam_stop", "ビーム安定時に終了", "担当2は1: 連続2段階で結果が同じなら終了"),
+            ("sa_stagnation_stop", "SA停滞時に終了", "担当3は1: 全近傍試行後の無改善で終了"),
             ("trial_candidates", "種別選択の試走候補数", "0: 距離評価のみ"),
             ("trial_beam_width", "種別選択の試走ビーム幅", "1以上"),
             ("trial_joint_beam_width", "種別選択の同時行動幅", "1以上"),
@@ -745,6 +749,21 @@ class SolverGUI(tk.Tk):
         )
         self.build_solver_button.grid(row=row, column=0, sticky=tk.EW, pady=3)
         self._action_buttons.append(self.build_solver_button)
+        row += 1
+
+        share_row = ttk.Frame(parent)
+        share_row.grid(row=row, column=0, sticky=tk.EW, pady=3)
+        share_row.columnconfigure(0, weight=1)
+        share_row.columnconfigure(1, weight=1)
+        self.share_copy_button = ttk.Button(
+            share_row, text="共有コードをコピー", command=self._copy_latest_checkpoint_code,
+        )
+        self.share_copy_button.grid(row=0, column=0, sticky=tk.EW, padx=(0, 2))
+        self.share_paste_button = ttk.Button(
+            share_row, text="共有コードを貼付", command=self._paste_checkpoint_code,
+        )
+        self.share_paste_button.grid(row=0, column=1, sticky=tk.EW, padx=(2, 0))
+        self._action_buttons.extend((self.share_copy_button, self.share_paste_button))
         row += 1
 
         self.prepare_button = ttk.Button(
@@ -954,7 +973,7 @@ class SolverGUI(tk.Tk):
         ybar.grid(row=0, column=1, sticky=tk.NS)
         xbar.grid(row=1, column=0, sticky=tk.EW)
 
-    def _workflow(self, *, require_shared: bool = True) -> Workflow:
+    def _workflow(self) -> Workflow:
         try:
             timeout = float(self.timeout_var.get())
             parameters = SearchParameters(**{
@@ -964,8 +983,6 @@ class SolverGUI(tk.Tk):
         except ValueError as error:
             raise WorkflowError("timeoutは数値、探索パラメータは整数で指定してください") from error
         shared_text = self.shared_var.get().strip()
-        if require_shared and self._team_role() != "normal" and not shared_text:
-            raise WorkflowError("3人運用では共有フォルダを設定してください")
         shared_dir = Path(shared_text) if shared_text else None
         if shared_dir is not None and not shared_dir.expanduser().is_dir():
             raise WorkflowError(f"共有フォルダを開けません: {shared_dir}")
@@ -989,11 +1006,11 @@ class SolverGUI(tk.Tk):
         except ValueError as error:
             raise WorkflowError("ランダム設定は整数で指定してください") from error
 
-    def _workflow_or_dialog(self, *, require_shared: bool = True) -> Workflow | None:
+    def _workflow_or_dialog(self) -> Workflow | None:
         if self._busy:
             return None
         try:
-            return self._workflow(require_shared=require_shared)
+            return self._workflow()
         except (WorkflowError, OSError) as error:
             messagebox.showerror("実行設定", str(error), parent=self)
             return None
@@ -1147,6 +1164,14 @@ class SolverGUI(tk.Tk):
                 text=(f"0  mainを最適化ビルド（{profile.build_label}）" if profile else
                       "0  mainを最適化ビルド")
             )
+        if hasattr(self, "share_copy_button"):
+            self.share_copy_button.configure(
+                state=tk.DISABLED if self._busy else tk.NORMAL
+            )
+            self.share_paste_button.configure(
+                state=(tk.NORMAL if not self._busy or waiting_candidate
+                       else tk.DISABLED)
+            )
 
     def _team_role(self) -> str:
         selected = self.team_role_var.get()
@@ -1164,9 +1189,13 @@ class SolverGUI(tk.Tk):
             send_mode = "自動送信" if role == "lead" else "手動送信"
             self._log(
                 f"3人運用: {profile.label} / {send_mode} / "
-                f"udon-sa={profile.udon_sa}"
+                f"udon-sa={profile.udon_sa} / "
+                f"stable-beam-stop={profile.stable_beam_stop} / "
+                f"sa-stagnation-stop={profile.sa_stagnation_stop}"
             )
         else:
+            self.parameter_vars["stable_beam_stop"].set("0")
+            self.parameter_vars["sa_stagnation_stop"].set("0")
             self._sync_day_time_limit()
         self._mode_changed()
 
@@ -1178,6 +1207,12 @@ class SolverGUI(tk.Tk):
         self.parameter_vars["auto_beam_width"].set("1")
         self.parameter_vars["time_limit_ms"].set(str(profile.time_limit_ms))
         self.parameter_vars["udon_sa"].set(str(profile.udon_sa))
+        self.parameter_vars["stable_beam_stop"].set(
+            str(profile.stable_beam_stop)
+        )
+        self.parameter_vars["sa_stagnation_stop"].set(
+            str(profile.sa_stagnation_stop)
+        )
 
     def _waiting_resubmission_candidate(
         self,
@@ -1472,12 +1507,80 @@ class SolverGUI(tk.Tk):
     def _build_solver(self) -> None:
         role = self._team_role()
         self._apply_team_role_profile(role)
-        workflow = self._workflow_or_dialog(require_shared=False)
+        workflow = self._workflow_or_dialog()
         if workflow is None:
             return
         profile = TEAM_ROLE_PROFILES.get(role)
         label = profile.build_label if profile else "通常"
         self._run_task(f"mainの最適化ビルド（{label}）", workflow.build_solver)
+
+    def _copy_checkpoint_code(
+        self,
+        workflow: Workflow,
+        setting: Path,
+        checkpoint: Path,
+        revision: int,
+    ) -> None:
+        code = workflow.export_checkpoint_code(checkpoint, setting, revision)
+        self.clipboard_clear()
+        self.clipboard_append(code)
+        self.update_idletasks()
+        self.status_var.set(
+            f"共有コードをコピーしました: day={read_json(checkpoint)['nextDay'] + 1}, "
+            f"revision={revision}"
+        )
+        self._log("✓ 次日チェックポイントの共有コードをコピーしました")
+
+    def _copy_latest_checkpoint_code(self) -> None:
+        workflow = self._workflow_or_dialog()
+        if workflow is None:
+            return
+        candidates: list[tuple[int, int, Path]] = []
+        for day in range(max(10, self._day_count)):
+            journal = workflow.work_dir / f"submission-day{day}.json"
+            checkpoint = workflow.work_dir / f"score-day{day + 1}.json"
+            if not journal.is_file() or not checkpoint.is_file():
+                continue
+            saved = read_json(journal)
+            revision = saved.get("revision")
+            if saved.get("status") == "accepted" and type(revision) is int:
+                candidates.append((day, revision, checkpoint))
+        if not candidates:
+            messagebox.showerror(
+                "共有コード", "受理済みの次日チェックポイントがありません", parent=self,
+            )
+            return
+        _day, revision, checkpoint = max(candidates)
+        try:
+            self._copy_checkpoint_code(
+                workflow, Path(self.setting_var.get()), checkpoint, revision,
+            )
+        except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+            messagebox.showerror("共有コード", str(error), parent=self)
+
+    def _paste_checkpoint_code(self) -> None:
+        waiting = self._waiting_resubmission_candidate()
+        workflow = waiting[0] if waiting is not None else self._workflow_or_dialog()
+        if workflow is None:
+            return
+        try:
+            code = self.clipboard_get()
+            with workflow.artifact_lock:
+                revision, next_day, output = workflow.import_checkpoint_code(
+                    code, Path(self.setting_var.get()),
+                )
+            self.score_var.set(str(output))
+            for context, (state, _checkpoint, digest) in list(self._daily_inputs.items()):
+                if context[-1] == next_day:
+                    self._daily_inputs[context] = (state, output, digest)
+            self.status_var.set(
+                f"共有コード取込完了: day={next_day + 1}, revision={revision}"
+            )
+            self._log(
+                f"✓ 共有コード取込 day={next_day + 1} revision={revision}: {output}"
+            )
+        except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+            messagebox.showerror("共有コード", str(error), parent=self)
 
     def _check_connection(self) -> None:
         workflow = self._workflow_or_dialog()
@@ -1599,6 +1702,14 @@ class SolverGUI(tk.Tk):
             self.score_var.set(str(checkpoint))
             self.day_var.set(next_day + 1)
             self._log(f"revision={revision}\n次日チェックポイント: {checkpoint}")
+            if self._automatic_workflow is not None:
+                try:
+                    self._copy_checkpoint_code(
+                        self._automatic_workflow,
+                        Path(self.setting_var.get()), checkpoint, revision,
+                    )
+                except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+                    self._log(f"共有コードのコピーに失敗しました: {error}")
         elif key == "prefetch_done":
             self._prefetching_days.discard(data)
         elif key == "prefetch_error":
@@ -2012,6 +2123,10 @@ class SolverGUI(tk.Tk):
             self._log(
                 f"revision={revision}\n再送: {archived}\n次日チェックポイント: {checkpoint}"
             )
+            try:
+                self._copy_checkpoint_code(workflow, setting, checkpoint, revision)
+            except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+                self._log(f"共有コードのコピーに失敗しました: {error}")
 
         def worker() -> None:
             try:
@@ -2049,6 +2164,10 @@ class SolverGUI(tk.Tk):
             self._log(
                 f"revision={revision}\n保存: {archived}\n次日チェックポイント: {checkpoint}"
             )
+            try:
+                self._copy_checkpoint_code(workflow, setting, checkpoint, revision)
+            except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+                self._log(f"共有コードのコピーに失敗しました: {error}")
             if after_accepted is not None:
                 after_accepted()
 
