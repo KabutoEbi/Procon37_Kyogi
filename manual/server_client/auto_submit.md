@@ -11,6 +11,8 @@ c++ -std=c++17 -O2 -pthread main.cpp -o main
 python3 server_client/auto_submit.py
 ```
 
+Windowsでは先に`./build-windows.ps1`を実行し、`py -3 server_client/auto_submit.py`で起動する。ソルバーの既定値は`./main.exe`になる。
+
 処理順序は次のとおり。
 
 1. `GET /setting`を`runtime/setting.json`へ保存する。
@@ -39,6 +41,8 @@ python3 server_client/auto_submit.py \
   --interval 1 \
   --timeout 10
 ```
+
+Windowsで明示する場合は`--solver ./main.exe`を使う。
 
 途中で失敗した場合は終了コード1となる。停止位置は`automatic-progress.json`へ保存され、GUIと共通のバックエンドで復旧できる。
 

@@ -10,7 +10,7 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 
 ## Windows
 
-Windows 10/11ではCMake 3.20以降と、次のいずれかのC++17環境を使用する。
+Windows 10/11ではCMake 3.20以降、Python 3.10以降と、次のいずれかのC++17環境を使用する。
 
 - Visual Studio 2022 Build Toolsの「C++によるデスクトップ開発」
 - MinGW-w64 GCC
@@ -43,6 +43,8 @@ MSVCではCMakeの通常回帰テストを使用する。
 Windowsの実行ファイルとテストには16MBのスタック予約を設定する。終了コード
 `3221225725`（`0xC00000FD`）が出た場合は古い`main.exe`が残っているため、
 `build-windows.ps1`またはGUIの「mainをビルド」で再ビルドする。
+`build-windows.ps1 -Test`ではPython 3.10以降も必須とし、見つからない場合は
+テストを黙って省略せずCMake設定を失敗させる。
 
 既定ビルドはC++17、`-O2 -pthread -Wall -Wextra -Wpedantic -Werror`。ヘッダー依存関係を自動記録するので、ヘッダー変更も次のビルドへ反映される。テストは`-UNDEBUG`でassertを有効にする。ビルド成果物とPythonキャッシュはGit管理外の`.build/`へ置き、ソルバーだけはGUI・CLIの既定パス`./main`へ出力する。ビルド・テスト中に本番の自動実行を同時に動かさない。
 
@@ -81,6 +83,8 @@ CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの
 2026-10-08の5台時エージェント構成改善後に、`make test-core`（C++コアテストとPython 39件）、`make test-sanitize`（C++ 10テスト）、公開3サイズの`sample_maps_test`、`git diff --check`が成功した。GUI実画面、簡易サーバー、公式実サーバーへの回答送信はこの変更後に実行していない。
 
 2026-10-09の3人運用更新後に、`make test-core`（C++コアテストとPython 53件）、`make test-gui`（実画面1件）、`git diff --check`が成功した。問題・状態の公開待ち、担当別プリセット、担当1の全自動、追走端末の手動送信、受理済みチェックポイントの共有と最大revision取込を含む。公式実サーバーへの回答送信を実行したという意味ではない。
+
+同日の`windows`ブランチ更新後に、このMacで`make test-core`（Windows向けコマンド生成テストを含むPython 54件）とC++回帰が成功した。Windows実機でのCMake/MSVCまたはMinGWビルドは、本番前の物理3台リハーサルで別途確認する。
 
 ## コンパイラ等の指定
 

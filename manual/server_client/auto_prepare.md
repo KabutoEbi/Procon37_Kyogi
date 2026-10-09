@@ -16,6 +16,8 @@ python3 server_client/auto_prepare.py select
 ./main select runtime/setting.json runtime/agents.json
 ```
 
+Windowsでは既定で`./main.exe`を実行する。
+
 ## 日次探索
 
 ```sh
@@ -31,7 +33,7 @@ python3 server_client/auto_prepare.py day --expected-day 1 \
 
 ## パス指定
 
-- `--solver FILE`: ソルバー実行ファイル。既定は`./main`
+- `--solver FILE`: ソルバー実行ファイル。既定はUnix/macOSで`./main`、Windowsで`./main.exe`
 - `--work-dir DIR`: JSONとログの保存先。既定は`runtime`
 - `--score FILE`: day 1以降に引き継ぐ得点チェックポイント
 

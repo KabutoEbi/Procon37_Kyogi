@@ -68,17 +68,15 @@ if(PROCON_BUILD_TESTS)
         add_test(NAME ${test_name} COMMAND ${test_name})
     endforeach()
 
-    find_package(Python3 3.9 COMPONENTS Interpreter)
-    if(Python3_Interpreter_FOUND)
-        add_test(NAME python_regression
-            COMMAND "${CMAKE_COMMAND}" -E env
-                "PYTHONPYCACHEPREFIX=${CMAKE_BINARY_DIR}/pycache"
-                "PROCON_TEST_SOLVER=$<TARGET_FILE:procon_solver>"
-                "${Python3_EXECUTABLE}" -m unittest -v
-                tests/visualizer_test.py
-                tests/recovery_test.py
-                tests/visualizer_runtime_test.py)
-        set_tests_properties(python_regression PROPERTIES
-            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
-    endif()
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME python_regression
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "PYTHONPYCACHEPREFIX=${CMAKE_BINARY_DIR}/pycache"
+            "PROCON_TEST_SOLVER=$<TARGET_FILE:procon_solver>"
+            "${Python3_EXECUTABLE}" -m unittest -v
+            tests/visualizer_test.py
+            tests/recovery_test.py
+            tests/visualizer_runtime_test.py)
+    set_tests_properties(python_regression PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
