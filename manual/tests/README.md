@@ -16,8 +16,17 @@
 | [`agent_selection_benchmark.cpp`](agent_selection_benchmark.md) | ランダム生成マップでの種別選択と全日試走の比較 |
 | [`arena_benchmark.cpp`](arena_benchmark.md) | 公開アリーナ問題JSONを使った全日程・混合交通の再現比較 |
 | [`arena-score-analysis-1905.md`](arena-score-analysis-1905.md) | 公開試合1905までの得点傾向、AHC解法、SA挿入差分評価の採否 |
+| [`arena-score-analysis-1918.md`](arena-score-analysis-1918.md) | 公開試合1918までの上位得点、反復深化、系列上限なし救済の検証 |
+| [`arena-score-analysis-1922-1926.md`](arena-score-analysis-1922-1926.md) | 1922・1926の日別系列不足と翌日急短縮への終端配置改善 |
+| [`arena-score-analysis-1931.md`](arena-score-analysis-1931.md) | 公開98試合、巡回台数下限予測、追加SAの比較、ローカル無制限探索修正 |
+| [`first-round-16-results-2026-10-10.md`](first-round-16-results-2026-10-10.md) | 一回戦16×16限定の3巡回車同時再配分、通常・厳燃料比較 |
+| [`arena-score-analysis-1937-16.md`](arena-score-analysis-1937-16.md) | 最新16×16の上位目標、最終日追加経路候補、退行した案の撤回 |
+| [`arena-score-analysis-1969-16.md`](arena-score-analysis-1969-16.md) | 1969の系列・玉数不足、16×16限定の玉数優先経路と系列フォールバック |
+| `analyze_small_board_history.py` / `small_board_api_benchmark.py` | 公開詳細の16×16ラウンド集計と1機能の対比較 |
+| `analyze_arena_history.py` | API詳細キャッシュのラウンド重複除去、回収率学習、未学習ラウンド検証 |
 | [`takamatsu-pamphlet-search-analysis.md`](takamatsu-pamphlet-search-analysis.md) | 高松大会パンフレットのビーム・SA解法との照合と希少系列評価の不採用理由 |
 | [`saved_day_benchmark.cpp`](coordinated-refinement-results-2026-10-07.md) | 保存済みの設定・当日状態・得点から1日を再探索する診断ツール |
+| [`runtime_match_benchmark.cpp`](arena-score-analysis-1969-16.md) | 保存済みの全日交通を候補自身の状態遷移で再生する読取専用比較ツール |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
 | [`recovery_test.py`](recovery_test.md) | 永続復旧・同日回答更新・同一候補再送・送信時間確保の回帰テスト |
@@ -65,6 +74,8 @@ make -j3 test
 公開試合#1367〜#1866の有効499試合を集計し、首位が499試合すべてで試合系列満点、491試合で日別系列満点となる傾向から、brain2へ高在庫スポット選択と巡回車2〜3台・補給車の共同destroy/repairを入れた。24×24生成4試合の在庫重み切り分けでは`851→856`、共同前段は#1866と32×32生成1試合で同点だった。取得範囲、推定の限界、適用下限と検証条件は[公開試合1866までの分析](arena-score-analysis-1866.md)に記録した。
 
 2026-10-10には公開試合#1867〜#1905とAHC059・AHC070の解法を照合し、SAの挿入位置を交通込み前後辺の厳密な差分評価へ変更した。`make -j4 test-core`、`make -j4 test-sanitize`、本番用`-O3 -DNDEBUG -Werror`ビルドが成功した。[公開試合1905までの分析](arena-score-analysis-1905.md)を参照する。同日、高松大会パンフレットのビーム・SA採用校も確認し、既存の2-opt、担当交換、翌日評価、複数日ビームとの重複を整理した。到達可能巡回車数による希少系列評価は8 seedで退行したため既定無効とした。[パンフレット解法分析](takamatsu-pamphlet-search-analysis.md)を参照する。
+
+同日、公開試合#1918までを再分析し、長時間ビームを目標幅の4分の1から反復深化する方式と、系列補完の初回上限後に残時間で上限なし救済を行う方式を追加した。#1922・#1926の日別系列不足に対しては、翌日が約3分の2以下へ短くなる日に遠隔一意系列へ接近する終端評価を追加した。担当2の安定終了後も系列救済を実行し、日跨ぎ候補探索を実験的玉数改善群から分離して通常有効にした。`make -j4 test-core`はPython 57件を含めて成功し、`make -j4 test-sanitize`、`git diff --check`、本番用`-O3 -DNDEBUG -Werror`ビルドも成功した。[1918分析](arena-score-analysis-1918.md)と[1922・1926分析](arena-score-analysis-1922-1926.md)を参照する。
 
 種別選択時間は順位へ影響しないため、GUIは相対上限なしで設定取得時に確定する60／90／120秒の受付枠から、通信timeout・時計ずれ・保存処理の余裕だけを引いた時点まで試走する。#1813の再比較後、既定候補数は各候補を深く評価できる6件へ変更した。受付枠を相対上限へ変換する回帰とGUIの`-O3 -DNDEBUG`本番ビルド検査を追加した。
 

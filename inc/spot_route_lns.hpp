@@ -18,8 +18,11 @@ struct SpotRouteLnsConfig {
     std::size_t maxAttempts = 24;
     std::size_t maxInsertions = 3;
     // Convert a patrol's terminal wait into a few extra pickups using only
-    // time left by the established ruin/recreate search.
-    bool terminalWaitFill = false;
+    // time left by the established ruin/recreate search. Every candidate is
+    // replayed and must preserve the official brand objectives.
+    bool terminalWaitFill = true;
+    // Short runs benefit more from keeping the established LNS trajectory.
+    std::int64_t terminalFillMinimumBudgetMs = 10000;
     std::size_t terminalFillRounds = 4;
     std::size_t terminalFillCandidates = 8;
     bool finalDayOnly = false;
@@ -30,10 +33,18 @@ struct SpotRouteLnsConfig {
     std::size_t maxTeamRounds = 3;
     // 翌日位置の完全一致を外す場合も、到達系列数と燃料を検査する。
     bool allowFuturePositionChange = true;
+    // Candidate-only passes can require an identical next-day start so their
+    // extra bowls cannot perturb later search trajectories.
+    bool preserveIntermediateFuelExactly = false;
     bool spotPortfolio = true;
     std::size_t spotPortfolioBeamWidth = 256;
     std::size_t spotPortfolioCandidatesPerDepth = 12;
     std::int32_t spotPortfolioHardnessWeight = 4;
+    // 16x16 can first keep high-yield fixed routes, falling back to the
+    // official brand-first portfolio only when they miss the required counts.
+    bool quantityFirstRanking = false;
+    std::uint32_t requiredMatchBrandCount = 0;
+    std::uint32_t requiredDayBrandCount = 0;
     // Prefer a brand that fewer patrols can still reach within today's time
     // and fuel budget. This is only a tie-break below the official brand and
     // quantity objectives in the portfolio beam.
@@ -50,6 +61,7 @@ struct SpotRouteLnsResult {
     std::size_t portfolioMaxBrands = 0;
     std::size_t portfolioMaxUdon = 0;
     std::size_t portfolioMaxValidUdon = 0;
+    bool portfolioReachedRequiredBrands = false;
     bool interrupted = false;
 };
 
@@ -505,6 +517,7 @@ inline SpotRouteLnsResult fillTerminalPatrolWaits(
             struct Candidate {
                 int newMatchBrand = 0;
                 int newDayBrand = 0;
+                int potentialUdon = 0;
                 std::size_t spot = 0;
                 PathResult path;
             };
@@ -518,20 +531,42 @@ inline SpotRouteLnsResult fillTerminalPatrolWaits(
                     setting.field.spots[spot].pos);
                 if (!path.reachable || path.cost.steps <= 0 ||
                     path.cost.steps > spare) continue;
-                const int brandIndex = setting.field.spots[spot].brandIndex;
-                const auto brand = brandIndex >= 0
-                    ? brandBit(brandIndex) : BrandMask{0};
+                SpotMask pathSpots = 0;
+                BrandMask pathBrands = 0;
+                CellPos pathPos = from;
+                for (const Direction direction : path.directions) {
+                    pathPos = setting.field.neighbor(pathPos, direction);
+                    if (!setting.field.contains(pathPos)) break;
+                    const int indexAtPath = setting.field.at(pathPos).spotIndex;
+                    if (indexAtPath < 0) continue;
+                    const auto pathSpot = static_cast<std::size_t>(indexAtPath);
+                    const auto pathBit = spotBit(pathSpot);
+                    if ((pathSpots & pathBit) ||
+                        result.finalState.remainingStocks[pathSpot] <= 0 ||
+                        (result.finalState.acquiredSpots[agent] & pathBit)) {
+                        continue;
+                    }
+                    pathSpots |= pathBit;
+                    const int pathBrand =
+                        setting.field.spots[pathSpot].brandIndex;
+                    if (pathBrand >= 0) pathBrands |= brandBit(pathBrand);
+                }
                 candidates.push_back({
-                    (result.finalState.score.matchBrands & brand) ? 0 : 1,
-                    (result.finalState.dayBrands & brand) ? 0 : 1,
+                    static_cast<int>(countBits(pathBrands &
+                        ~result.finalState.score.matchBrands)),
+                    static_cast<int>(countBits(
+                        pathBrands & ~result.finalState.dayBrands)),
+                    static_cast<int>(countBits(pathSpots)),
                     spot, std::move(path)});
             }
             std::sort(candidates.begin(), candidates.end(),
                 [](const Candidate& lhs, const Candidate& rhs) {
                     return std::make_tuple(-lhs.newMatchBrand,
-                               -lhs.newDayBrand, lhs.path.cost.steps, lhs.spot) <
+                               -lhs.newDayBrand, -lhs.potentialUdon,
+                               lhs.path.cost.steps, lhs.spot) <
                            std::make_tuple(-rhs.newMatchBrand,
-                               -rhs.newDayBrand, rhs.path.cost.steps, rhs.spot);
+                               -rhs.newDayBrand, -rhs.potentialUdon,
+                               rhs.path.cost.steps, rhs.spot);
                 });
             if (candidates.size() > config.terminalFillCandidates)
                 candidates.resize(config.terminalFillCandidates);
@@ -875,11 +910,17 @@ inline SpotRouteLnsResult searchSpotPortfolio(
         // Keep the official score hierarchy in the approximate portfolio too.
         // Otherwise a narrow beam can discard a never-before-seen brand in
         // favour of a nearer brand that is already present in the match score.
-        return std::make_tuple(
-            countBits(node.brands & ~previous.matchBrands),
-            countBits(node.brands), node.udon,
+        const auto newMatch = static_cast<std::int64_t>(
+            countBits(node.brands & ~previous.matchBrands));
+        const auto dayBrands = static_cast<std::int64_t>(
+            countBits(node.brands));
+        const auto udon = static_cast<std::int64_t>(node.udon);
+        const auto routeQuality = static_cast<std::int64_t>(
             config.spotPortfolioHardnessWeight * node.hardness -
                 node.totalTravel);
+        return config.quantityFirstRanking
+            ? std::make_tuple(udon, newMatch, dayBrands, routeQuality)
+            : std::make_tuple(newMatch, dayBrands, udon, routeQuality);
     };
     const auto betterNode = [&](const Node& lhs, const Node& rhs) {
         return rank(lhs) > rank(rhs);
@@ -888,6 +929,11 @@ inline SpotRouteLnsResult searchSpotPortfolio(
         return std::make_tuple(countBits(state.score.matchBrands),
             countBits(state.dayBrands), state.score.totalUdon);
     };
+    const auto requiredMatchBrandCount = std::max<std::uint32_t>(
+        config.requiredMatchBrandCount,
+        countBits(original.state.score.matchBrands));
+    const auto requiredDayBrandCount = std::max<std::uint32_t>(
+        config.requiredDayBrandCount, countBits(original.state.dayBrands));
     const auto initialFuture = !finalDay && config.allowFuturePositionChange
         ? detail::futureRoutePotential(setting, matchState, original.state,
                                       paths, cached)
@@ -979,7 +1025,10 @@ inline SpotRouteLnsResult searchSpotPortfolio(
         for (std::size_t index = 0; index < evaluate; ++index) {
             if (Clock::now() >= deadline) { result.interrupted = true; break; }
             const Node& node = beam[index];
-            if (countBits(node.brands) < countBits(result.finalState.dayBrands))
+            // The compact beam model and the rebuilt route can disagree on
+            // transit pickups.  Filter only below the incumbent here and
+            // enforce the requested brand count on the official replay.
+            if (countBits(node.brands) < countBits(original.state.dayBrands))
                 continue;
             DailyPlan trial = incumbent;
             bool viable = true;
@@ -1001,12 +1050,15 @@ inline SpotRouteLnsResult searchSpotPortfolio(
             if (!viable) continue;
             ++result.attempts;
             const auto replay = simulateDay(setting, matchState, trial, previous);
-            if (replay.valid && countBits(replay.state.dayBrands) >=
-                countBits(original.state.dayBrands))
+            const bool keepsRequiredBrands = replay.valid &&
+                countBits(replay.state.score.matchBrands) >=
+                    requiredMatchBrandCount &&
+                countBits(replay.state.dayBrands) >=
+                    requiredDayBrandCount;
+            if (keepsRequiredBrands)
                 result.portfolioMaxValidUdon = std::max<std::size_t>(
                     result.portfolioMaxValidUdon, replay.state.dayUdon);
-            if (!replay.valid || officialScore(replay.state) <=
-                officialScore(result.finalState)) continue;
+            if (!keepsRequiredBrands) continue;
             if (!finalDay && config.preserveIntermediateState) {
                 if (replay.state.score.matchBrands != original.state.score.matchBrands ||
                     replay.state.dayBrands != original.state.dayBrands) continue;
@@ -1025,11 +1077,17 @@ inline SpotRouteLnsResult searchSpotPortfolio(
                     for (const AgentIndex a : patrols)
                         same = same && replay.state.agents[a].pos ==
                             original.state.agents[a].pos &&
-                            replay.state.agents[a].fuel >=
-                            original.state.agents[a].fuel;
+                            (config.preserveIntermediateFuelExactly
+                                ? replay.state.agents[a].fuel ==
+                                    original.state.agents[a].fuel
+                                : replay.state.agents[a].fuel >=
+                                    original.state.agents[a].fuel);
                     if (!same) continue;
                 }
             }
+            result.portfolioReachedRequiredBrands = true;
+            if (officialScore(replay.state) <=
+                officialScore(result.finalState)) continue;
             result.plan = std::move(trial);
             result.finalState = replay.state;
             ++result.improvements;

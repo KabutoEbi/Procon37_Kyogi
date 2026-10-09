@@ -19,7 +19,7 @@ CPP_TESTS := $(CORE_TESTS) official_qa_test property_test sample_maps_test
 TEST_BINS := $(addprefix $(TEST_DIR)/,$(CPP_TESTS))
 SAN_TESTS := $(CORE_TESTS) official_qa_test property_test
 SAN_BINS := $(addprefix $(SAN_DIR)/,$(SAN_TESTS))
-TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark agent_selection_benchmark tune_weights arena_benchmark beam_width_probe saved_day_benchmark)
+TOOL_BINS := $(addprefix $(TOOL_DIR)/,solver_benchmark agent_selection_benchmark tune_weights arena_benchmark beam_width_probe saved_day_benchmark runtime_match_benchmark)
 PY_ENV = PYTHONPYCACHEPREFIX="$(abspath $(BUILD_DIR)/pycache)" PROCON_TEST_SOLVER="$(abspath main)"
 
 .PHONY: all release tools test test-core test-cpp test-python test-samples test-property test-official-qa \
@@ -86,7 +86,7 @@ test-samples: check-samples $(TEST_DIR)/sample_maps_test
 	$(TEST_DIR)/sample_maps_test
 
 test-python: main
-	$(PY_ENV) $(PYTHON) -m unittest -v tests/visualizer_test.py tests/recovery_test.py tests/visualizer_runtime_test.py
+	$(PY_ENV) $(PYTHON) -m unittest -v tests/visualizer_test.py tests/recovery_test.py tests/visualizer_runtime_test.py tests/small_board_history_test.py
 
 # Explicit opt-in: desktop window / localhost listener / sanitizers required.
 test-gui:

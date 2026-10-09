@@ -8,6 +8,8 @@
 
 `saved_day_benchmark` は過去の `endsAt` だけを無効化して、保存時点の位置・燃料・交通・得点から探索する。`runtime` への書込みやサーバー送信は行わない。出力計画はシミュレータで再検証する。
 
+`runtime_match_benchmark`は保存された`setting.json`、`state-dayN.json`の全日交通とday 0初期状態を読み、候補自身の終端状態を次日へ渡して全試合を再生する。第2引数の0/1で1969型の玉数優先ポートフォリオを比較でき、保存ファイルは変更しない。
+
 ```sh
 make .build/tools/saved_day_benchmark
 .build/tools/saved_day_benchmark \
@@ -85,7 +87,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 `no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流、拡張ALNSポートフォリオをまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`、`no-expanded-alns`は各機能のアブレーションに使う。
 
-`--quantity-upgrades`で新しい5項目を有効化する（CLI本体と違い値なしのベンチ用フラグ）。`--no-day-beam`は日跨ぎ先読みを無効化する。`--keep-beam-iterations`は系列上限での早期終了を無効化する。`--quantity-budget-percent N`（1〜90）は玉数用の予約割合を変更し、時間配分の切り分けに使う。これら3つの調整は`--quantity-upgrades`と併用する。
+`--quantity-upgrades`で実験的な玉数改善群を有効化する（CLI本体と違い値なしのベンチ用フラグ）。日跨ぎ先読みは独立して既定有効で、`--no-day-beam`により無効化する。`--keep-beam-iterations`は系列上限での早期終了を無効化する。`--quantity-budget-percent N`（1〜90）は玉数用の予約割合を変更し、時間配分の切り分けに使う。玉数改善群の比較では後ろ2つを`--quantity-upgrades`と併用し、日跨ぎの有無は別軸で比較する。
 
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 
@@ -93,7 +95,9 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 `--compare-adaptive-long-search`は、盤面・実効時間別のALNS上限と後段配分を使う`adaptive-long-search`、従来の固定上限・固定配分を使う`fixed-long-search`を交互に実行する。時間打切りの揺れを減らすため複数seed・複数反復で判断し、短時間、35秒級、55秒級を分けて記録する。
 
-各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`--compare-detour-aware-sa`は利益÷迂回量による低頻度の狙い撃ち、`--compare-differential-insertion`は挿入位置の局所差分評価、`--compare-reachability-rarity`は到達可能巡回車数による希少系列ポートフォリオを、それぞれ直前方式と対比較する。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`no-supply-cleanup`は探索後の補給車周回除去を、`wandering-supply`は合流未割当時の自由移動を有効にする。`unbounded-supply-wait`は補給車の待機上限を0にして旧方式へ戻す。`legacy-supply-schedules`は経路候補組合せの固定待機案を1件、時刻付き合流を最大2回へ戻す比較用設定である。`terminal-wait-fill`は実験的な末尾待機活用を有効化し、`no-transit-pickup-ranking`は32×32の経路ラベルにおける通過取得順位を無効化する。`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
+`--compare-small-board-joint-refinement`は、16×16の通常ALNSで3台同時再配分を許す`small-board-joint-refinement`と、従来の2台上限`no-small-board-joint-refinement`を比較する。`--compare-small-board-quantity-first`は、#1969型の16×16・8日・14系列で、既存解を保持しながら玉数優先経路も追加比較する方式と従来方式を比較する。他の設定には影響しない。`--compare-warm-start-portfolio`は追加SAの初期訪問列の継承だけを切り替える。これらは他の`--compare-*`と併用できない。
+
+各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`--compare-detour-aware-sa`は利益÷迂回量による低頻度の狙い撃ち、`--compare-differential-insertion`は挿入位置の局所差分評価、`--compare-reachability-rarity`は到達可能巡回車数による希少系列ポートフォリオを、それぞれ直前方式と対比較する。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`no-supply-cleanup`は探索後の補給車周回除去を、`wandering-supply`は合流未割当時の自由移動を有効にする。`unbounded-supply-wait`は補給車の待機上限を0にして旧方式へ戻す。`legacy-supply-schedules`は経路候補組合せの固定待機案を1件、時刻付き合流を最大2回へ戻す比較用設定である。`no-terminal-wait-fill`は既定の末尾待機活用を無効化し、`no-transit-pickup-ranking`は32×32の経路ラベルにおける通過取得順位を無効化する。`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
 
 標準エラーへ試合単位の得点合計、時間の中央値・最大値、展開数、辞書順（試合系列→日別系列累計→玉数）での勝ち・同点・負けを出力する。性能値はCPU負荷などに左右されるため、同じ環境・同じビルド設定で比較する。固定シードでも時間打切りの結果は変動し、生成問題での改善が本番問題での改善を保証するものではない。
 
@@ -147,3 +151,5 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 [探索・合流改善記録](mixed-traffic-search-rendezvous-2026-10-01.md)を参照。
 
 32×32・8台・32スポット・20系列・10日での`no-route-portfolio`との比較、適用条件、探索時間と展開数は[経路選択改善記録](route-selection-results-2026-10-02.md)を参照する。
+
+`--compare-terminal-wait-fill`は、系列最大化後に末尾待機を追加取得経路へ置換する`terminal-wait-fill`と、無効にした`no-terminal-wait-fill`を交互に実行する。10秒未満の短時間条件では両方式とも自動的にこの処理を省略する。

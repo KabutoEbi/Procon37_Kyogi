@@ -617,11 +617,20 @@ inline UdonAlnsResult improveDayUdonAnnealed(
     const bool greedyStartValid = greedyReplay.valid;
     GameState greedyState = greedyReplay.valid ? greedyReplay.state : initialState;
     if (!greedyReplay.valid) greedyPlan = annealingIncumbent;
+    if (config.annealingWarmStart) {
+        greedyPlan = annealingIncumbent;
+        greedyReplay = checked;
+        greedyState = initialState;
+        for (const AgentIndex agent : patrols) {
+            greedyRoutes[agent] = detail::acquiredSpotSequence(
+                supplyTrace, initialState, agent, 0);
+        }
+    }
     const auto greedyDeadline = deadline == Clock::time_point::max()
         ? deadline
         : Clock::now() + std::max(Clock::duration::zero(),
               deadline - Clock::now()) / 4;
-    while (Clock::now() < greedyDeadline) {
+    while (!config.annealingWarmStart && Clock::now() < greedyDeadline) {
         bool found = false;
         SpotRoutes bestRoutes;
         DailyPlan bestPlan;

@@ -47,6 +47,7 @@ private:
             name == "--exact-brands" || name == "--brand-repair" ||
             name == "--udon-alns" || name == "--udon-sa" ||
             name == "--udon-joint-destroy" || name == "--spot-route-lns" ||
+            name == "--terminal-wait-fill" ||
             name == "--route-columns" || name == "--adaptive-long-search" ||
             name == "--next-day-probe" || name == "--day-beam" ||
             name == "--quantity-upgrades" ||
@@ -54,7 +55,10 @@ private:
             name == "--stable-beam-stop" ||
             name == "--sa-stagnation-stop" ||
             name == "--small-board-brand-rescue" ||
-            name == "--auto-beam-width";
+            name == "--small-board-joint-refinement" ||
+            name == "--small-board-quantity-first" ||
+            name == "--small-board-final-columns" ||
+            name == "--auto-beam-width" || name == "--arena-agent-prior";
     }
 
     void setOption(std::string_view name, std::int64_t value) {
@@ -90,10 +94,18 @@ private:
         else if (name == "--exact-brands") beam.exactBrands = value != 0;
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
+        else if (name == "--small-board-joint-refinement")
+            beam.smallBoardJointRefinement = value != 0;
+        else if (name == "--small-board-quantity-first")
+            beam.smallBoardQuantityFirstRoutes = value != 0;
+        else if (name == "--small-board-final-columns")
+            beam.smallBoardFinalColumns = value != 0;
         else if (name == "--udon-sa") beam.udonAlns.simulatedAnnealing = value != 0;
         else if (name == "--udon-joint-destroy")
             beam.udonAlns.jointDestroyRepair = value != 0;
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
+        else if (name == "--terminal-wait-fill")
+            beam.spotRouteLns.terminalWaitFill = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
         else if (name == "--adaptive-long-search") beam.adaptiveLongSearch = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
@@ -116,7 +128,6 @@ private:
         }
         else if (name == "--day-beam") {
             beam.useDayBeam = value != 0;
-            if (value) beam.quantityUpgrades = true;
         }
         else if (name == "--day-beam-width") {
             if (value < 2 || value > 8) throw std::invalid_argument("day beam width must be 2..8");
@@ -135,7 +146,8 @@ private:
         else if (name == "--auto-beam-width") {
             autoBeamWidth = value != 0;
             hasAutoBeamOption = true;
-        } else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
+        } else if (name == "--arena-agent-prior") selection.arenaScorePrior = value != 0;
+        else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
         else if (name == "--trial-beam-width") selection.trialBeamWidth = value;
         else if (name == "--trial-joint-beam-width") {
             selection.trialJointBeamWidth = value;

@@ -42,8 +42,9 @@ using UdonRefiner = std::function<UdonAlnsResult(
     const UdonAlnsConfig&, std::chrono::steady_clock::time_point)>;
 
 struct BeamSearchConfig {
-    // Experimental portfolio. Enable explicitly until fixed-time match
-    // benchmarks establish a benefit across more than the tuning instances.
+    // Experimental quantity portfolio. The multi-day beam is controlled
+    // independently so the official cumulative daily-brand objective is
+    // considered without enabling every quantity experiment.
     bool quantityUpgrades = false;
     // Fuel-aware end placement, anticipatory supply assignment and a reserved
     // quantity-refinement slice. Independent of the experimental day beam.
@@ -62,6 +63,13 @@ struct BeamSearchConfig {
     std::size_t smallBoardBeamBudgetPercent = 75;
     std::size_t smallBoardBrandSearchNodeLimit = 200000;
     bool useUdonAlns = true;
+    // 一回戦盤面では3巡回車の経路・在庫をまとめて再配分する。
+    bool smallBoardJointRefinement = true;
+    // 1969型の16×16・8日・14系列で、既存解を保持しながら
+    // 玉数優先候補と系列優先候補を独立に比較する。
+    bool smallBoardQuantityFirstRoutes = true;
+    // 通常探索を終えた最終日だけ、残時間で幅広い経路組合せを比較。
+    bool smallBoardFinalColumns = true;
     UdonAlnsConfig udonAlns{};
     // brain1 uses the established hill-climbing ALNS by default. A later
     // solver generation can inject another acceptance policy without copying
@@ -175,6 +183,16 @@ struct BeamSearchConfig {
 
 namespace detail {
 
+inline bool isSharplyShorterNextDay(
+    const MatchSetting& setting, std::int32_t day) noexcept {
+    if (day < 0) return false;
+    const auto current = static_cast<std::size_t>(day);
+    const auto next = current + 1;
+    return next < setting.daySteps.size() &&
+        3LL * setting.daySteps[next] <=
+            2LL * setting.daySteps[current];
+}
+
 inline bool isFuelRiskDay(const MatchSetting& setting,
                           const MatchState& matchState) {
     if (matchState.day < 0 ||
@@ -223,6 +241,11 @@ inline AdaptiveLongSearchProfile adaptiveLongSearchProfile(
     profile.quantityBudgetPercent = std::clamp<std::size_t>(
         config.quantityBudgetPercent, 1, 90);
     profile.udonAlns = config.udonAlns;
+    if (config.smallBoardJointRefinement &&
+        setting.field.width == 16 && setting.field.height == 16) {
+        profile.udonAlns.maxPatrols = std::max<std::size_t>(
+            profile.udonAlns.maxPatrols, 3);
+    }
     if (!config.adaptiveLongSearch || effectiveBudgetMs <= 0 ||
         effectiveBudgetMs == std::numeric_limits<std::int64_t>::max() ||
         config.quantityUpgrades) {
@@ -1280,13 +1303,22 @@ private:
             (currentDay && dist.planning.twoSpotLookahead ? 2 * n + 1 : n + 1) + 1;
         const std::int64_t daily = pickup * (n + 1);
         const std::int64_t fresh = daily * (n + 1);
+        const auto currentDayIndex = state.day >= 0
+            ? static_cast<std::size_t>(state.day) : setting.daySteps.size();
+        const auto nextDayIndex = state.day >= 0
+            ? static_cast<std::size_t>(state.day + 1) : setting.daySteps.size();
+        const bool hasNextDay = currentDayIndex < setting.daySteps.size() &&
+            nextDayIndex < setting.daySteps.size();
+        const bool sharplyShorterNextDay =
+            detail::isSharplyShorterNextDay(setting, state.day);
+        const bool finalTightFuelDay = hasNextDay &&
+            setting.field.cellCount() >= 32U * 32U && dist.lightTraffic &&
+            nextDayIndex + 1 >= setting.dayCount() &&
+            5LL * setting.fuelLimit <=
+                6LL * setting.daySteps[nextDayIndex];
         const bool prioritizeHardFuture =
             !currentDay && dist.planning.prioritizeHardNextDayTargets &&
-            setting.field.cellCount() >= 32U * 32U && dist.lightTraffic &&
-            static_cast<std::size_t>(state.day + 1) < setting.daySteps.size() &&
-            static_cast<std::size_t>(state.day + 2) >= setting.dayCount() &&
-            5LL * setting.fuelLimit <=
-                6LL * setting.daySteps[static_cast<std::size_t>(state.day + 1)];
+            (sharplyShorterNextDay || finalTightFuelDay);
         if (prioritizeHardFuture) {
             std::array<std::int32_t, kMaxBrands> spotsPerBrand{};
             for (const Spot& spot : setting.field.spots) {
@@ -3482,12 +3514,26 @@ inline BeamSearchResult brain1Beam(
     BeamSearchConfig pass = config;
     pass.useStateDeadline = false;
     pass.safetyMarginMs = 0;
+    const std::size_t configuredBeamWidth = pass.beamWidth;
+    const std::size_t configuredJointBeamWidth = pass.jointBeamWidth;
+    // Automatically calibrated widths are upper targets for a long run, not
+    // necessarily the best first width.  Start with a completed narrow pass
+    // and retain its official-score result while deepening.  This avoids
+    // spending the entire deadline in one oversized, unfinished pass.
+    if (pass.autoSizedBeam && effectiveMs >= 10000 &&
+        pass.beamWidth >= 4 * pass.minimumBeamWidth &&
+        pass.jointBeamWidth >= 4 * pass.minimumJointBeamWidth) {
+        pass.beamWidth = std::max(
+            pass.minimumBeamWidth, pass.beamWidth / 4);
+        pass.jointBeamWidth = std::max(
+            pass.minimumJointBeamWidth, pass.jointBeamWidth / 4);
+    }
     const std::size_t maxBeam = std::max<std::size_t>(
-        pass.beamWidth,
-        std::min<std::size_t>(8192, pass.beamWidth * 16));
+        configuredBeamWidth,
+        std::min<std::size_t>(8192, configuredBeamWidth * 16));
     const std::size_t maxJoint = std::max<std::size_t>(
-        pass.jointBeamWidth,
-        std::min<std::size_t>(32768, pass.jointBeamWidth * 16));
+        configuredJointBeamWidth,
+        std::min<std::size_t>(32768, configuredJointBeamWidth * 16));
 
     while (Clock::now() < deadline) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3599,7 +3645,6 @@ inline BeamSearchResult brain1(
     using Clock = std::chrono::steady_clock;
     auto config = requestedConfig;
     if (!config.quantityUpgrades) {
-        config.useDayBeam = false;
         config.spotRouteLns.reflectTransit = false;
         config.routeColumns.maxSupplySchedules = 0;
         config.udonAlns.reallocateStock = false;
@@ -3703,14 +3748,9 @@ inline BeamSearchResult brain1(
         ? 20 : static_cast<std::size_t>(beamBudgetPercent);
     result.udonAlnsAttemptLimit = longSearch.udonAlns.maxAttempts;
     result.udonAlnsNodesPerAttempt = longSearch.udonAlns.nodesPerAttempt;
-    // 担当2は、安定した幅を見つけた時点のビーム解をそのまま採用する。
-    // 後段改善へ残り時間を渡すと結局ハード上限まで探索してしまうため、
-    // このモードだけは収束を日次探索全体の終了条件とする。
-    if (result.stableBeamStopped) {
-        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            Clock::now() - started).count();
-        return result;
-    }
+    // 安定幅はビームを広げる終了条件であって、系列最大性の証明ではない。
+    // 担当2でもこの後の系列修復・系列最大化までは必ず通し、玉数専用の
+    // 後段探索だけを省略して早期終了する。
     std::vector<DayPlanCandidate> futureCandidates;
     bool changed = false;
     const auto remember = [&] {
@@ -3794,6 +3834,46 @@ inline BeamSearchResult brain1(
         changed = true;
         remember();
     }
+    // A node cap is only a fast first pass. If its relaxed upper bound is
+    // still open, spend the remaining brand-search slice proving or reaching
+    // the maximum before any quantity-only refinement. The hard wall-clock
+    // deadline remains authoritative, so this cannot delay submission.
+    if (limited && !result.brandOptimal && Clock::now() < brandDeadline &&
+        brandScore(result.finalState) < std::make_pair(
+            result.matchBrandUpperBound, result.dailyBrandUpperBound)) {
+        const auto rescue = maximizeDayBrands(
+            setting, matchState, previousScore, result.plan,
+            0, brandDeadline);
+        result.brandSearchExpanded += rescue.expanded;
+        result.brandOptimal = rescue.optimal;
+        result.matchBrandUpperBound = rescue.matchUpperBound;
+        result.dailyBrandUpperBound = rescue.dailyUpperBound;
+        if (brandScore(rescue.finalState) > brandScore(result.finalState)) {
+            result.plan = rescue.plan;
+            result.finalState = rescue.finalState;
+            changed = true;
+            remember();
+        }
+    }
+    if (result.stableBeamStopped) {
+        if (changed) {
+            EvaluationContext context;
+            context.scoreAtDayStart = previousScore;
+            result.evaluation = evaluateGameState(
+                result.finalState, context, config.weights);
+        }
+        const auto finalReplay = simulateDay(
+            setting, matchState, result.plan, previousScore);
+        if (finalReplay.valid) {
+            result.supplyUtilization = finalReplay.supplyUtilization;
+        }
+        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - started).count();
+        if (limited && Clock::now() >= brandDeadline && !result.brandOptimal) {
+            result.stopReason = SearchStopReason::TimeLimit;
+        }
+        return result;
+    }
     if (runSpotRouteLns && Clock::now() < deadline) {
         auto routeDeadline = deadline;
         if (runUdonAlns && limited) {
@@ -3812,37 +3892,67 @@ inline BeamSearchResult brain1(
             const auto portfolioDeadline = now +
                 std::max(Clock::duration::zero(), legacyRouteDeadline - now) / 2;
             const std::array<int, 4> hardnessWeights{{4, 0, 16, 8}};
+            const auto boardBrandCount = static_cast<std::uint32_t>(
+                setting.field.brands.size());
+            const bool quantityFirstBoard =
+                config.smallBoardQuantityFirstRoutes &&
+                setting.field.width == 16 && setting.field.height == 16 &&
+                boardBrandCount == 14 && setting.dayCount() == 8;
+            const bool quantityFirst = quantityFirstBoard;
+            const std::size_t passCount = hardnessWeights.size() +
+                static_cast<std::size_t>(quantityFirst);
             for (std::size_t pass = 0;
-                 pass < hardnessWeights.size() && Clock::now() < portfolioDeadline;
+                 pass < passCount && Clock::now() < portfolioDeadline;
                  ++pass) {
                 auto portfolioConfig = config.spotRouteLns;
+                const bool quantityPass = quantityFirst && pass == 0;
+                const std::size_t rankedPass = quantityPass ? 0 : pass -
+                    static_cast<std::size_t>(quantityFirst);
+                portfolioConfig.quantityFirstRanking = quantityPass;
+                portfolioConfig.requiredMatchBrandCount = quantityPass
+                    ? boardBrandCount : 0;
+                portfolioConfig.requiredDayBrandCount = quantityPass
+                    ? boardBrandCount : 0;
+                if (quantityPass) {
+                    portfolioConfig.allowFuturePositionChange = finalDay;
+                    portfolioConfig.preserveIntermediateFuelExactly = true;
+                }
                 // Keep the established fast proposal as well as the richer
                 // transit/refuel model: their finite beams explore different routes.
-                portfolioConfig.reflectTransit = pass != 0 && config.spotRouteLns.reflectTransit;
-                portfolioConfig.spotPortfolioHardnessWeight = hardnessWeights[pass];
+                portfolioConfig.reflectTransit = quantityPass || rankedPass != 0
+                    ? config.spotRouteLns.reflectTransit : false;
+                portfolioConfig.spotPortfolioHardnessWeight = quantityPass
+                    ? 0 : hardnessWeights[rankedPass];
                 // Preserve the established route rankings in the first two
                 // passes. The later, wider passes diversify toward brands
                 // that only a few patrols can still reach today.
                 portfolioConfig.spotPortfolioReachabilityRarity =
                     config.spotRouteLns.spotPortfolioReachabilityRarity &&
-                    pass >= 2;
+                    !quantityPass && rankedPass >= 2;
                 const auto maxPortfolioWidth = setting.field.cellCount() >= 1024
                     ? std::size_t{512} : std::size_t{2048};
                 portfolioConfig.spotPortfolioBeamWidth = std::min<std::size_t>(
                     maxPortfolioWidth,
                     portfolioConfig.spotPortfolioBeamWidth >
-                            (maxPortfolioWidth >> pass)
+                            (maxPortfolioWidth >> std::min<std::size_t>(rankedPass, 3))
                         ? maxPortfolioWidth
-                        : portfolioConfig.spotPortfolioBeamWidth << pass);
+                        : portfolioConfig.spotPortfolioBeamWidth <<
+                            std::min<std::size_t>(rankedPass, 3));
                 portfolioConfig.spotPortfolioCandidatesPerDepth =
                     std::min<std::size_t>(64,
                         portfolioConfig.spotPortfolioCandidatesPerDepth >
-                                (std::size_t{64} >> pass)
+                                (std::size_t{64} >>
+                                    std::min<std::size_t>(rankedPass, 3))
                             ? std::size_t{64}
-                            : portfolioConfig.spotPortfolioCandidatesPerDepth << pass);
+                            : portfolioConfig.spotPortfolioCandidatesPerDepth <<
+                                std::min<std::size_t>(rankedPass, 3));
+                const auto passDeadline = quantityPass && limited
+                    ? Clock::now() + std::max(Clock::duration::zero(),
+                        portfolioDeadline - Clock::now()) / 3
+                    : portfolioDeadline;
                 const auto portfolio = searchSpotPortfolio(setting, matchState,
                     previousScore, result.plan, portfolioConfig,
-                    portfolioDeadline);
+                    passDeadline);
                 result.spotRouteLnsAttempts += portfolio.attempts;
                 result.spotRouteLnsImprovements += portfolio.improvements;
                 result.spotPortfolioMaxBrands = std::max(
@@ -3858,6 +3968,9 @@ inline BeamSearchResult brain1(
                     changed = true;
                     remember();
                 }
+                // Keep the established brand-first passes as independent
+                // neighborhoods. The quantity pass contributes a candidate
+                // but never suppresses a later route that scores better.
             }
         }
         auto localDeadline = legacyRouteDeadline;
@@ -3879,6 +3992,8 @@ inline BeamSearchResult brain1(
         // Use only time left by the established local search.  Running this
         // first reduced its node count under short wall-clock limits.
         if (config.spotRouteLns.terminalWaitFill &&
+            (!limited || budget >=
+                config.spotRouteLns.terminalFillMinimumBudgetMs) &&
             Clock::now() < localDeadline) {
             const auto filled = fillTerminalPatrolWaits(setting, matchState,
                 previousScore, result.plan, config.spotRouteLns,
@@ -3962,6 +4077,15 @@ inline BeamSearchResult brain1(
                 expandedConfig.nodesPerAttempt, 1600);
             expandedConfig.maxPatrols = std::max<std::size_t>(
                 expandedConfig.maxPatrols, 3);
+            // Problem instances favor different SA neighborhoods.  Make the
+            // independent pass explore the other distribution and RNG stream;
+            // the official lexicographic score still selects the result.
+            expandedConfig.arenaGuidedNeighborhoods =
+                !longSearch.udonAlns.arenaGuidedNeighborhoods;
+            expandedConfig.randomSeed ^=
+                UINT64_C(0xd1b54a32d192ed03);
+            expandedConfig.annealingWarmStart =
+                longSearch.udonAlns.warmStartPortfolio;
             // A proxy for tomorrow is not strong enough to justify changing
             // the endpoint in the extra quantity pass. Intermediate-day
             // alternatives must finish with exactly the incumbent positions
@@ -4019,6 +4143,29 @@ inline BeamSearchResult brain1(
             result.finalState = improved.finalState;
             changed = true;
             remember();
+        }
+    }
+    // 全日で広げる案は翌日の系列とSA乱数列に退行があった。
+    // 既存の最終日探索が完了した後、残時間だけで独立候補を比較する。
+    if (config.smallBoardFinalColumns && routeColumnsActive && finalDay &&
+        setting.field.width == 16 && setting.field.height == 16 &&
+        countBits(result.finalState.score.matchBrands) >= result.matchBrandUpperBound &&
+        countBits(result.finalState.dayBrands) >= result.dailyBrandUpperBound &&
+        Clock::now() < deadline) {
+        auto columnConfig = config.routeColumns;
+        columnConfig.labelWidth = std::max<std::size_t>(columnConfig.labelWidth, 48);
+        columnConfig.columnsPerAgent = std::max<std::size_t>(columnConfig.columnsPerAgent, 48);
+        columnConfig.maxMasterNodes = std::max<std::size_t>(columnConfig.maxMasterNodes, 250000);
+        const auto wide = searchRouteColumns(setting, matchState,
+            previousScore, result.plan, config.spotRouteLns, columnConfig,
+            deadline);
+        result.routeColumnsGenerated += wide.generated;
+        result.routeColumnsMasterNodes += wide.masterNodes;
+        result.routeColumnsImprovements += wide.improvements;
+        if (wide.improvements) {
+            result.plan = wide.plan;
+            result.finalState = wide.finalState;
+            changed = true;
         }
     }
     if (runDayBeam && Clock::now() < hardDeadline) {

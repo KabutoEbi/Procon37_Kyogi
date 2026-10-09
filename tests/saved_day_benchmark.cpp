@@ -8,8 +8,8 @@
 int main(int argc, char** argv) {
     using namespace benzen;
     try {
-        if (argc < 4 || argc > 6) {
-            std::cerr << "usage: saved_day_benchmark setting state checkpoint-or-dash [time-ms] [coordinated-0-or-1]\n";
+        if (argc < 4 || argc > 7) {
+            std::cerr << "usage: saved_day_benchmark setting state checkpoint-or-dash [time-ms] [coordinated-0-or-1] [small-board-quantity-first-0-or-1]\n";
             return 2;
         }
         const auto setting = readMatchSettingJson(argv[1]);
@@ -30,6 +30,13 @@ int main(int argc, char** argv) {
             const auto mode = application_detail::parseInteger<int>(argv[5], "coordinated");
             if (mode != 0 && mode != 1) throw std::invalid_argument("expected 0 or 1");
             options.beam.coordinatedRefinement = mode != 0;
+        }
+        if (argc > 6) {
+            const auto mode = application_detail::parseInteger<int>(
+                argv[6], "small-board-quantity-first");
+            if (mode != 0 && mode != 1)
+                throw std::invalid_argument("expected 0 or 1");
+            options.beam.smallBoardQuantityFirstRoutes = mode != 0;
         }
         const auto config = options.beamFor(setting, state, options.beam);
         const auto result = solveDay(setting, state, score, config);

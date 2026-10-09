@@ -168,6 +168,20 @@ void checkBeamMissIsRepaired() {
     assert(repaired.brandOptimal && countBits(repaired.finalState.dayBrands) == 3);
     assert(brandScore(repaired.finalState) == enumeratePlans(s, ms, {}));
     assert(simulateDay(s, ms, repaired.plan).state == repaired.finalState);
+
+    // A bounded first pass must use the remaining brand-search time instead
+    // of handing an unresolved upper bound to quantity-only refiners.
+    cfg.timeLimitMs = 1000;
+    cfg.safetyMarginMs = 0;
+    cfg.brandSearchNodeLimit = 1;
+    cfg.useBrandRepair = false;
+    cfg.useSpotRouteLns = false;
+    cfg.useUdonAlns = false;
+    const auto rescued = brain1(s, ms, {}, cfg);
+    assert(rescued.success && rescued.brandOptimal);
+    assert(rescued.brandSearchExpanded > cfg.brandSearchNodeLimit);
+    assert(brandScore(rescued.finalState) == enumeratePlans(s, ms, {}));
+    assert(simulateDay(s, ms, rescued.plan).state == rescued.finalState);
 }
 }  // namespace
 

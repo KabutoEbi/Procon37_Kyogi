@@ -76,7 +76,8 @@ if(PROCON_BUILD_TESTS)
             "${Python3_EXECUTABLE}" -m unittest -v
             tests/visualizer_test.py
             tests/recovery_test.py
-            tests/visualizer_runtime_test.py)
+            tests/visualizer_runtime_test.py
+            tests/small_board_history_test.py)
     set_tests_properties(python_regression PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
