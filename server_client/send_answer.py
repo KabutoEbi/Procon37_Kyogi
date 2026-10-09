@@ -41,15 +41,25 @@ def send(
 ) -> int | None:
     payload = load_payload(kind, payload_path)
     endpoint = "/agent" if kind == "agent" else "/"
-    response, raw, status = request_json(
-        base_url,
-        token,
-        endpoint,
-        method="POST",
-        payload=payload,
-        timeout=timeout,
-        deadline=deadline,
-    )
+    request_raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    save_raw_log(log_dir, f"post-{kind}-request", request_raw)
+    try:
+        response, raw, status = request_json(
+            base_url,
+            token,
+            endpoint,
+            method="POST",
+            payload=payload,
+            timeout=timeout,
+            deadline=deadline,
+        )
+    except ApiError as error:
+        if error.body:
+            save_raw_log(
+                log_dir, f"post-{kind}-error-response",
+                error.body.encode("utf-8", errors="replace"),
+            )
+        raise
     save_raw_log(log_dir, f"post-{kind}-response", raw)
     if status != 200:
         raise ApiError(status, f"unexpected HTTP status {status}")

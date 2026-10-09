@@ -11,9 +11,11 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "visualizer"))
-from backend import (AutomaticMatch, Workflow, WorkflowError, ConnectionConfig,
-                     SearchParameters, ApiError, file_hash, read_json)
+from backend import (AutomaticMatch, Workflow, WorkflowError, Paused, ConnectionConfig,
+                     SearchParameters, ApiError, agent_selection_seconds,
+                     file_hash, read_json)
 import get_problem
+import send_answer
 
 
 class RecoveryTest(unittest.TestCase):
@@ -32,6 +34,84 @@ class RecoveryTest(unittest.TestCase):
         runner = AutomaticMatch(w, lambda *_: None)
         runner.phase, runner.days, runner.state = "send_answer", 1, state
         return w, runner, answer, score, state, setting
+
+    def test_agent_selection_deadline_uses_first_fetch_and_board_tier(self):
+        self.assertEqual(agent_selection_seconds({"map": {"width": 16}}), 60)
+        self.assertEqual(agent_selection_seconds({"map": {"width": 24}}), 90)
+        self.assertEqual(agent_selection_seconds({"map": {"width": 32}}), 120)
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            output = work / "setting.json"
+            w = Workflow(ConnectionConfig("http://example", "secret"), ROOT / "main", work)
+            value = {"map": {"width": 24}, "startsAt": 0}
+
+            def fetch_setting(*args, **kwargs):
+                args[3].write_text(json.dumps(value))
+                return value
+
+            with mock.patch("backend.fetch", side_effect=fetch_setting), \
+                 mock.patch("backend.time.time", side_effect=(100.0, 200.0)):
+                w.fetch_setting(output)
+                first = read_json(work / "setting-received.json")
+                w.fetch_setting(output)
+                second = read_json(work / "setting-received.json")
+            self.assertEqual(first["receivedAt"], 100.0)
+            self.assertEqual(first["selectionEndsAt"], 190.0)
+            self.assertEqual(second, first)
+
+    def test_setting_button_waits_until_problem_is_published(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            output = work / "setting.json"
+            w = Workflow(ConnectionConfig("http://example", "secret"), ROOT / "main", work)
+            attempts = 0
+
+            def fetch_after_publication(*args, **kwargs):
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise ApiError(403, "not published")
+                value = {"map": {"width": 16}, "startsAt": 0}
+                args[3].write_text(json.dumps(value))
+                return value
+
+            with mock.patch("backend.fetch", side_effect=fetch_after_publication), \
+                 mock.patch.object(w.stop, "wait") as wait:
+                self.assertEqual(w.wait_for_setting(output), output)
+            self.assertEqual(attempts, 3)
+            self.assertEqual(wait.call_count, 2)
+
+            w.stop.set()
+            with mock.patch("backend.fetch") as fetch:
+                with self.assertRaises(Paused):
+                    w.wait_for_setting(output)
+                fetch.assert_not_called()
+
+    def test_accepted_checkpoint_is_shared_and_latest_revision_is_imported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work, shared = root / "work", root / "shared"
+            work.mkdir()
+            shared.mkdir()
+            _, _, answer, score, state, setting = self.prepare(work)
+            w = Workflow(
+                ConnectionConfig("http://example", "secret", 2),
+                ROOT / "main", work, shared_dir=shared,
+            )
+            with mock.patch("backend.send", return_value=7):
+                _, _, checkpoint = w.send_answer(
+                    0, answer, score, state, setting
+                )
+            packages = list(shared.glob("checkpoint-*-day1-revision7.json"))
+            self.assertEqual(len(packages), 1)
+
+            checkpoint.write_text(json.dumps({"nextDay": 1, "totalUdon": 9}))
+            w.publish_checkpoint(checkpoint, setting, 8)
+            imported = root / "imported-score.json"
+            source, revision = w.import_checkpoint(1, setting, imported)
+            self.assertEqual(revision, 8)
+            self.assertIn("revision8", source.name)
+            self.assertEqual(read_json(imported)["totalUdon"], 9)
 
     def test_unknown_post_restart_resends_identical_and_commits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -177,6 +257,103 @@ class RecoveryTest(unittest.TestCase):
             self.assertEqual(margin, 1000)
             self.assertEqual(limit, 30000)
             self.assertLess(limit - margin, 30000)
+
+    def test_manual_follower_keeps_five_second_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            w = Workflow(
+                ConnectionConfig("http://example", "secret", 10),
+                Path(sys.executable),
+                Path(directory),
+                SearchParameters(time_limit_ms=60000, safety_margin_ms=5000),
+            )
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ("", "")
+            with mock.patch("backend.subprocess.Popen", return_value=process):
+                result = w._run(
+                    [], ends_at=time.time() + 60, day_seconds=60,
+                    reserve_network_timeout=False,
+                )
+            command = result.command
+            margin = int(command[command.index("--safety-margin-ms") + 1])
+            limit = int(command[command.index("--time-limit-ms") + 1])
+            self.assertEqual(margin, 5000)
+            self.assertEqual(limit - margin, 55000)
+
+    def test_equal_score_replacement_is_not_sent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            w, _, answer, score, state, setting = self.prepare(work)
+            score.write_text(json.dumps({
+                "nextDay": 1, "matchBrands": 3,
+                "sumOfDailyBrandCounts": 3, "totalUdon": 10,
+            }))
+            receipt_path = work / "prepared-answer.json"
+            receipt = read_json(receipt_path)
+            receipt["score"] = file_hash(score)
+            receipt_path.write_text(json.dumps(receipt))
+            with mock.patch("backend.send", return_value=1):
+                w.send_answer(0, answer, score, state, setting)
+
+            answer.write_text("[[-2]]")
+            receipt["answer"] = file_hash(answer)
+            receipt_path.write_text(json.dumps(receipt))
+            with mock.patch("backend.send") as post:
+                with self.assertRaisesRegex(WorkflowError, "タイブレーク"):
+                    w.send_answer(0, answer, score, state, setting)
+                post.assert_not_called()
+            self.assertEqual(read_json(work / "submission-day0.json")["revision"], 1)
+
+    def test_wait_and_fetch_does_not_publish_wrong_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "state.json"
+            output.write_text('{"day":-1}')
+            days = iter((0, 1))
+
+            def fetch_old_then_expected(*args, **kwargs):
+                value = {"day": next(days)}
+                args[3].write_text(json.dumps(value))
+                return value
+
+            with mock.patch("get_problem.fetch", side_effect=fetch_old_then_expected), \
+                 mock.patch("get_problem.time.sleep"):
+                value = get_problem.wait_and_fetch(
+                    "http://example", "secret", "state", output,
+                    expected_day=1, wait_seconds=1, interval=1, timeout=1,
+                )
+            self.assertEqual(value["day"], 1)
+            self.assertEqual(read_json(output)["day"], 1)
+
+            def fetch_future(*args, **kwargs):
+                value = {"day": 2}
+                args[3].write_text(json.dumps(value))
+                return value
+
+            with mock.patch("get_problem.fetch", side_effect=fetch_future):
+                with self.assertRaisesRegex(ValueError, "passed expected"):
+                    get_problem.wait_and_fetch(
+                        "http://example", "secret", "state", output,
+                        expected_day=0, wait_seconds=1, interval=1, timeout=1,
+                    )
+            self.assertEqual(read_json(output)["day"], 1)
+
+    def test_post_audit_logs_request_and_error_response(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root / "answer.json"
+            log_dir = root / "logs"
+            payload.write_text("[[-1]]")
+            with mock.patch(
+                "send_answer.request_json",
+                side_effect=ApiError(400, "bad", '{"code":"bad"}'),
+            ):
+                with self.assertRaises(ApiError):
+                    send_answer.send(
+                        "http://example", "secret", "action", payload,
+                        log_dir=log_dir,
+                    )
+            names = [path.name for path in log_dir.iterdir()]
+            self.assertTrue(any("post-action-request" in name for name in names))
+            self.assertTrue(any("post-action-error-response" in name for name in names))
 
     def test_rate_limit_wait_rechecks_deadline_before_post(self):
         with mock.patch("get_problem.time.monotonic", return_value=0), \

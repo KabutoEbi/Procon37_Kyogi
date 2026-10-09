@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 import threading
 import subprocess
@@ -290,10 +291,12 @@ class BackendTest(unittest.TestCase):
                 Path(sys.executable), work,
             )
             completed = mock.Mock(output="")
+            started = time.time()
             with mock.patch.object(workflow, "_run", return_value=completed) as run:
                 self.assertIs(workflow.select_agents(setting, agents), completed)
             self.assertTrue(run.call_args.kwargs["reserve_for_submission"])
-            self.assertEqual(run.call_args.kwargs["ends_at"], 0)
+            self.assertGreater(run.call_args.kwargs["ends_at"], started)
+            self.assertLessEqual(run.call_args.kwargs["ends_at"], started + 61)
 
     def test_map_acquisition_totals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

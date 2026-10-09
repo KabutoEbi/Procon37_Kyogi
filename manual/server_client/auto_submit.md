@@ -36,7 +36,7 @@ python3 server_client/auto_submit.py \
   --solver ./main \
   --work-dir runtime \
   --wait 3600 \
-  --interval 0.5 \
+  --interval 1 \
   --timeout 10
 ```
 

@@ -16,7 +16,7 @@ from runtime import ensure_runtime
 if __name__ == "__main__":
     ensure_runtime()
 
-from app import SolverGUI
+from app import SolverGUI, TEAM_ROLE_LABELS
 from backend import (
     ConnectionConfig,
     CommandResult,
@@ -42,6 +42,17 @@ class GUITest(unittest.TestCase):
             self.assertTrue(gui.settings_button.winfo_ismapped())
             self.assertTrue(gui.simple_clear_button.winfo_ismapped())
             self.assertTrue(gui.automatic_match_button.winfo_ismapped())
+            gui.team_role_var.set(TEAM_ROLE_LABELS["lead"])
+            gui._team_role_changed()
+            self.assertEqual(str(gui.automatic_match_button["state"]), "normal")
+            self.assertIn("担当1", gui.automatic_match_button.cget("text"))
+            self.assertTrue(gui.prepare_button.cget("text").startswith("1b"))
+            gui.team_role_var.set(TEAM_ROLE_LABELS["middle"])
+            gui._team_role_changed()
+            self.assertEqual(str(gui.automatic_match_button["state"]), "disabled")
+            self.assertTrue(gui.prepare_button.cget("text").startswith("1a"))
+            gui.team_role_var.set(TEAM_ROLE_LABELS["normal"])
+            gui._team_role_changed()
             self.assertFalse(gui.settings_window.winfo_viewable())
             gui._show_settings_window()
             gui.update()
@@ -121,7 +132,12 @@ class GUITest(unittest.TestCase):
                     Path(args[2]).write_text("[0,0,0,0]")
                 else:
                     (workflow.work_dir / "answer.json").write_text(answer_text)
-                    (workflow.work_dir / "score-next.json").write_text(json.dumps({"nextDay": day + 1}))
+                    (workflow.work_dir / "score-next.json").write_text(json.dumps({
+                        "nextDay": day + 1,
+                        "matchBrands": 15,
+                        "sumOfDailyBrandCounts": 6,
+                        "totalUdon": 1 + posted.count("action"),
+                    }))
                     (workflow.work_dir / "result-state.json").write_text(json.dumps({
                         "day": day,
                         "step": setting["daySteps"][day],
@@ -254,7 +270,10 @@ result
                 first_spot = gui.spot_table.item(gui.spot_table.get_children()[0], "values")
                 self.assertEqual(first_agent[1], "P")
                 self.assertEqual(first_agent[3], "17/40")
-                self.assertEqual(first_agent[4], "40/40")
+                self.assertEqual(
+                    first_agent[4],
+                    f"{setting['daySteps'][0]}/{setting['daySteps'][0]}",
+                )
                 self.assertEqual(str(first_spot[3]), f"0/{setting['spots'][0]['stocks']}")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 self.assertEqual(gui.search_result_vars["status"].get(), "時間上限")
@@ -278,6 +297,7 @@ result
                 self.assertEqual(
                     gui.search_result_vars["total_brands"].get(), f"6/{match_brands}系列"
                 )
+                self.assertEqual(gui.match_score_var.get(), "4 / 6 / 25")
                 self.assertEqual(
                     gui.log_text.get("1.0", "end").count("試合開始予定"),
                     1,
@@ -324,7 +344,7 @@ result
                 gui._advance_finished_day()
                 day = 1
                 self.assertEqual(gui.day_var.get(), 2)
-                self.assertEqual(gui.solve_day_button.cget("text"), "2  当日状態を取得・探索")
+                self.assertEqual(gui.solve_day_button.cget("text"), "2  状態公開待ち・取得・探索")
                 self.assertTrue(gui.map_canvas.find_withtag("answer-route"))
                 gui.mode_var.set("auto")
                 gui._mode_changed()
@@ -374,7 +394,7 @@ result
                 gui.url_var.set("http://another-match")
                 self.assertFalse(gui._daily_inputs)
                 self.assertFalse(gui._day_deadlines)
-                self.assertEqual(gui.solve_day_button.cget("text"), "2  当日状態を取得・探索")
+                self.assertEqual(gui.solve_day_button.cget("text"), "2  状態公開待ち・取得・探索")
             finally:
                 gui.destroy()
 

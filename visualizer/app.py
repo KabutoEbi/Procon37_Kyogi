@@ -324,12 +324,14 @@ class SolverGUI(tk.Tk):
         self.timeout_var = tk.StringVar(value=f"{DEFAULT_TIMEOUT_SECONDS:g}")
         self.solver_var = tk.StringVar(value=str(PROJECT_ROOT / "main"))
         self.work_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime"))
+        self.shared_var = tk.StringVar()
         self.setting_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/setting.json"))
         self.state_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/state-day0.json"))
         self.score_var = tk.StringVar()
         # GUI表示は1始まり。API・JSON・ファイル名へ渡す直前に0始まりへ戻す。
         self.day_var = tk.IntVar(value=1)
         self.status_var = tk.StringVar(value="準備完了")
+        self.match_score_var = tk.StringVar(value="- / - / -")
         self.match_clock_vars = {
             "status": tk.StringVar(value="0/0日 時刻待ち"),
             "phase": tk.StringVar(value="時刻未確定"),
@@ -350,7 +352,6 @@ class SolverGUI(tk.Tk):
             "total_count": tk.StringVar(value="-"),
             "daily_brands": tk.StringVar(value="-"),
             "total_brands": tk.StringVar(value="-"),
-            "official_score": tk.StringVar(value="-"),
         }
         self.simple_config_var = tk.StringVar(value=str(DEFAULT_SIMPLE_CONFIG))
         self.simple_visible_var = tk.BooleanVar(value=False)
@@ -364,7 +365,10 @@ class SolverGUI(tk.Tk):
         self._reload_simple_teams(show_dialog=False)
         self._reload_env(show_dialog=False)
         self.day_var.trace_add("write", lambda *_: self._day_changed())
-        for variable in (self.url_var, self.token_var, self.work_var, self.setting_var):
+        for variable in (
+            self.url_var, self.token_var, self.work_var,
+            self.shared_var, self.setting_var,
+        ):
             variable.trace_add("write", lambda *_: self._reset_daily_inputs())
         self._day_changed()
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -482,6 +486,18 @@ class SolverGUI(tk.Tk):
             anchor=tk.CENTER, font=("TkDefaultFont", 18, "bold"),
         ).pack(fill=tk.X)
 
+        score = ttk.Frame(mode, width=260, height=52, padding=(0, 0, 10, 0))
+        self.match_score_frame = score
+        score.pack(side=tk.RIGHT)
+        score.pack_propagate(False)
+        ttk.Label(
+            score, text="探索後　系列数 / 総系列数 / 総玉数", anchor=tk.CENTER,
+        ).pack(fill=tk.X)
+        ttk.Label(
+            score, textvariable=self.match_score_var,
+            anchor=tk.CENTER, font=("TkDefaultFont", 14, "bold"),
+        ).pack(fill=tk.X)
+
         content = ttk.Panedwindow(self, orient=tk.VERTICAL)
         content.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
         self.content_pane = content
@@ -491,6 +507,7 @@ class SolverGUI(tk.Tk):
 
         control_panel = ttk.Frame(main, width=350)
         self.control_panel = control_panel
+        control_panel.grid_propagate(False)
         control_panel.columnconfigure(0, weight=1)
         controls = ttk.Frame(control_panel, padding=8)
         controls.grid(row=0, column=0, sticky=tk.NSEW)
@@ -514,7 +531,7 @@ class SolverGUI(tk.Tk):
         window = tk.Toplevel(self)
         self.settings_window = window
         window.title("Procon37 実行設定・使用ファイル")
-        window.geometry("1000x480")
+        window.geometry("1000x520")
         window.minsize(820, 440)
         window.protocol("WM_DELETE_WINDOW", self._hide_settings_window)
 
@@ -555,6 +572,13 @@ class SolverGUI(tk.Tk):
         check = ttk.Button(config, text="通信確認（手動）", command=self._check_connection)
         check.grid(row=2, column=5, sticky=tk.E)
         self._action_buttons.append(check)
+        self._path_row(
+            config, 3, 0, "共有フォルダ", self.shared_var,
+            self._choose_shared_dir,
+        )
+        ttk.Label(
+            config, text="有線LAN共有フォルダ（3人運用では必須）"
+        ).grid(row=3, column=3, columnspan=3, sticky=tk.W, padx=(12, 0))
         self._build_file_panel(config)
         self._build_random_setting_panel(config)
         window.withdraw()
@@ -577,7 +601,7 @@ class SolverGUI(tk.Tk):
     def _build_file_panel(self, parent: ttk.LabelFrame) -> None:
         files = ttk.LabelFrame(parent, text="使用ファイル", padding=6)
         self.files_frame = files
-        files.grid(row=3, column=0, columnspan=6, sticky=tk.EW, pady=(8, 0))
+        files.grid(row=4, column=0, columnspan=6, sticky=tk.EW, pady=(8, 0))
         files.columnconfigure(1, weight=1)
         files.columnconfigure(4, weight=1)
         self._path_row(files, 0, 0, "setting", self.setting_var, self._choose_setting)
@@ -593,7 +617,7 @@ class SolverGUI(tk.Tk):
     def _build_random_setting_panel(self, parent: ttk.LabelFrame) -> None:
         frame = ttk.LabelFrame(parent, text="ランダム設定（本選3区分のみ）", padding=6)
         self.random_setting_frame = frame
-        frame.grid(row=4, column=0, columnspan=6, sticky=tk.EW, pady=(8, 0))
+        frame.grid(row=5, column=0, columnspan=6, sticky=tk.EW, pady=(8, 0))
         fields = [
             ("width", "幅"), ("height", "高さ"), ("agents", "エージェント"),
             ("spots", "スポット"), ("brands", "系列"), ("days", "日数"),
@@ -700,11 +724,7 @@ class SolverGUI(tk.Tk):
             row=0, column=0, sticky=tk.W, pady=(0, 8)
         )
 
-        actions = [
-            ("0  mainをビルド", self._build_solver, False),
-            ("1a 設定のみ取得（追走端末）", self._fetch_setting_only, False),
-            ("1b 設定取得・種別選択・送信", self._prepare_match, True),
-        ]
+        actions = [("0  mainをビルド", self._build_solver, False)]
         row = 1
         for text, command, primary in actions:
             button = ttk.Button(
@@ -716,6 +736,16 @@ class SolverGUI(tk.Tk):
             button.grid(row=row, column=0, sticky=tk.EW, pady=3)
             self._action_buttons.append(button)
             row += 1
+
+        self.prepare_button = ttk.Button(
+            parent,
+            text="1b 問題公開待ち・設定取得・種別選択・送信",
+            command=self._prepare_for_role,
+            style="Primary.TButton",
+        )
+        self.prepare_button.grid(row=row, column=0, sticky=tk.EW, pady=3)
+        self._action_buttons.append(self.prepare_button)
+        row += 1
 
         ttk.Separator(parent).grid(row=row, column=0, sticky=tk.EW, pady=8)
         row += 1
@@ -769,7 +799,6 @@ class SolverGUI(tk.Tk):
             ("total_count", "全日程合計獲得数"),
             ("daily_brands", "当日獲得系列"),
             ("total_brands", "日別系列累計"),
-            ("official_score", "口頭比較（試合系列 / 日別系列累計 / 総獲得数）"),
         ]):
             ttk.Label(result, text=label).grid(
                 row=result_row, column=0, sticky=tk.W, pady=2
@@ -924,12 +953,19 @@ class SolverGUI(tk.Tk):
             parameters.arguments()
         except ValueError as error:
             raise WorkflowError("timeoutは数値、探索パラメータは整数で指定してください") from error
+        shared_text = self.shared_var.get().strip()
+        if self._team_role() != "normal" and not shared_text:
+            raise WorkflowError("3人運用では共有フォルダを設定してください")
+        shared_dir = Path(shared_text) if shared_text else None
+        if shared_dir is not None and not shared_dir.expanduser().is_dir():
+            raise WorkflowError(f"共有フォルダを開けません: {shared_dir}")
         return Workflow(
             ConnectionConfig(self.url_var.get().strip(), self.token_var.get(), timeout),
             Path(self.solver_var.get()),
             Path(self.work_var.get()),
             parameters,
             self._stop,
+            shared_dir,
         )
 
     def _random_setting_parameters(self) -> RandomSettingParameters:
@@ -1070,6 +1106,7 @@ class SolverGUI(tk.Tk):
     def _mode_changed(self) -> None:
         role = self._team_role()
         team_mode = role != "normal"
+        follower_mode = role in ("middle", "long")
         if role == "lead":
             self.mode_var.set("auto")
         elif team_mode:
@@ -1083,8 +1120,16 @@ class SolverGUI(tk.Tk):
         )
         if hasattr(self, "automatic_match_button"):
             self.automatic_match_button.configure(
-                text="3人運用は日次ボタンを使用" if team_mode else "試合終了まで全自動",
-                state=tk.DISABLED if self._busy or team_mode else tk.NORMAL,
+                text=("担当1：試合終了まで全自動" if role == "lead" else
+                      "追走担当は日次ボタンを使用" if follower_mode else
+                      "試合終了まで全自動"),
+                state=tk.DISABLED if self._busy or follower_mode else tk.NORMAL,
+            )
+        if hasattr(self, "prepare_button"):
+            self.prepare_button.configure(
+                text=("1a 問題公開待ち・設定のみ取得（追走端末）"
+                      if follower_mode else
+                      "1b 問題公開待ち・設定取得・種別選択・送信")
             )
 
     def _team_role(self) -> str:
@@ -1411,6 +1456,12 @@ class SolverGUI(tk.Tk):
         if workflow is not None:
             self._run_task("通信確認", workflow.check_connection, self._log)
 
+    def _prepare_for_role(self) -> None:
+        if self._team_role() in ("middle", "long"):
+            self._fetch_setting_only()
+        else:
+            self._prepare_match()
+
     def _prepare_match(self) -> None:
         workflow = self._workflow_or_dialog()
         if workflow is None:
@@ -1419,14 +1470,14 @@ class SolverGUI(tk.Tk):
         agents = self._work_path("agents.json")
 
         def prepare() -> CommandResult:
-            workflow.fetch_setting(setting)
+            workflow.wait_for_setting(setting)
             self._messages.put(("event", "setting", setting))
             result = workflow.select_agents(setting, agents)
             self._messages.put(("event", "agents", agents))
             workflow.send_agents(agents, setting)
             return result
 
-        self._run_task("設定取得・種別選択・送信", prepare)
+        self._run_task("問題公開待ち・設定取得・種別選択・送信", prepare)
 
     def _fetch_setting_only(self) -> None:
         """追走端末用。担当1が確定するエージェント種別を上書きしない。"""
@@ -1440,8 +1491,8 @@ class SolverGUI(tk.Tk):
             self._show_json(setting)
 
         self._run_task(
-            "設定のみ取得",
-            lambda: workflow.fetch_setting(setting),
+            "問題公開待ち・設定のみ取得",
+            lambda: workflow.wait_for_setting(setting),
             completed,
         )
 
@@ -1679,6 +1730,7 @@ class SolverGUI(tk.Tk):
             source.work_dir,
             source.parameters,
             stop,
+            source.shared_dir,
         )
         state = workflow.work_dir / f"state-day{next_day}.json"
         checkpoint = workflow.work_dir / f"score-day{next_day}.json"
@@ -1688,6 +1740,15 @@ class SolverGUI(tk.Tk):
         def worker() -> None:
             try:
                 workflow.wait_for_state(next_day, state)
+                if workflow.shared_dir is not None:
+                    source_path, revision = workflow.import_checkpoint(
+                        next_day, Path(self.setting_var.get()), checkpoint
+                    )
+                    self._messages.put((
+                        "event", "log",
+                        f"✓ 共有チェックポイント取得 revision={revision}: "
+                        f"{source_path.name}",
+                    ))
                 digest = file_hash(state)
                 self._messages.put((
                     "event", "day_state",
@@ -1715,7 +1776,8 @@ class SolverGUI(tk.Tk):
         except (WorkflowError, tk.TclError):
             finished = False
         self.solve_day_button.configure(
-            text="全日程終了" if finished else ("2  探索" if cached else "2  当日状態を取得・探索"),
+            text=("全日程終了" if finished else
+                  ("2  探索" if cached else "2  状態公開待ち・取得・探索")),
             state=tk.DISABLED if self._busy or finished else tk.NORMAL,
         )
 
@@ -1757,15 +1819,20 @@ class SolverGUI(tk.Tk):
             messagebox.showerror("当日状態", str(error), parent=self)
             return
         auto_send = self.mode_var.get() == "auto"
+        reserve_network_timeout = self._team_role() not in ("middle", "long")
         self._begin_search_result(f"day={day + 1}")
         setting = Path(self.setting_var.get())
         state = self._work_path(f"state-day{day}.json")
         checkpoint: Path | None = None
         if day > 0:
-            score_text = self.score_var.get().strip()
+            score_text = (
+                str(self._work_path(f"score-day{day}.json"))
+                if workflow.shared_dir is not None
+                else self.score_var.get().strip()
+            )
             if not score_text:
                 score_text = str(self._work_path(f"score-day{day}.json"))
-                self.score_var.set(score_text)
+            self.score_var.set(score_text)
             checkpoint = Path(score_text)
 
         if cached is not None:
@@ -1775,11 +1842,23 @@ class SolverGUI(tk.Tk):
 
         def fetch_and_solve() -> CommandResult:
             if cached is None:
-                workflow.fetch_state(day, state)
+                workflow.wait_for_state(day, state)
+                if day > 0 and workflow.shared_dir is not None:
+                    source_path, revision = workflow.import_checkpoint(
+                        day, setting, checkpoint
+                    )
+                    self._messages.put((
+                        "event", "log",
+                        f"✓ 共有チェックポイント取得 revision={revision}: "
+                        f"{source_path.name}",
+                    ))
                 self._messages.put(("event", "day_state",
                                     (context, state, checkpoint, file_hash(state))))
             self._messages.put(("event", "solve_start", day))
-            return workflow.solve_day(setting, state, checkpoint)
+            return workflow.solve_day(
+                setting, state, checkpoint,
+                reserve_network_timeout=reserve_network_timeout,
+            )
 
         def completed(result: CommandResult) -> None:
             self.state_var.set(str(state))
@@ -1804,7 +1883,7 @@ class SolverGUI(tk.Tk):
                 self._start_next_day_prefetch(day)
 
         self._run_task(
-            f"day={day + 1} " + ("探索" if cached else "状態取得・探索"),
+            f"day={day + 1} " + ("探索" if cached else "状態公開待ち・取得・探索"),
             fetch_and_solve,
             completed,
             self._search_result_failed,
@@ -1888,7 +1967,8 @@ class SolverGUI(tk.Tk):
         if not messagebox.askyesno(
             "ベスト解の再送確認",
             f"day={day + 1} の受理済み回答をもう一度送信します。\n\n{answer}\n\n"
-            "3人の候補を比較し、この端末の回答が最良であることを確認してください。",
+            "3人の候補を比較し、この端末の回答が最良であることを確認してください。\n"
+            "再送時刻がその日の最後の有効回答時刻になり、第4タイブレークは悪化します。",
             parent=self,
         ):
             return
@@ -2009,6 +2089,7 @@ class SolverGUI(tk.Tk):
         self.map_canvas.delete("answer-route")
 
     def _clear_search_result(self) -> None:
+        self.match_score_var.set("- / - / -")
         for key, value in {
             "status": "未実行",
             "target": "-",
@@ -2018,7 +2099,6 @@ class SolverGUI(tk.Tk):
             "total_count": "-",
             "daily_brands": "-",
             "total_brands": "-",
-            "official_score": "-",
         }.items():
             self.search_result_vars[key].set(value)
 
@@ -2080,9 +2160,7 @@ class SolverGUI(tk.Tk):
         self.search_result_vars["total_brands"].set(
             f"{summary.total_daily_brands:,}/{total_brand_denominator}系列"
         )
-        self.search_result_vars["official_score"].set(
-            official_score_text(summary)
-        )
+        self.match_score_var.set(official_score_text(summary))
 
     def _show_answer_route(
         self, path: Path, *, source_snapshot: MapSnapshot | None = None
@@ -2323,6 +2401,16 @@ class SolverGUI(tk.Tk):
         path = filedialog.askdirectory(parent=self, initialdir=PROJECT_ROOT, title="作業フォルダを選択")
         if path:
             self.work_var.set(path)
+
+    def _choose_shared_dir(self) -> None:
+        initial = self.shared_var.get().strip() or str(PROJECT_ROOT)
+        path = filedialog.askdirectory(
+            parent=self,
+            initialdir=initial,
+            title="共有フォルダを選択",
+        )
+        if path:
+            self.shared_var.set(path)
 
     def _choose_setting(self) -> None:
         self._choose_file(
