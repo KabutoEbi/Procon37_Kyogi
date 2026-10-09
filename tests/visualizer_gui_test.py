@@ -50,8 +50,9 @@ class GUITest(unittest.TestCase):
             self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "0")
             self.assertIn("短時間ビーム", gui.build_solver_button.cget("text"))
             self.assertIsNone(gui._workflow().shared_dir)
-            self.assertTrue(gui.share_copy_button.winfo_ismapped())
-            self.assertTrue(gui.share_paste_button.winfo_ismapped())
+            self.assertTrue(gui.spoken_checkpoint_entry.winfo_ismapped())
+            self.assertTrue(gui.spoken_show_button.winfo_ismapped())
+            self.assertTrue(gui.spoken_import_button.winfo_ismapped())
             self.assertEqual(str(gui.automatic_match_button["state"]), "normal")
             self.assertIn("担当1", gui.automatic_match_button.cget("text"))
             self.assertTrue(gui.prepare_button.cget("text").startswith("1b"))
@@ -348,10 +349,16 @@ result
                      mock.patch("backend.send", side_effect=send):
                     gui._send_answer()
                     drain(expected_posts=2)
-                self.assertTrue(gui.clipboard_get().startswith("P37C1:"))
-                gui.share_paste_button.invoke()
+                spoken = gui.spoken_checkpoint_var.get()
+                self.assertEqual(len(spoken.split()), 3)
+                gui.day_var.set(2)
+                gui.spoken_import_button.invoke()
                 gui.update()
-                self.assertTrue((Path(directory) / "checkpoint-code-day1.json").is_file())
+                self.assertEqual(
+                    json.loads((Path(directory) / "score-day1.json").read_text())["nextDay"],
+                    1,
+                )
+                gui.day_var.set(1)
                 self.assertEqual(gui.day_var.get(), 1)
                 self.assertEqual(gui.solve_day_button.cget("text"), "2  探索")
                 # 同じ日の再探索はGETなし。自動モードでは新しい回答を送信する。

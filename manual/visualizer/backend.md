@@ -29,7 +29,8 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | `wait_for_state()` | 未公開の当日状態を待機し、前日の応答は再試行、期待日を越えた応答は拒否 |
 | `select_agents()` / `solve_day()` | C++の`select` / `solve`モードを実行 |
 | `send_agents()` / `send_answer()` | 種別・日次回答をPOST |
-| `publish_checkpoint()` / `import_checkpoint()` | 受理済み得点を共有し、次日に最大revisionを取り込む |
+| `import_spoken_checkpoint()` | 口頭で受けた3整数へ対象day由来の`nextDay`を加え、次日チェックポイントとして保存 |
+| `publish_checkpoint()` / `import_checkpoint()` | 旧共有フォルダ方式の互換用API |
 | `solve_local()` | 通信せずサンプル設定を探索し、`result-state.json`の生成を確認 |
 
 設定取得時刻と設定ハッシュを`setting-received.json`へ保存し、盤面幅に対応する公式の種別選択時間（60／90／120秒）から受付終了を求める。同じ設定を再取得しても時刻を延長しない。`startsAt`がそれより早い場合だけ上限として使う。種別選択後は設定・種別・接続先・受付終了時刻を`selected-agents.json`へ保存する。全自動の既定は6候補を試走し、通信timeout・時計ずれ・保存処理の余裕を除いて受付終了直前まで探索する。日次探索後は設定・状態・回答・得点候補・締切・接続先を`prepared-answer.json`へ保存する。送信前に一致を検証し、回答受理後だけ`score-dayN.json`を確定する。
@@ -91,9 +92,11 @@ finally:
 
 通常モードと担当1は全自動を最終日まで利用できる。担当1は問題公開待ちから種別選択・送信、全日の探索・回答送信までを実行する。担当2・3だけGUI側で全自動起動を無効化し、手動送信を個別操作として実行する。担当2・3の次日状態先行取得は全自動とは独立したバックグラウンド処理である。
 
-`Workflow.export_checkpoint_code()`は、設定hash・接続先とTOKENから作るチーム識別hash・`nextDay`・revision・得点チェックポイントをJSON化し、TOKENを鍵にHMAC-SHA256署名してURL-safe Base64の`P37C1:`コードとして返す。`import_checkpoint_code()`は署名・各hash・内容を検証し、ローカルの受理済みrevisionより古いコード、以前に取り込んだrevisionより古いコード、同一revisionで内容が異なるコードを拒否して、`score-dayN.json`と取込メタデータを原子的に保存する。TOKENそのものと回答の行動列はコードへ含めない。
+現在のGUIは口頭引継ぎを使用する。`parse_spoken_checkpoint()`は空白区切りの`系列mask 玉数 日別系列累計`を3個の10進整数として検査し、GUIで選んだ対象dayから得た`nextDay`を付ける。`Workflow.import_spoken_checkpoint()`はその4項目を`score-dayN.json`へ原子的に保存する。day 1相当の`nextDay=0`は、直前日のチェックポイントが存在しないため拒否する。
 
-`Workflow.shared_dir`を指定した場合、回答受理後に`checkpoint-<設定hash>-<接続先・TOKEN hash>-dayN-revisionR.json`を共有フォルダへ一時ファイル経由で配置する。共有ファイルはrevision別に残し、他端末の書き込みで上書きしない。次日の状態取得後はチーム識別hash・設定ハッシュ・`nextDay`を検証し、最大revisionのチェックポイントだけをローカルの`score-dayN.json`へ取り込む。TOKENそのものは共有しない。共有フォルダは任意であり、未設定時は共有コードを使う。共有失敗は回答受理記録を維持したままエラーとし、再開時に同じ受理済み回答から再共有できる。
+`Workflow.export_checkpoint_code()`と`import_checkpoint_code()`は旧方式との互換用に残るが、現在のGUIには表示しない。前者は設定hash・接続先とTOKENから作るチーム識別hash・`nextDay`・revision・得点チェックポイントを署名付き`P37C1:`コードにし、後者は検証後に取り込む。
+
+`Workflow.shared_dir`を使う旧共有フォルダ処理も互換用に残るが、現在のGUIでは共有フォルダを設定しない。
 
 POST前に`submission-agents.json`／`submission-dayN.json`と不変の候補`submitted-*.json`を保存する。受理記録を先に保存し、その後にチェックポイントを確定するため、途中終了しても受理済み候補から復元できる。結果不明の別回答への置換を拒否し、明示再開時だけ当日状態を再取得して同一回答を再送する。締切後や日程進行後は未確定のまま停止する。APIには最後の有効回答を照会する機能がないため、その場合の自動確定は行わない。
 

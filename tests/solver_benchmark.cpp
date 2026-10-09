@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     bool compareStrandedRescue = false;
     bool compareTightFutureFuel = false;
     bool compareAdaptiveLongSearch = false;
+    bool compareQuantityAwareSa = false;
     bool noDayBeam = false;
     bool quantityUpgrades = false;
     bool noCoordinatedRefinement = false;
@@ -50,6 +51,10 @@ int main(int argc, char** argv) {
             if (option == "--compare-route-columns") { compareRouteColumns = true; continue; }
             if (option == "--compare-adaptive-long-search") {
                 compareAdaptiveLongSearch = true;
+                continue;
+            }
+            if (option == "--compare-quantity-aware-sa") {
+                compareQuantityAwareSa = true;
                 continue;
             }
             if (option == "--compare-stranded-rescue") {
@@ -97,7 +102,8 @@ int main(int argc, char** argv) {
                 static_cast<int>(compareRouteColumns) +
                 static_cast<int>(compareStrandedRescue) +
                 static_cast<int>(compareTightFutureFuel) +
-                static_cast<int>(compareAdaptiveLongSearch) > 1)
+                static_cast<int>(compareAdaptiveLongSearch) +
+                static_cast<int>(compareQuantityAwareSa) > 1)
             throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
@@ -135,7 +141,14 @@ int main(int argc, char** argv) {
                     "paired comparison requires both variants");
             variant = "adaptive-long-search";
         }
-        const std::string baselineName = compareBrandRepair ? "no-brand-repair" :
+        if (compareQuantityAwareSa) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "quantity-aware-sa";
+        }
+        const std::string baselineName = compareQuantityAwareSa
+            ? "no-quantity-aware-sa" : compareBrandRepair ? "no-brand-repair" :
             (compareUdonAlns ? "no-udon-alns" :
              (compareUdonSa ? "no-udon-sa" :
              (compareSpotRouteLns ? "no-spot-route-lns" :
@@ -144,7 +157,7 @@ int main(int argc, char** argv) {
                 (compareTightFutureFuel ? "tight-future-fuel-20" :
                  (compareAdaptiveLongSearch ? "fixed-long-search" :
                   "baseline")))))));
-        const std::vector<std::string> allowed = {"improved", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
+        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
         if (std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
         struct Summary {
@@ -208,8 +221,11 @@ int main(int argc, char** argv) {
                             name != "no-arena-guidance" &&
                             name != "arena-stock-guidance";
                         beam.udonAlns.stockWeightedSpotSelection =
+                            compareQuantityAwareSa ||
                             name == "arena-stock-guidance" ||
                             name == "arena-both-guidance";
+                        beam.udonAlns.quantityAwareNeighborhoods =
+                            name != "no-quantity-aware-sa";
                         beam.coordinatedAssignments = name != "baseline" && name != "no-coordination";
                         beam.detourRendezvous = name != "baseline" && name != "no-detour";
                         beam.exhaustFeasibleDetours = name != "limited-detour-scan";

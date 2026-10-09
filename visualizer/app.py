@@ -53,6 +53,7 @@ from backend import (
     match_acquisition_theoretical,
     map_acquisition_totals,
     parse_solver_result,
+    parse_spoken_checkpoint,
     read_json,
     simple_server_teams,
 )
@@ -342,6 +343,7 @@ class SolverGUI(tk.Tk):
         self.setting_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/setting.json"))
         self.state_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/state-day0.json"))
         self.score_var = tk.StringVar()
+        self.spoken_checkpoint_var = tk.StringVar()
         # GUI表示は1始まり。API・JSON・ファイル名へ渡す直前に0始まりへ戻す。
         self.day_var = tk.IntVar(value=1)
         self.status_var = tk.StringVar(value="準備完了")
@@ -586,13 +588,6 @@ class SolverGUI(tk.Tk):
         check = ttk.Button(config, text="通信確認（手動）", command=self._check_connection)
         check.grid(row=2, column=5, sticky=tk.E)
         self._action_buttons.append(check)
-        self._path_row(
-            config, 3, 0, "共有フォルダ", self.shared_var,
-            self._choose_shared_dir,
-        )
-        ttk.Label(
-            config, text="任意：設定するとLAN経由で自動共有"
-        ).grid(row=3, column=3, columnspan=3, sticky=tk.W, padx=(12, 0))
         self._build_file_panel(config)
         self._build_random_setting_panel(config)
         window.withdraw()
@@ -751,19 +746,33 @@ class SolverGUI(tk.Tk):
         self._action_buttons.append(self.build_solver_button)
         row += 1
 
+        ttk.Label(
+            parent, text="口頭引継ぎ（系列mask 玉数 日別系列累計）"
+        ).grid(row=row, column=0, sticky=tk.W, pady=(3, 0))
+        row += 1
         share_row = ttk.Frame(parent)
-        share_row.grid(row=row, column=0, sticky=tk.EW, pady=3)
+        share_row.grid(row=row, column=0, sticky=tk.EW, pady=(1, 3))
         share_row.columnconfigure(0, weight=1)
-        share_row.columnconfigure(1, weight=1)
-        self.share_copy_button = ttk.Button(
-            share_row, text="共有コードをコピー", command=self._copy_latest_checkpoint_code,
+        self.spoken_checkpoint_entry = ttk.Entry(
+            share_row, textvariable=self.spoken_checkpoint_var,
         )
-        self.share_copy_button.grid(row=0, column=0, sticky=tk.EW, padx=(0, 2))
-        self.share_paste_button = ttk.Button(
-            share_row, text="共有コードを貼付", command=self._paste_checkpoint_code,
+        self.spoken_checkpoint_entry.grid(
+            row=0, column=0, sticky=tk.EW, padx=(0, 2)
         )
-        self.share_paste_button.grid(row=0, column=1, sticky=tk.EW, padx=(2, 0))
-        self._action_buttons.extend((self.share_copy_button, self.share_paste_button))
+        self.spoken_checkpoint_entry.bind(
+            "<Return>", lambda _event: self._import_spoken_checkpoint()
+        )
+        self.spoken_show_button = ttk.Button(
+            share_row, text="最新値を表示", command=self._show_latest_spoken_checkpoint,
+        )
+        self.spoken_show_button.grid(row=0, column=1, padx=2)
+        self.spoken_import_button = ttk.Button(
+            share_row, text="3値を取込", command=self._import_spoken_checkpoint,
+        )
+        self.spoken_import_button.grid(row=0, column=2, padx=(2, 0))
+        self._action_buttons.extend(
+            (self.spoken_show_button, self.spoken_import_button)
+        )
         row += 1
 
         self.prepare_button = ttk.Button(
@@ -1164,11 +1173,11 @@ class SolverGUI(tk.Tk):
                 text=(f"0  mainを最適化ビルド（{profile.build_label}）" if profile else
                       "0  mainを最適化ビルド")
             )
-        if hasattr(self, "share_copy_button"):
-            self.share_copy_button.configure(
+        if hasattr(self, "spoken_show_button"):
+            self.spoken_show_button.configure(
                 state=tk.DISABLED if self._busy else tk.NORMAL
             )
-            self.share_paste_button.configure(
+            self.spoken_import_button.configure(
                 state=(tk.NORMAL if not self._busy or waiting_candidate
                        else tk.DISABLED)
             )
@@ -1514,24 +1523,31 @@ class SolverGUI(tk.Tk):
         label = profile.build_label if profile else "通常"
         self._run_task(f"mainの最適化ビルド（{label}）", workflow.build_solver)
 
-    def _copy_checkpoint_code(
-        self,
-        workflow: Workflow,
-        setting: Path,
-        checkpoint: Path,
-        revision: int,
-    ) -> None:
-        code = workflow.export_checkpoint_code(checkpoint, setting, revision)
-        self.clipboard_clear()
-        self.clipboard_append(code)
-        self.update_idletasks()
-        self.status_var.set(
-            f"共有コードをコピーしました: day={read_json(checkpoint)['nextDay'] + 1}, "
-            f"revision={revision}"
+    @staticmethod
+    def _spoken_checkpoint_text(checkpoint: dict[str, Any]) -> str:
+        parsed = parse_spoken_checkpoint(
+            f"{checkpoint.get('matchBrands')} {checkpoint.get('totalUdon')} "
+            f"{checkpoint.get('sumOfDailyBrandCounts')}",
+            checkpoint.get("nextDay"),
         )
-        self._log("✓ 次日チェックポイントの共有コードをコピーしました")
+        return (
+            f"{parsed['matchBrands']} {parsed['totalUdon']} "
+            f"{parsed['sumOfDailyBrandCounts']}"
+        )
 
-    def _copy_latest_checkpoint_code(self) -> None:
+    def _show_spoken_checkpoint(self, checkpoint: Path) -> None:
+        value = read_json(checkpoint)
+        if not isinstance(value, dict):
+            raise WorkflowError("次日チェックポイントの形式が不正です")
+        text = self._spoken_checkpoint_text(value)
+        self.spoken_checkpoint_var.set(text)
+        next_day = value["nextDay"]
+        self.status_var.set(f"口頭共有 day={next_day + 1}: {text}")
+        self._log(
+            f"✓ 口頭共有3値（系列mask 玉数 日別系列累計）: {text}"
+        )
+
+    def _show_latest_spoken_checkpoint(self) -> None:
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
@@ -1547,40 +1563,41 @@ class SolverGUI(tk.Tk):
                 candidates.append((day, revision, checkpoint))
         if not candidates:
             messagebox.showerror(
-                "共有コード", "受理済みの次日チェックポイントがありません", parent=self,
+                "口頭引継ぎ", "受理済みの次日チェックポイントがありません", parent=self,
             )
             return
         _day, revision, checkpoint = max(candidates)
         try:
-            self._copy_checkpoint_code(
-                workflow, Path(self.setting_var.get()), checkpoint, revision,
-            )
+            self._show_spoken_checkpoint(checkpoint)
+            self._log(f"口頭共有元 revision={revision}")
         except (WorkflowError, OSError, ValueError, tk.TclError) as error:
-            messagebox.showerror("共有コード", str(error), parent=self)
+            messagebox.showerror("口頭引継ぎ", str(error), parent=self)
 
-    def _paste_checkpoint_code(self) -> None:
+    def _import_spoken_checkpoint(self) -> None:
         waiting = self._waiting_resubmission_candidate()
         workflow = waiting[0] if waiting is not None else self._workflow_or_dialog()
         if workflow is None:
             return
+        next_day = self._day_or_dialog()
+        if next_day is None:
+            return
         try:
-            code = self.clipboard_get()
             with workflow.artifact_lock:
-                revision, next_day, output = workflow.import_checkpoint_code(
-                    code, Path(self.setting_var.get()),
+                output = workflow.import_spoken_checkpoint(
+                    self.spoken_checkpoint_var.get(), next_day,
                 )
             self.score_var.set(str(output))
             for context, (state, _checkpoint, digest) in list(self._daily_inputs.items()):
                 if context[-1] == next_day:
                     self._daily_inputs[context] = (state, output, digest)
             self.status_var.set(
-                f"共有コード取込完了: day={next_day + 1}, revision={revision}"
+                f"口頭引継ぎ完了: day={next_day + 1}"
             )
             self._log(
-                f"✓ 共有コード取込 day={next_day + 1} revision={revision}: {output}"
+                f"✓ 口頭引継ぎ day={next_day + 1}: {output}"
             )
         except (WorkflowError, OSError, ValueError, tk.TclError) as error:
-            messagebox.showerror("共有コード", str(error), parent=self)
+            messagebox.showerror("口頭引継ぎ", str(error), parent=self)
 
     def _check_connection(self) -> None:
         workflow = self._workflow_or_dialog()
@@ -1704,12 +1721,9 @@ class SolverGUI(tk.Tk):
             self._log(f"revision={revision}\n次日チェックポイント: {checkpoint}")
             if self._automatic_workflow is not None:
                 try:
-                    self._copy_checkpoint_code(
-                        self._automatic_workflow,
-                        Path(self.setting_var.get()), checkpoint, revision,
-                    )
+                    self._show_spoken_checkpoint(checkpoint)
                 except (WorkflowError, OSError, ValueError, tk.TclError) as error:
-                    self._log(f"共有コードのコピーに失敗しました: {error}")
+                    self._log(f"口頭共有3値の表示に失敗しました: {error}")
         elif key == "prefetch_done":
             self._prefetching_days.discard(data)
         elif key == "prefetch_error":
@@ -2124,9 +2138,9 @@ class SolverGUI(tk.Tk):
                 f"revision={revision}\n再送: {archived}\n次日チェックポイント: {checkpoint}"
             )
             try:
-                self._copy_checkpoint_code(workflow, setting, checkpoint, revision)
+                self._show_spoken_checkpoint(checkpoint)
             except (WorkflowError, OSError, ValueError, tk.TclError) as error:
-                self._log(f"共有コードのコピーに失敗しました: {error}")
+                self._log(f"口頭共有3値の表示に失敗しました: {error}")
 
         def worker() -> None:
             try:
@@ -2165,9 +2179,9 @@ class SolverGUI(tk.Tk):
                 f"revision={revision}\n保存: {archived}\n次日チェックポイント: {checkpoint}"
             )
             try:
-                self._copy_checkpoint_code(workflow, setting, checkpoint, revision)
+                self._show_spoken_checkpoint(checkpoint)
             except (WorkflowError, OSError, ValueError, tk.TclError) as error:
-                self._log(f"共有コードのコピーに失敗しました: {error}")
+                self._log(f"口頭共有3値の表示に失敗しました: {error}")
             if after_accepted is not None:
                 after_accepted()
 

@@ -309,6 +309,8 @@ void checkExtendedTourEvaluationUsesOfficialReplay() {
     const auto smooth = brain2_detail::evaluateExtendedTour(
         smoothSetting, smoothState, {}, smoothPlan, smoothReplay);
     assert(smooth.congestionDelaySteps == 0);
+    assert(smooth.patrolMoveSteps == 1);
+    assert(smooth.acquisitionStepSum == 1);
 
     auto jammedState = smoothState;
     jammedState.trafficByPos[0] = TrafficStatus::Jammed;
@@ -320,6 +322,8 @@ void checkExtendedTourEvaluationUsesOfficialReplay() {
         smoothSetting, jammedState, {}, jammedPlan, jammedReplay);
     assert(jammed.congestionDelaySteps == 3);
     assert(jammed.congestedRoadExposureSteps == 3);
+    assert(jammed.patrolMoveSteps == 4);
+    assert(jammed.acquisitionStepSum == 4);
     assert(jammed.annealingEnergy < smooth.annealingEnergy);
 
     auto supplySetting = line(3, 6, {0, 0}, {{0, 2, 1, -1}});
@@ -344,6 +348,7 @@ void checkArenaGuidedNeighborhoodSampling() {
     const UdonAlnsConfig defaults;
     assert(!defaults.arenaGuidedNeighborhoods);
     assert(defaults.stockWeightedSpotSelection);
+    assert(defaults.quantityAwareNeighborhoods);
     const auto s = line(2, 4, {0},
         {{0, 0, 1, -1}, {0, 1, 5, -1}});
     brain2_detail::SpotRoutes routes;
@@ -360,6 +365,39 @@ void checkArenaGuidedNeighborhoodSampling() {
     assert(operationDraws[0] > operationDraws[1]);
     assert(operationDraws[2] > operationDraws[1]);
     for (const int draws : operationDraws) assert(draws > 0);
+}
+
+void checkQuantityAwareSpotSelectionAndInsertion() {
+    const auto s = line(5, 8, {0},
+        {{0, 0, 3, -1}, {0, 2, 1, -1}, {1, 4, 4, -1}});
+    const auto ms = stateFor(s, {AgentKind::Patrol});
+    GameState dayStart;
+    assert(dayStart.initialize(s, ms));
+    dayStart.remainingStocks[0] = 0;
+    brain2_detail::SpotRoutes routes;
+    std::array<int, 3> draws{};
+    std::uint64_t randomState = 246813579;
+    for (int sample = 0; sample < 10000; ++sample) {
+        const auto spot = brain2_detail::chooseStockWeightedSpot(
+            s, routes, randomState, &dayStart, true);
+        assert(spot < s.field.spots.size());
+        ++draws[spot];
+    }
+    assert(draws[0] == 0);
+    assert(draws[2] > draws[1]);
+
+    std::vector<DijkstraTable> cache(s.field.cellCount());
+    std::vector<bool> cached(s.field.cellCount(), false);
+    std::vector<std::size_t> route{2};
+    randomState = 13579;
+    const auto at = brain2_detail::bestInsertionPosition(
+        s, ms, s.agentStarts[0], route, {1}, kInvalidCell,
+        cache, cached, randomState);
+    assert(at == 0);
+    route.insert(route.begin() + static_cast<std::ptrdiff_t>(at), 1);
+    assert(brain2_detail::routeTravelSteps(
+               s, ms, s.agentStarts[0], route, kInvalidCell,
+               cache, cached) == 8);
 }
 }  // namespace
 
@@ -394,4 +432,5 @@ int main() {
     checkAnnealingStagnationRule();
     checkExtendedTourEvaluationUsesOfficialReplay();
     checkArenaGuidedNeighborhoodSampling();
+    checkQuantityAwareSpotSelectionAndInsertion();
 }

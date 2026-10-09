@@ -76,6 +76,9 @@ struct UdonAlnsConfig {
     bool arenaGuidedNeighborhoods = false;
     // Prefer spots whose stock still supports assignment to another patrol.
     bool stockWeightedSpotSelection = true;
+    // Use remaining stock, travel-aware insertion positions and short block
+    // moves. The official lexicographic guard still decides every best plan.
+    bool quantityAwareNeighborhoods = true;
     double initialTemperature = 2.0;
     double finalTemperature = 0.05;
     std::uint64_t randomSeed = 0x9e3779b97f4a7c15ULL;

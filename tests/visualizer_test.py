@@ -43,6 +43,7 @@ from backend import (  # noqa: E402
     match_acquisition_theoretical,
     map_acquisition_totals,
     parse_solver_result,
+    parse_spoken_checkpoint,
     trace_answer_routes,
     simple_server_teams,
 )
@@ -78,6 +79,34 @@ class BackendTest(unittest.TestCase):
             match_brands=11, total_daily_brands=27,
         )
         self.assertEqual(official_score_text(summary), "11 / 27 / 31")
+
+    def test_spoken_checkpoint_uses_selected_target_day(self) -> None:
+        self.assertEqual(
+            parse_spoken_checkpoint("15 42 12", 2),
+            {
+                "nextDay": 2,
+                "matchBrands": 15,
+                "totalUdon": 42,
+                "sumOfDailyBrandCounts": 12,
+            },
+        )
+        for text, next_day in (
+            ("15 42", 2),
+            ("15 x 12", 2),
+            ("-1 42 12", 2),
+            ("15 42 12", 0),
+        ):
+            with self.assertRaises(WorkflowError):
+                parse_spoken_checkpoint(text, next_day)
+
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            workflow = Workflow(
+                ConnectionConfig("http://example", "secret"), ROOT / "main", work,
+            )
+            output = workflow.import_spoken_checkpoint("15 42 12", 2)
+            self.assertEqual(output, (work / "score-day2.json").resolve())
+            self.assertEqual(read_json(output)["nextDay"], 2)
 
     def test_compact_clock_status(self) -> None:
         values = {"phase": "開始前（エージェント選択）", "progress": "0/8日"}

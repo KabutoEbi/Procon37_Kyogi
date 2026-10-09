@@ -94,7 +94,9 @@ inline int chooseAnnealingOperation(std::uint64_t& randomState) {
 
 inline std::size_t chooseStockWeightedSpot(
     const MatchSetting& setting, const SpotRoutes& routes,
-    std::uint64_t& randomState) {
+    std::uint64_t& randomState,
+    const GameState* dayStart = nullptr,
+    bool quantityAware = false) {
     std::array<unsigned, kMaxSpots> weights{};
     unsigned total = 0;
     for (std::size_t spot = 0; spot < setting.field.spots.size(); ++spot) {
@@ -110,13 +112,18 @@ inline std::size_t chooseStockWeightedSpot(
                 }
             }
         }
-        const unsigned stock = static_cast<unsigned>(
-            std::max(0, setting.field.spots[spot].maxStock));
+        const unsigned stock = static_cast<unsigned>(std::max(0,
+            dayStart && spot < dayStart->remainingStocks.size()
+                ? dayStart->remainingStocks[spot]
+                : setting.field.spots[spot].maxStock));
         const unsigned freeCopies = stock > assigned ? stock - assigned : 0;
-        weights[spot] = 1 + 3 * freeCopies + (brandAssigned ? 0 : 6);
+        weights[spot] = quantityAware
+            ? (freeCopies == 0 ? 0
+                : 1 + 4 * freeCopies + (brandAssigned ? 0 : 10))
+            : 1 + 3 * freeCopies + (brandAssigned ? 0 : 6);
         total += weights[spot];
     }
-    if (total == 0) return 0;
+    if (total == 0) return setting.field.spots.size();
     unsigned draw = static_cast<unsigned>(
         nextAnnealingRandom(randomState) % total);
     for (std::size_t spot = 0; spot < setting.field.spots.size(); ++spot) {
@@ -124,6 +131,64 @@ inline std::size_t chooseStockWeightedSpot(
         draw -= weights[spot];
     }
     return setting.field.spots.size() - 1;
+}
+
+inline std::int32_t routeTravelSteps(
+    const MatchSetting& setting, const MatchState& matchState,
+    CellPos start, const std::vector<std::size_t>& route, CellPos endAnchor,
+    std::vector<DijkstraTable>& cache, std::vector<bool>& cached) {
+    std::int64_t total = 0;
+    CellPos from = start;
+    const auto addLeg = [&](CellPos to, CellPos& current,
+                            std::int64_t& cost) {
+        const auto index = static_cast<std::size_t>(current);
+        if (!cached[index]) {
+            cache[index] = Brain0::dijkstra(setting, matchState, current);
+            cached[index] = true;
+        }
+        const auto steps = cache[index].distances[static_cast<std::size_t>(to)];
+        if (steps >= kImpassableCost) return false;
+        cost += steps;
+        current = to;
+        return cost < kImpassableCost;
+    };
+    for (const std::size_t spot : route) {
+        if (spot >= setting.field.spots.size() ||
+            !addLeg(setting.field.spots[spot].pos, from, total)) {
+            return kImpassableCost;
+        }
+    }
+    if (endAnchor != kInvalidCell && !addLeg(endAnchor, from, total))
+        return kImpassableCost;
+    return static_cast<std::int32_t>(std::min<std::int64_t>(
+        total, kImpassableCost));
+}
+
+inline std::size_t bestInsertionPosition(
+    const MatchSetting& setting, const MatchState& matchState,
+    CellPos start, const std::vector<std::size_t>& route,
+    const std::vector<std::size_t>& block, CellPos endAnchor,
+    std::vector<DijkstraTable>& cache, std::vector<bool>& cached,
+    std::uint64_t& randomState) {
+    std::size_t best = 0;
+    std::int32_t bestCost = kImpassableCost;
+    std::size_t ties = 0;
+    for (std::size_t at = 0; at <= route.size(); ++at) {
+        auto candidate = route;
+        candidate.insert(candidate.begin() + static_cast<std::ptrdiff_t>(at),
+                         block.begin(), block.end());
+        const auto cost = routeTravelSteps(setting, matchState, start,
+            candidate, endAnchor, cache, cached);
+        if (cost < bestCost) {
+            bestCost = cost;
+            best = at;
+            ties = 1;
+        } else if (cost == bestCost &&
+                   nextAnnealingRandom(randomState) % ++ties == 0) {
+            best = at;
+        }
+    }
+    return best;
 }
 
 // The official score is kept lexicographically dominant.  These diagnostics
@@ -142,13 +207,15 @@ struct ExtendedTourEvaluation {
     int refuelEvents = 0;
     int deliveredFuel = 0;
     int servedPatrols = 0;
+    int patrolMoveSteps = 0;
+    int acquisitionStepSum = 0;
     double annealingEnergy = 0.0;
 };
 
 inline ExtendedTourEvaluation evaluateExtendedTour(
     const MatchSetting& setting, const MatchState& matchState,
     ScoreState previousScore, const DailyPlan& plan,
-    const SimulationResult& replay) {
+    const SimulationResult& replay, bool quantityAware = true) {
     ExtendedTourEvaluation value;
     if (!replay.valid) return value;
     value.matchBrands = countBits(replay.state.score.matchBrands);
@@ -192,6 +259,24 @@ inline ExtendedTourEvaluation evaluateExtendedTour(
             }
         }
     }
+    if (!trace.checkpoints.empty()) {
+        std::array<SpotMask, kMaxAgents> seen{};
+        for (AgentIndex agent = 0; agent < replay.state.agentCount; ++agent)
+            seen[agent] = trace.checkpoints.front().state.acquiredSpots[agent];
+        for (std::size_t step = 1; step < trace.checkpoints.size(); ++step) {
+            for (AgentIndex agent = 0; agent < replay.state.agentCount; ++agent) {
+                const auto acquired =
+                    trace.checkpoints[step].state.acquiredSpots[agent];
+                value.acquisitionStepSum += static_cast<int>(step) *
+                    countBits(acquired & ~seen[agent]);
+                seen[agent] |= acquired;
+            }
+        }
+        for (AgentIndex agent = 0; agent < replay.state.agentCount; ++agent) {
+            value.acquisitionStepSum += replay.state.dayStepLimit *
+                countBits(replay.state.acquiredSpots[agent] & ~seen[agent]);
+        }
+    }
 
     // Sum only the delay caused by traffic. Plain/mountain base travel time is
     // not called congestion. Positions are advanced action-by-action exactly
@@ -201,6 +286,8 @@ inline ExtendedTourEvaluation evaluateExtendedTour(
         for (const int action : plan[agent]) {
             if (!isMoveAction(action)) continue;
             const Cell& from = setting.field.at(pos);
+            value.patrolMoveSteps += matchState.agents[agent].isPatrol()
+                ? moveStepCost(setting, matchState, pos) : 0;
             value.congestionDelaySteps += std::max(0,
                 moveStepCost(setting, matchState, pos) -
                     from.moveSteps(TrafficStatus::Smooth));
@@ -239,10 +326,17 @@ inline ExtendedTourEvaluation evaluateExtendedTour(
     const double delivered = value.deliveredFuel / fuelCapacity;
     const double served = patrolCount == 0 ? 0.0 :
         static_cast<double>(value.servedPatrols) / patrolCount;
+    const double moveLoad = value.patrolMoveSteps / travelCapacity;
+    const double acquisitionDelay = value.acquisitionStepSum /
+        std::max(1.0, static_cast<double>(replay.state.dayStepLimit) *
+            std::max(1, replay.state.dayUdon));
     value.annealingEnergy = value.totalUdon +
         0.10 * reserve + 0.04 * minimum - 0.10 * lowFuel -
         0.18 * stranded - 0.10 * congestion +
         0.04 * delivered + 0.04 * served;
+    if (quantityAware) {
+        value.annealingEnergy -= 0.08 * moveLoad + 0.06 * acquisitionDelay;
+    }
     return value;
 }
 
@@ -422,7 +516,8 @@ inline UdonAlnsResult improveDayUdonAnnealed(
                 ++result.attempts;
                 ++result.greedyAttempts;
                 const auto trialEvaluation = evaluateExtendedTour(
-                    setting, matchState, previousScore, trialPlan, trialReplay);
+                    setting, matchState, previousScore, trialPlan, trialReplay,
+                    config.quantityAwareNeighborhoods);
                 if (officialScore(trialReplay.state) <= officialScore(greedyState) ||
                     (found && std::make_tuple(
                          officialScore(trialReplay.state),
@@ -468,9 +563,11 @@ inline UdonAlnsResult improveDayUdonAnnealed(
     DailyPlan currentPlan = greedyPlan;
     GameState currentState = greedyState;
     auto currentEvaluation = evaluateExtendedTour(
-        setting, matchState, previousScore, currentPlan, greedyReplay);
+        setting, matchState, previousScore, currentPlan, greedyReplay,
+        config.quantityAwareNeighborhoods);
     auto bestEvaluation = evaluateExtendedTour(
-        setting, matchState, previousScore, result.plan, checked);
+        setting, matchState, previousScore, result.plan, checked,
+        config.quantityAwareNeighborhoods);
     if (officialScore(greedyState) > officialScore(result.finalState)) {
         result.plan = greedyPlan;
         result.finalState = greedyState;
@@ -506,15 +603,24 @@ inline UdonAlnsResult improveDayUdonAnnealed(
         }
         auto& firstRoute = trialRoutes[first];
         auto& secondRoute = trialRoutes[second];
+        const auto endAnchor = [&](AgentIndex agent) {
+            return finalDay || config.allowFuturePositionChange
+                ? kInvalidCell : initialState.agents[agent].pos;
+        };
         const std::size_t randomSpot = config.stockWeightedSpotSelection
-            ? chooseStockWeightedSpot(setting, trialRoutes, randomState)
+            ? chooseStockWeightedSpot(setting, trialRoutes, randomState,
+                  &dayStart, config.quantityAwareNeighborhoods)
             : nextAnnealingRandom(randomState) % setting.field.spots.size();
         bool changed = false;
         if (operation == 0) { // add an assigned spot
-            if (std::find(firstRoute.begin(), firstRoute.end(), randomSpot) ==
+            if (randomSpot < setting.field.spots.size() &&
+                std::find(firstRoute.begin(), firstRoute.end(), randomSpot) ==
                 firstRoute.end()) {
-                const std::size_t at = nextAnnealingRandom(randomState) %
-                    (firstRoute.size() + 1);
+                const std::size_t at = config.quantityAwareNeighborhoods
+                    ? bestInsertionPosition(setting, matchState,
+                          dayStart.agents[first].pos, firstRoute, {randomSpot},
+                          endAnchor(first), pathCache, pathCached, randomState)
+                    : nextAnnealingRandom(randomState) % (firstRoute.size() + 1);
                 firstRoute.insert(firstRoute.begin() + at, randomSpot);
                 changed = true;
             }
@@ -531,26 +637,55 @@ inline UdonAlnsResult improveDayUdonAnnealed(
                              firstRoute.begin() + right + 1);
                 changed = true;
             }
-        } else if (operation == 3 && firstRoute.size() >= 2) { // relocate
+        } else if (operation == 3 && firstRoute.size() >= 2) { // relocate block
             const std::size_t from = nextAnnealingRandom(randomState) %
                 firstRoute.size();
-            const auto visit = firstRoute[from];
-            firstRoute.erase(firstRoute.begin() + from);
-            const std::size_t at = nextAnnealingRandom(randomState) %
-                (firstRoute.size() + 1);
-            firstRoute.insert(firstRoute.begin() + at, visit);
+            const std::size_t length = config.quantityAwareNeighborhoods
+                ? std::min<std::size_t>(1 + nextAnnealingRandom(randomState) % 2,
+                      firstRoute.size() - from)
+                : 1;
+            std::vector<std::size_t> block(
+                firstRoute.begin() + static_cast<std::ptrdiff_t>(from),
+                firstRoute.begin() + static_cast<std::ptrdiff_t>(from + length));
+            firstRoute.erase(
+                firstRoute.begin() + static_cast<std::ptrdiff_t>(from),
+                firstRoute.begin() + static_cast<std::ptrdiff_t>(from + length));
+            const std::size_t at = config.quantityAwareNeighborhoods
+                ? bestInsertionPosition(setting, matchState,
+                      dayStart.agents[first].pos, firstRoute, block,
+                      endAnchor(first), pathCache, pathCached, randomState)
+                : nextAnnealingRandom(randomState) % (firstRoute.size() + 1);
+            firstRoute.insert(firstRoute.begin() + static_cast<std::ptrdiff_t>(at),
+                              block.begin(), block.end());
             changed = at != from;
         } else if (operation == 4 && first != second &&
-                   !firstRoute.empty()) { // transfer between patrols
+                   !firstRoute.empty()) { // transfer block between patrols
             const std::size_t from = nextAnnealingRandom(randomState) %
                 firstRoute.size();
-            const auto visit = firstRoute[from];
-            if (std::find(secondRoute.begin(), secondRoute.end(), visit) ==
-                secondRoute.end()) {
-                firstRoute.erase(firstRoute.begin() + from);
-                const std::size_t at = nextAnnealingRandom(randomState) %
-                    (secondRoute.size() + 1);
-                secondRoute.insert(secondRoute.begin() + at, visit);
+            const std::size_t length = config.quantityAwareNeighborhoods
+                ? std::min<std::size_t>(1 + nextAnnealingRandom(randomState) % 2,
+                      firstRoute.size() - from)
+                : 1;
+            std::vector<std::size_t> block(
+                firstRoute.begin() + static_cast<std::ptrdiff_t>(from),
+                firstRoute.begin() + static_cast<std::ptrdiff_t>(from + length));
+            const bool available = std::all_of(block.begin(), block.end(),
+                [&](std::size_t visit) {
+                    return std::find(secondRoute.begin(), secondRoute.end(), visit) ==
+                        secondRoute.end();
+                });
+            if (available) {
+                firstRoute.erase(
+                    firstRoute.begin() + static_cast<std::ptrdiff_t>(from),
+                    firstRoute.begin() + static_cast<std::ptrdiff_t>(from + length));
+                const std::size_t at = config.quantityAwareNeighborhoods
+                    ? bestInsertionPosition(setting, matchState,
+                          dayStart.agents[second].pos, secondRoute, block,
+                          endAnchor(second), pathCache, pathCached, randomState)
+                    : nextAnnealingRandom(randomState) % (secondRoute.size() + 1);
+                secondRoute.insert(
+                    secondRoute.begin() + static_cast<std::ptrdiff_t>(at),
+                    block.begin(), block.end());
                 changed = true;
             }
         } else if (operation == 5 && first != second &&
@@ -561,11 +696,21 @@ inline UdonAlnsResult improveDayUdonAnnealed(
                 secondRoute.size();
             std::swap(firstRoute[x], secondRoute[y]);
             changed = true;
-        } else if (operation == 6 && !firstRoute.empty() &&
+        } else if (operation == 6 && randomSpot < setting.field.spots.size() &&
+                   !firstRoute.empty() &&
                    std::find(firstRoute.begin(), firstRoute.end(), randomSpot) ==
                        firstRoute.end()) { // replace
-            firstRoute[nextAnnealingRandom(randomState) % firstRoute.size()] =
-                randomSpot;
+            const std::size_t replaced = nextAnnealingRandom(randomState) %
+                firstRoute.size();
+            firstRoute.erase(firstRoute.begin() +
+                static_cast<std::ptrdiff_t>(replaced));
+            const std::size_t at = config.quantityAwareNeighborhoods
+                ? bestInsertionPosition(setting, matchState,
+                      dayStart.agents[first].pos, firstRoute, {randomSpot},
+                      endAnchor(first), pathCache, pathCached, randomState)
+                : std::min(replaced, firstRoute.size());
+            firstRoute.insert(firstRoute.begin() +
+                static_cast<std::ptrdiff_t>(at), randomSpot);
             changed = true;
         }
         if (!changed || hasDuplicateVisits(firstRoute) ||
@@ -604,7 +749,8 @@ inline UdonAlnsResult improveDayUdonAnnealed(
         const auto kickedScore = officialScore(trialState);
         const auto currentScore = officialScore(currentState);
         const auto trialEvaluation = evaluateExtendedTour(
-            setting, matchState, previousScore, trialPlan, trialReplay);
+            setting, matchState, previousScore, trialPlan, trialReplay,
+            config.quantityAwareNeighborhoods);
         const bool equalBrandCounts =
             std::get<0>(kickedScore) == std::get<0>(currentScore) &&
             std::get<1>(kickedScore) == std::get<1>(currentScore);

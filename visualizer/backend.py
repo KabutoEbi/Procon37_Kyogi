@@ -721,6 +721,33 @@ def official_score_tuple(checkpoint: dict[str, Any]) -> tuple[int, int, int]:
     return bin(int(match_brands)).count("1"), daily_brands, total_udon
 
 
+def parse_spoken_checkpoint(text: str, next_day: int) -> dict[str, int]:
+    """口頭共有された3整数を次日用チェックポイントへ変換する。"""
+    if type(next_day) is not int or not 1 <= next_day <= 10:
+        raise WorkflowError("口頭引継ぎはday=2以降の対象日を選んで実行してください")
+    parts = text.split()
+    if len(parts) != 3:
+        raise WorkflowError(
+            "口頭引継ぎは「系列mask 玉数 日別系列累計」の3整数を入力してください"
+        )
+    try:
+        match_brands, total_udon, daily_brands = map(int, parts)
+    except ValueError as error:
+        raise WorkflowError("口頭引継ぎの3項目は10進整数で入力してください") from error
+    if not 0 <= match_brands <= 0xFFFFFFFF:
+        raise WorkflowError("系列maskは0以上4294967295以下で入力してください")
+    if not 0 <= total_udon <= 2147483647:
+        raise WorkflowError("玉数は0以上2147483647以下で入力してください")
+    if not 0 <= daily_brands <= 2147483647:
+        raise WorkflowError("日別系列累計は0以上2147483647以下で入力してください")
+    return {
+        "nextDay": next_day,
+        "matchBrands": match_brands,
+        "totalUdon": total_udon,
+        "sumOfDailyBrandCounts": daily_brands,
+    }
+
+
 class Workflow:
     def __init__(
         self,
@@ -857,6 +884,13 @@ class Workflow:
         atomic_write(output, json.dumps(checkpoint).encode())
         atomic_write(record, json.dumps(package).encode())
         return revision, next_day, output
+
+    def import_spoken_checkpoint(self, text: str, next_day: int) -> Path:
+        """対象日からnextDayを補い、口頭共有の3値をローカルへ保存する。"""
+        checkpoint = parse_spoken_checkpoint(text, next_day)
+        output = self.work_dir / f"score-day{next_day}.json"
+        atomic_write(output, json.dumps(checkpoint, indent=2).encode())
+        return output
 
     def publish_checkpoint(
         self, checkpoint: Path, setting: Path, revision: int
