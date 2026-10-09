@@ -134,6 +134,10 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " safety-margin-ms=" << config.safetyMarginMs
               << " auto-beam-width=" << (config.autoSizedBeam ? 1 : 0)
               << " route-columns=" << (config.routeColumns.enabled ? 1 : 0)
+              << " terminal-wait-fill="
+              << (config.spotRouteLns.terminalWaitFill ? 1 : 0)
+              << " small-board-quantity-first="
+              << (config.smallBoardQuantityFirstRoutes ? 1 : 0)
               << " quantity-budget-percent=" << config.quantityBudgetPercent
               << " adaptive-long-search=" << (config.adaptiveLongSearch ? 1 : 0)
               << " udon-sa=" << (config.udonAlns.simulatedAnnealing ? 1 : 0)

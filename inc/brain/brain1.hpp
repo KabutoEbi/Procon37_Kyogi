@@ -65,6 +65,9 @@ struct BeamSearchConfig {
     bool useUdonAlns = true;
     // 一回戦盤面では3巡回車の経路・在庫をまとめて再配分する。
     bool smallBoardJointRefinement = true;
+    // 1969型の16×16・8日・14系列で、既存解を保持しながら
+    // 玉数優先候補と系列優先候補を独立に比較する。
+    bool smallBoardQuantityFirstRoutes = true;
     // 通常探索を終えた最終日だけ、残時間で幅広い経路組合せを比較。
     bool smallBoardFinalColumns = true;
     UdonAlnsConfig udonAlns{};
@@ -3889,37 +3892,67 @@ inline BeamSearchResult brain1(
             const auto portfolioDeadline = now +
                 std::max(Clock::duration::zero(), legacyRouteDeadline - now) / 2;
             const std::array<int, 4> hardnessWeights{{4, 0, 16, 8}};
+            const auto boardBrandCount = static_cast<std::uint32_t>(
+                setting.field.brands.size());
+            const bool quantityFirstBoard =
+                config.smallBoardQuantityFirstRoutes &&
+                setting.field.width == 16 && setting.field.height == 16 &&
+                boardBrandCount == 14 && setting.dayCount() == 8;
+            const bool quantityFirst = quantityFirstBoard;
+            const std::size_t passCount = hardnessWeights.size() +
+                static_cast<std::size_t>(quantityFirst);
             for (std::size_t pass = 0;
-                 pass < hardnessWeights.size() && Clock::now() < portfolioDeadline;
+                 pass < passCount && Clock::now() < portfolioDeadline;
                  ++pass) {
                 auto portfolioConfig = config.spotRouteLns;
+                const bool quantityPass = quantityFirst && pass == 0;
+                const std::size_t rankedPass = quantityPass ? 0 : pass -
+                    static_cast<std::size_t>(quantityFirst);
+                portfolioConfig.quantityFirstRanking = quantityPass;
+                portfolioConfig.requiredMatchBrandCount = quantityPass
+                    ? boardBrandCount : 0;
+                portfolioConfig.requiredDayBrandCount = quantityPass
+                    ? boardBrandCount : 0;
+                if (quantityPass) {
+                    portfolioConfig.allowFuturePositionChange = finalDay;
+                    portfolioConfig.preserveIntermediateFuelExactly = true;
+                }
                 // Keep the established fast proposal as well as the richer
                 // transit/refuel model: their finite beams explore different routes.
-                portfolioConfig.reflectTransit = pass != 0 && config.spotRouteLns.reflectTransit;
-                portfolioConfig.spotPortfolioHardnessWeight = hardnessWeights[pass];
+                portfolioConfig.reflectTransit = quantityPass || rankedPass != 0
+                    ? config.spotRouteLns.reflectTransit : false;
+                portfolioConfig.spotPortfolioHardnessWeight = quantityPass
+                    ? 0 : hardnessWeights[rankedPass];
                 // Preserve the established route rankings in the first two
                 // passes. The later, wider passes diversify toward brands
                 // that only a few patrols can still reach today.
                 portfolioConfig.spotPortfolioReachabilityRarity =
                     config.spotRouteLns.spotPortfolioReachabilityRarity &&
-                    pass >= 2;
+                    !quantityPass && rankedPass >= 2;
                 const auto maxPortfolioWidth = setting.field.cellCount() >= 1024
                     ? std::size_t{512} : std::size_t{2048};
                 portfolioConfig.spotPortfolioBeamWidth = std::min<std::size_t>(
                     maxPortfolioWidth,
                     portfolioConfig.spotPortfolioBeamWidth >
-                            (maxPortfolioWidth >> pass)
+                            (maxPortfolioWidth >> std::min<std::size_t>(rankedPass, 3))
                         ? maxPortfolioWidth
-                        : portfolioConfig.spotPortfolioBeamWidth << pass);
+                        : portfolioConfig.spotPortfolioBeamWidth <<
+                            std::min<std::size_t>(rankedPass, 3));
                 portfolioConfig.spotPortfolioCandidatesPerDepth =
                     std::min<std::size_t>(64,
                         portfolioConfig.spotPortfolioCandidatesPerDepth >
-                                (std::size_t{64} >> pass)
+                                (std::size_t{64} >>
+                                    std::min<std::size_t>(rankedPass, 3))
                             ? std::size_t{64}
-                            : portfolioConfig.spotPortfolioCandidatesPerDepth << pass);
+                            : portfolioConfig.spotPortfolioCandidatesPerDepth <<
+                                std::min<std::size_t>(rankedPass, 3));
+                const auto passDeadline = quantityPass && limited
+                    ? Clock::now() + std::max(Clock::duration::zero(),
+                        portfolioDeadline - Clock::now()) / 3
+                    : portfolioDeadline;
                 const auto portfolio = searchSpotPortfolio(setting, matchState,
                     previousScore, result.plan, portfolioConfig,
-                    portfolioDeadline);
+                    passDeadline);
                 result.spotRouteLnsAttempts += portfolio.attempts;
                 result.spotRouteLnsImprovements += portfolio.improvements;
                 result.spotPortfolioMaxBrands = std::max(
@@ -3935,6 +3968,9 @@ inline BeamSearchResult brain1(
                     changed = true;
                     remember();
                 }
+                // Keep the established brand-first passes as independent
+                // neighborhoods. The quantity pass contributes a candidate
+                // but never suppresses a later route that scores better.
             }
         }
         auto localDeadline = legacyRouteDeadline;
@@ -3956,6 +3992,8 @@ inline BeamSearchResult brain1(
         // Use only time left by the established local search.  Running this
         // first reduced its node count under short wall-clock limits.
         if (config.spotRouteLns.terminalWaitFill &&
+            (!limited || budget >=
+                config.spotRouteLns.terminalFillMinimumBudgetMs) &&
             Clock::now() < localDeadline) {
             const auto filled = fillTerminalPatrolWaits(setting, matchState,
                 previousScore, result.plan, config.spotRouteLns,

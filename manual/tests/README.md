@@ -21,10 +21,12 @@
 | [`arena-score-analysis-1931.md`](arena-score-analysis-1931.md) | 公開98試合、巡回台数下限予測、追加SAの比較、ローカル無制限探索修正 |
 | [`first-round-16-results-2026-10-10.md`](first-round-16-results-2026-10-10.md) | 一回戦16×16限定の3巡回車同時再配分、通常・厳燃料比較 |
 | [`arena-score-analysis-1937-16.md`](arena-score-analysis-1937-16.md) | 最新16×16の上位目標、最終日追加経路候補、退行した案の撤回 |
+| [`arena-score-analysis-1969-16.md`](arena-score-analysis-1969-16.md) | 1969の系列・玉数不足、16×16限定の玉数優先経路と系列フォールバック |
 | `analyze_small_board_history.py` / `small_board_api_benchmark.py` | 公開詳細の16×16ラウンド集計と1機能の対比較 |
 | `analyze_arena_history.py` | API詳細キャッシュのラウンド重複除去、回収率学習、未学習ラウンド検証 |
 | [`takamatsu-pamphlet-search-analysis.md`](takamatsu-pamphlet-search-analysis.md) | 高松大会パンフレットのビーム・SA解法との照合と希少系列評価の不採用理由 |
 | [`saved_day_benchmark.cpp`](coordinated-refinement-results-2026-10-07.md) | 保存済みの設定・当日状態・得点から1日を再探索する診断ツール |
+| [`runtime_match_benchmark.cpp`](arena-score-analysis-1969-16.md) | 保存済みの全日交通を候補自身の状態遷移で再生する読取専用比較ツール |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
 | [`visualizer_test.py`](visualizer_test.md) | GUIバックエンドのヘッドレス回帰テスト |
 | [`recovery_test.py`](recovery_test.md) | 永続復旧・同日回答更新・同一候補再送・送信時間確保の回帰テスト |

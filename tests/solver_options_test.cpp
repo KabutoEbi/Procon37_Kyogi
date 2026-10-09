@@ -13,11 +13,17 @@ benzen::SolverOptions parse(std::vector<std::string> values) {
 
 int main() {
     assert(parse({"main"}).beam.smallBoardJointRefinement);
+    assert(parse({"main"}).beam.smallBoardQuantityFirstRoutes);
     assert(parse({"main"}).beam.smallBoardFinalColumns);
+    assert(parse({"main"}).beam.spotRouteLns.terminalWaitFill);
+    assert(!parse({"main", "--terminal-wait-fill", "0"})
+        .beam.spotRouteLns.terminalWaitFill);
     assert(!parse({"main", "--small-board-final-columns", "0"})
         .beam.smallBoardFinalColumns);
     assert(!parse({"main", "--small-board-joint-refinement", "0"})
         .beam.smallBoardJointRefinement);
+    assert(!parse({"main", "--small-board-quantity-first", "0"})
+        .beam.smallBoardQuantityFirstRoutes);
     assert(!parse({"main", "--arena-agent-prior", "0"}).selection.arenaScorePrior);
     benzen::MatchSetting highStock;
     highStock.field.width = highStock.field.height = 32;
@@ -90,7 +96,9 @@ int main() {
         {"main", "--sa-stagnation-stop", "2"},
         {"main", "--small-board-brand-rescue", "2"},
         {"main", "--small-board-joint-refinement", "2"},
+        {"main", "--small-board-quantity-first", "2"},
         {"main", "--small-board-final-columns", "2"},
+        {"main", "--terminal-wait-fill", "2"},
         {"main", "--small-board-beam-budget-percent", "49"},
         {"main", "--small-board-beam-budget-percent", "96"},
         {"main", "--small-board-brand-node-limit", "999"},

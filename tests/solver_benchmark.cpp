@@ -28,6 +28,8 @@ int main(int argc, char** argv) {
     bool compareReachabilityRarity = false;
     bool compareWarmStartPortfolio = false;
     bool compareSmallBoardJointRefinement = false;
+    bool compareSmallBoardQuantityFirst = false;
+    bool compareTerminalWaitFill = false;
     bool noDayBeam = false;
     bool quantityUpgrades = false;
     bool noCoordinatedRefinement = false;
@@ -50,6 +52,14 @@ int main(int argc, char** argv) {
             if (option == "--fixed-work") { fixedWork = true; continue; }
             if (option == "--compare-small-board-joint-refinement") {
                 compareSmallBoardJointRefinement = true;
+                continue;
+            }
+            if (option == "--compare-small-board-quantity-first") {
+                compareSmallBoardQuantityFirst = true;
+                continue;
+            }
+            if (option == "--compare-terminal-wait-fill") {
+                compareTerminalWaitFill = true;
                 continue;
             }
             if (option == "--compare-warm-start-portfolio") {
@@ -133,7 +143,9 @@ int main(int argc, char** argv) {
                 static_cast<int>(compareDifferentialInsertion) +
                 static_cast<int>(compareReachabilityRarity) +
                 static_cast<int>(compareWarmStartPortfolio) +
-                static_cast<int>(compareSmallBoardJointRefinement) > 1)
+                static_cast<int>(compareSmallBoardJointRefinement) +
+                static_cast<int>(compareSmallBoardQuantityFirst) +
+                static_cast<int>(compareTerminalWaitFill) > 1)
             throw std::invalid_argument("select one paired comparison");
         if (compareBrandRepair) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
@@ -205,8 +217,20 @@ int main(int argc, char** argv) {
                 throw std::invalid_argument("paired comparison requires both variants");
             variant = "small-board-joint-refinement";
         }
-        const std::string baselineName = compareSmallBoardJointRefinement
-            ? "no-small-board-joint-refinement" : compareWarmStartPortfolio
+        if (compareSmallBoardQuantityFirst) {
+            if (currentOnly)
+                throw std::invalid_argument("paired comparison requires both variants");
+            variant = "small-board-quantity-first";
+        }
+        if (compareTerminalWaitFill) {
+            if (currentOnly)
+                throw std::invalid_argument("paired comparison requires both variants");
+            variant = "terminal-wait-fill";
+        }
+        const std::string baselineName = compareTerminalWaitFill
+            ? "no-terminal-wait-fill" : compareSmallBoardJointRefinement
+            ? "no-small-board-joint-refinement" : compareSmallBoardQuantityFirst
+            ? "no-small-board-quantity-first" : compareWarmStartPortfolio
             ? "cold-start-portfolio" : compareReachabilityRarity
             ? "no-reachability-rarity" : compareDifferentialInsertion
             ? "full-route-insertion" : compareDetourAwareSa
@@ -220,7 +244,7 @@ int main(int argc, char** argv) {
                 (compareTightFutureFuel ? "tight-future-fuel-20" :
                  (compareAdaptiveLongSearch ? "fixed-long-search" :
                   "baseline")))))));
-        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "detour-aware-sa", "no-detour-aware-sa", "differential-insertion", "full-route-insertion", "reachability-rarity", "no-reachability-rarity", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
+        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "detour-aware-sa", "no-detour-aware-sa", "differential-insertion", "full-route-insertion", "reachability-rarity", "no-reachability-rarity", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-terminal-wait-fill", "small-board-quantity-first", "no-small-board-quantity-first", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
         if (variant != "warm-start-portfolio" && variant != "small-board-joint-refinement" &&
             std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
@@ -271,6 +295,8 @@ int main(int argc, char** argv) {
                         MatchRunnerConfig config;
                         auto& beam = config.beam;
                         beam.smallBoardJointRefinement = name != "no-small-board-joint-refinement";
+                        beam.smallBoardQuantityFirstRoutes =
+                            name != "no-small-board-quantity-first";
                         beam.quantityUpgrades = quantityUpgrades;
                         beam.coordinatedRefinement = !noCoordinatedRefinement;
                         beam.adaptiveLongSearch = name != "fixed-long-search";
@@ -342,8 +368,8 @@ int main(int argc, char** argv) {
                             beam.routeColumns.maxStationSchedules = 1;
                             beam.routeColumns.maxMeetingsPerSchedule = 2;
                         }
-                        if (name == "terminal-wait-fill")
-                            beam.spotRouteLns.terminalWaitFill = true;
+                        beam.spotRouteLns.terminalWaitFill =
+                            name != "no-terminal-wait-fill";
                         if (name == "no-transit-pickup-ranking")
                             beam.routeColumns.rankTransitPickups = false;
                         beam.comparePeriodicReplanPlans =

@@ -62,11 +62,13 @@ void checkTerminalWaitFillsSeveralSpots() {
 
     SpotRouteLnsConfig config;
     config.terminalWaitFill = true;
+    config.terminalFillRounds = 1;
+    config.terminalFillCandidates = 1;
     const auto result = fillTerminalPatrolWaits(
         setting, state, {}, incumbent, config,
         std::chrono::steady_clock::time_point::max());
-    // A shortest path to spot 3 passes through spot 2, so both may be gained
-    // by one accepted extension.
+    // Even with one candidate and one round, prefer the path to spot 3 because
+    // it passes through spot 2 and therefore gains two bowls instead of one.
     assert(result.improvements >= 1);
     assert(result.finalState.dayUdon == 3);
     const auto replay = simulateDay(setting, state, result.plan);
@@ -425,6 +427,45 @@ void checkRouteColumnsKeepSearchSlotBesideIncumbent() {
     assert(replay.valid && replay.state == result.finalState);
 }
 
+void checkQuantityFirstPortfolioRequiresAllBrands() {
+    MatchSetting setting;
+    setting.field.width = 7;
+    setting.field.height = 1;
+    setting.field.cells.assign(7, {CellType::Plain, -1});
+    setting.field.spots = {
+        {0, 0, 1, -1}, {0, 1, 1, -1}, {0, 2, 1, -1},
+        {1, 6, 1, -1}};
+    assert(setting.field.rebuildSpotIndex());
+    setting.agentStarts = {4};
+    setting.daySteps = {14};
+    setting.daySeconds = {60};
+    setting.fuelLimit = 8;
+    MatchState state;
+    state.trafficByPos.assign(7, TrafficStatus::Smooth);
+    state.agents = {{0, AgentKind::Patrol, 4, 8}};
+    const DailyPlan incumbent{{-14}};
+    const auto feasible = simulateDay(setting, state,
+        DailyPlan{{5, 5, 2, 2, 2, 2, -2}});
+    assert(feasible.valid && countBits(feasible.state.dayBrands) == 2);
+
+    SpotRouteLnsConfig config;
+    config.quantityFirstRanking = true;
+    config.requiredMatchBrandCount = 2;
+    config.requiredDayBrandCount = 2;
+    config.reflectTransit = false;
+    config.spotPortfolioBeamWidth = 128;
+    config.spotPortfolioCandidatesPerDepth = 128;
+    const auto result = searchSpotPortfolio(setting, state, {}, incumbent,
+        config, std::chrono::steady_clock::time_point::max());
+
+    assert(result.portfolioReachedRequiredBrands);
+    assert(countBits(result.finalState.score.matchBrands) == 2);
+    assert(countBits(result.finalState.dayBrands) == 2);
+    assert(result.finalState.dayUdon >= 2);
+    const auto replay = simulateDay(setting, state, result.plan);
+    assert(replay.valid && replay.state == result.finalState);
+}
+
 void checkRouteColumnsRepairBrandsAfterQuantityRoute() {
     MatchSetting setting;
     setting.field.width = 3;
@@ -570,6 +611,7 @@ int main() {
     checkRouteColumnsUseEverySupplyForStations();
     checkRouteColumnsLargePool();
     checkRouteColumnsKeepSearchSlotBesideIncumbent();
+    checkQuantityFirstPortfolioRequiresAllBrands();
     checkRouteColumnsRepairBrandsAfterQuantityRoute();
     checkRouteColumnsSuffixInsertionWithoutTerminalWait();
     checkRouteColumnsRescueStrandedPatrol();

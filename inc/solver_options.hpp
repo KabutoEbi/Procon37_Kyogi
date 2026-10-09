@@ -47,6 +47,7 @@ private:
             name == "--exact-brands" || name == "--brand-repair" ||
             name == "--udon-alns" || name == "--udon-sa" ||
             name == "--udon-joint-destroy" || name == "--spot-route-lns" ||
+            name == "--terminal-wait-fill" ||
             name == "--route-columns" || name == "--adaptive-long-search" ||
             name == "--next-day-probe" || name == "--day-beam" ||
             name == "--quantity-upgrades" ||
@@ -55,6 +56,7 @@ private:
             name == "--sa-stagnation-stop" ||
             name == "--small-board-brand-rescue" ||
             name == "--small-board-joint-refinement" ||
+            name == "--small-board-quantity-first" ||
             name == "--small-board-final-columns" ||
             name == "--auto-beam-width" || name == "--arena-agent-prior";
     }
@@ -94,12 +96,16 @@ private:
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
         else if (name == "--small-board-joint-refinement")
             beam.smallBoardJointRefinement = value != 0;
+        else if (name == "--small-board-quantity-first")
+            beam.smallBoardQuantityFirstRoutes = value != 0;
         else if (name == "--small-board-final-columns")
             beam.smallBoardFinalColumns = value != 0;
         else if (name == "--udon-sa") beam.udonAlns.simulatedAnnealing = value != 0;
         else if (name == "--udon-joint-destroy")
             beam.udonAlns.jointDestroyRepair = value != 0;
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
+        else if (name == "--terminal-wait-fill")
+            beam.spotRouteLns.terminalWaitFill = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
         else if (name == "--adaptive-long-search") beam.adaptiveLongSearch = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;

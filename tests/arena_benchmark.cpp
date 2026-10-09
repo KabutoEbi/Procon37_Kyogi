@@ -60,7 +60,7 @@ void addMixedTraffic(
 int main(int argc, char** argv) {
     using namespace benzen;
     try {
-        if (argc < 2 || argc > 18) {
+        if (argc < 2 || argc > 19) {
             std::cerr << "usage: " << argv[0]
                       << " setting.json [time-ms] [supply-mask] [traffic]"
                          " [beam-width] [joint-beam-width] [hard-next-day]"
@@ -68,7 +68,8 @@ int main(int argc, char** argv) {
                          " [detour-aware-spots] [differential-insertion]"
                          " [auto-sized-beam] [quantity-budget-percent]"
                          " [annealing-warm-start] [small-board-joint]"
-                         " [small-board-final-columns]\n";
+                         " [small-board-final-columns]"
+                         " [small-board-quantity-first]\n";
             return 2;
         }
         MatchSetting setting;
@@ -185,6 +186,12 @@ int main(int argc, char** argv) {
             if (enabled < 0 || enabled > 1)
                 throw std::invalid_argument("small-board-final-columns must be 0 or 1");
             config.beam.smallBoardFinalColumns = enabled != 0;
+        }
+        if (argc >= 19) {
+            const int enabled = std::stoi(argv[18]);
+            if (enabled < 0 || enabled > 1)
+                throw std::invalid_argument("small-board-quantity-first must be 0 or 1");
+            config.beam.smallBoardQuantityFirstRoutes = enabled != 0;
         }
         if (timeMs == 0) {
             // 固定探索量の比較。0は本番CLIではなく、この計測ツール専用。
