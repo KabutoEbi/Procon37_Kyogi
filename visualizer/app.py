@@ -76,10 +76,10 @@ TEAM_ROLE_PROFILES = {
         "担当1 先行ビーム（約15秒）", "担当1・短時間ビーム", 20000, 0,
     ),
     "middle": TeamRoleProfile(
-        "担当2 収束ビーム（上限約50秒）", "担当2・収束ビーム", 55000, 0, 1, 0,
+        "担当2 収束ビーム（上限約35秒）", "担当2・収束ビーム", 40000, 0, 1, 0,
     ),
     "long": TeamRoleProfile(
-        "担当3 収束SA（上限約55秒）", "担当3・収束SA", 60000, 1, 0, 1,
+        "担当3 収束SA（上限約45秒）", "担当3・収束SA", 50000, 1, 0, 1,
     ),
 }
 TEAM_ROLE_LABELS = {
@@ -344,6 +344,7 @@ class SolverGUI(tk.Tk):
         self.state_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/state-day0.json"))
         self.score_var = tk.StringVar()
         self.spoken_checkpoint_var = tk.StringVar()
+        self.spoken_result_var = tk.StringVar(value="- - -")
         # GUI表示は1始まり。API・JSON・ファイル名へ渡す直前に0始まりへ戻す。
         self.day_var = tk.IntVar(value=1)
         self.status_var = tk.StringVar(value="準備完了")
@@ -487,7 +488,28 @@ class SolverGUI(tk.Tk):
         self.team_role_box.set(TEAM_ROLE_LABELS["normal"])
         self.stop_button = ttk.Button(mode, text="停止", command=self._request_stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=6)
-        ttk.Label(mode, text="dayは1始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
+        spoken = ttk.Frame(mode)
+        spoken.pack(side=tk.LEFT, padx=10)
+        ttk.Label(
+            spoken,
+            textvariable=self.spoken_result_var,
+            anchor=tk.CENTER,
+            font=("TkDefaultFont", 11, "bold"),
+        ).pack(fill=tk.X)
+        spoken_input = ttk.Frame(spoken)
+        spoken_input.pack(fill=tk.X)
+        self.spoken_checkpoint_entry = ttk.Entry(
+            spoken_input, textvariable=self.spoken_checkpoint_var, width=25,
+        )
+        self.spoken_checkpoint_entry.pack(side=tk.LEFT, padx=(0, 2))
+        self.spoken_checkpoint_entry.bind(
+            "<Return>", lambda _event: self._import_spoken_checkpoint()
+        )
+        self.spoken_import_button = ttk.Button(
+            spoken_input, text="取込", command=self._import_spoken_checkpoint,
+        )
+        self.spoken_import_button.pack(side=tk.LEFT, padx=(2, 0))
+        self._action_buttons.append(self.spoken_import_button)
 
         clock = ttk.Frame(mode, width=210, height=52, padding=(10, 0, 0, 0))
         self.match_clock_frame = clock
@@ -673,7 +695,7 @@ class SolverGUI(tk.Tk):
         notebook.add(frame, text="探索パラメータ")
         self.parameters_frame = frame
         fields = [
-            ("auto_beam_width", "ビーム幅の自動選択", "1: 盤面・当日のステップ数に応じ約55秒 / 0: 下の手動幅"),
+            ("auto_beam_width", "ビーム幅の自動選択", "1: 盤面・当日・時間上限に応じる / 0: 下の手動幅"),
             ("beam_width", "ビーム幅", "各展開で保持する状態数"),
             ("joint_beam_width", "同時行動ビーム幅", "複数台への行動割当の幅"),
             ("threads", "スレッド数", "0: 自動 / 1: 直列"),
@@ -744,35 +766,6 @@ class SolverGUI(tk.Tk):
         )
         self.build_solver_button.grid(row=row, column=0, sticky=tk.EW, pady=3)
         self._action_buttons.append(self.build_solver_button)
-        row += 1
-
-        ttk.Label(
-            parent, text="口頭引継ぎ（系列mask 玉数 日別系列累計）"
-        ).grid(row=row, column=0, sticky=tk.W, pady=(3, 0))
-        row += 1
-        share_row = ttk.Frame(parent)
-        share_row.grid(row=row, column=0, sticky=tk.EW, pady=(1, 3))
-        share_row.columnconfigure(0, weight=1)
-        self.spoken_checkpoint_entry = ttk.Entry(
-            share_row, textvariable=self.spoken_checkpoint_var,
-        )
-        self.spoken_checkpoint_entry.grid(
-            row=0, column=0, sticky=tk.EW, padx=(0, 2)
-        )
-        self.spoken_checkpoint_entry.bind(
-            "<Return>", lambda _event: self._import_spoken_checkpoint()
-        )
-        self.spoken_show_button = ttk.Button(
-            share_row, text="最新値を表示", command=self._show_latest_spoken_checkpoint,
-        )
-        self.spoken_show_button.grid(row=0, column=1, padx=2)
-        self.spoken_import_button = ttk.Button(
-            share_row, text="3値を取込", command=self._import_spoken_checkpoint,
-        )
-        self.spoken_import_button.grid(row=0, column=2, padx=(2, 0))
-        self._action_buttons.extend(
-            (self.spoken_show_button, self.spoken_import_button)
-        )
         row += 1
 
         self.prepare_button = ttk.Button(
@@ -1173,10 +1166,7 @@ class SolverGUI(tk.Tk):
                 text=(f"0  mainを最適化ビルド（{profile.build_label}）" if profile else
                       "0  mainを最適化ビルド")
             )
-        if hasattr(self, "spoken_show_button"):
-            self.spoken_show_button.configure(
-                state=tk.DISABLED if self._busy else tk.NORMAL
-            )
+        if hasattr(self, "spoken_import_button"):
             self.spoken_import_button.configure(
                 state=(tk.NORMAL if not self._busy or waiting_candidate
                        else tk.DISABLED)
@@ -1540,38 +1530,25 @@ class SolverGUI(tk.Tk):
         if not isinstance(value, dict):
             raise WorkflowError("次日チェックポイントの形式が不正です")
         text = self._spoken_checkpoint_text(value)
-        self.spoken_checkpoint_var.set(text)
+        self.spoken_result_var.set(text)
         next_day = value["nextDay"]
         self.status_var.set(f"口頭共有 day={next_day + 1}: {text}")
         self._log(
             f"✓ 口頭共有3値（系列mask 玉数 日別系列累計）: {text}"
         )
 
-    def _show_latest_spoken_checkpoint(self) -> None:
-        workflow = self._workflow_or_dialog()
-        if workflow is None:
-            return
-        candidates: list[tuple[int, int, Path]] = []
-        for day in range(max(10, self._day_count)):
-            journal = workflow.work_dir / f"submission-day{day}.json"
-            checkpoint = workflow.work_dir / f"score-day{day + 1}.json"
-            if not journal.is_file() or not checkpoint.is_file():
-                continue
-            saved = read_json(journal)
-            revision = saved.get("revision")
-            if saved.get("status") == "accepted" and type(revision) is int:
-                candidates.append((day, revision, checkpoint))
-        if not candidates:
-            messagebox.showerror(
-                "口頭引継ぎ", "受理済みの次日チェックポイントがありません", parent=self,
-            )
-            return
-        _day, revision, checkpoint = max(candidates)
+    def _show_spoken_candidate(self, checkpoint: Path) -> None:
         try:
-            self._show_spoken_checkpoint(checkpoint)
-            self._log(f"口頭共有元 revision={revision}")
+            value = read_json(checkpoint)
+            if not isinstance(value, dict):
+                raise WorkflowError("次日チェックポイントの形式が不正です")
+            text = self._spoken_checkpoint_text(value)
+            self.spoken_result_var.set(text)
+            self._log(
+                f"✓ 探索結果の伝達3値（系列mask 玉数 日別系列累計）: {text}"
+            )
         except (WorkflowError, OSError, ValueError, tk.TclError) as error:
-            messagebox.showerror("口頭引継ぎ", str(error), parent=self)
+            self._log(f"探索結果の伝達3値を表示できません: {error}")
 
     def _import_spoken_checkpoint(self) -> None:
         waiting = self._waiting_resubmission_candidate()
@@ -1709,6 +1686,10 @@ class SolverGUI(tk.Tk):
             self._state_loaded(state)
         elif key == "solved":
             self._show_search_result(data)
+            if self._automatic_workflow is not None:
+                self._show_spoken_candidate(
+                    self._automatic_workflow.work_dir / "score-next.json"
+                )
         elif key == "answer":
             self._show_answer_route(Path(data))
             self._show_json(Path(data))
@@ -2025,6 +2006,7 @@ class SolverGUI(tk.Tk):
             if result_state.is_file():
                 self._state_loaded(result_state)
             self._show_search_result(result)
+            self._show_spoken_candidate(self._work_path("score-next.json"))
             self._show_json(self._work_path("answer.json"))
             if auto_send:
                 self.after_idle(
@@ -2266,6 +2248,7 @@ class SolverGUI(tk.Tk):
 
     def _begin_search_result(self, target: str) -> None:
         self._clear_search_result()
+        self.spoken_result_var.set("- - -")
         self.search_result_vars["status"].set("探索中…")
         self.search_result_vars["target"].set(target)
 
