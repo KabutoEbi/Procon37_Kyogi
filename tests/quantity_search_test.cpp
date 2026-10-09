@@ -208,7 +208,90 @@ void checkOvernightReplayProperties() {
     }
 }
 
+void checkFirstRoundJointProfile() {
+    MatchSetting s;
+    s.field.width = s.field.height = 16;
+    BeamSearchConfig cfg;
+    for (const auto budget : {std::int64_t{0}, std::int64_t{1000},
+                             std::int64_t{45000}}) {
+        const auto profile = detail::adaptiveLongSearchProfile(
+            s, cfg, budget, false, false);
+        assert(profile.udonAlns.maxPatrols == 3);
+        cfg.smallBoardJointRefinement = false;
+        assert(detail::adaptiveLongSearchProfile(s, cfg, budget, false, false)
+            .udonAlns.maxPatrols == 2);
+        cfg.smallBoardJointRefinement = true;
+    }
+    cfg.adaptiveLongSearch = false;
+    assert(detail::adaptiveLongSearchProfile(s, cfg, 1000, false, true)
+        .udonAlns.maxPatrols == 3);
+    s.field.height = 24;
+    assert(detail::adaptiveLongSearchProfile(s, cfg, 1000, false, false)
+        .udonAlns.maxPatrols == 2);
+    s.field.width = 24;
+    assert(detail::adaptiveLongSearchProfile(s, cfg, 1000, false, false)
+        .udonAlns.maxPatrols == 2);
+}
+
+void checkFirstRoundFinalColumns() {
+    auto s = line();
+    s.field.width = s.field.height = 16;
+    s.field.cells.assign(256, {CellType::Plain, -1});
+    assert(s.field.rebuildSpotIndex());
+    s.fuelLimit = 30;
+    s.agentStarts = {0, 1, 2, 4};
+    MatchState ms;
+    ms.agents = {{0, AgentKind::Patrol, 0, 30},
+                 {1, AgentKind::Patrol, 1, 30},
+                 {2, AgentKind::Patrol, 2, 30},
+                 {3, AgentKind::Supply, 4, 30}};
+    ms.trafficByPos.assign(256, TrafficStatus::Smooth);
+    BeamSearchConfig cfg;
+    cfg.beamWidth = 8;
+    cfg.jointBeamWidth = 32;
+    cfg.threadCount = 1;
+    cfg.timeLimitMs = 0;
+    cfg.useStateDeadline = false;
+    cfg.iterativeDeepening = false;
+    cfg.adaptiveBeamWidth = false;
+    cfg.useUdonAlns = false;
+    cfg.coordinatedRefinement = false;
+    cfg.useDayBeam = false;
+    cfg.smallBoardFinalColumns = false;
+    const auto before = brain1(s, ms, {}, cfg);
+    cfg.smallBoardFinalColumns = true;
+    const auto after = brain1(s, ms, {}, cfg);
+    assert(before.success && after.success);
+    assert(after.finalState.score.totalUdon >= before.finalState.score.totalUdon);
+    assert(after.finalState.dayBrands == before.finalState.dayBrands);
+    assert(after.routeColumnsGenerated > before.routeColumnsGenerated);
+    const auto replay = simulateDay(s, ms, after.plan);
+    assert(replay.valid && replay.state == after.finalState);
+    s.daySteps.push_back(8);
+    s.daySeconds.push_back(60);
+    cfg.smallBoardFinalColumns = false;
+    const auto middleBefore = brain1(s, ms, {}, cfg);
+    cfg.smallBoardFinalColumns = true;
+    const auto middleAfter = brain1(s, ms, {}, cfg);
+    assert(middleBefore.plan == middleAfter.plan);
+    assert(middleBefore.finalState == middleAfter.finalState);
+    assert(middleBefore.routeColumnsGenerated == middleAfter.routeColumnsGenerated);
+    s.field.width = 8;
+    s.field.height = 32;
+    assert(s.field.rebuildSpotIndex());
+    s.daySteps.resize(1);
+    s.daySeconds.resize(1);
+    cfg.smallBoardFinalColumns = false;
+    const auto rectBefore = brain1(s, ms, {}, cfg);
+    cfg.smallBoardFinalColumns = true;
+    const auto rectAfter = brain1(s, ms, {}, cfg);
+    assert(rectBefore.plan == rectAfter.plan);
+    assert(rectBefore.routeColumnsGenerated == rectAfter.routeColumnsGenerated);
+}
+
 int main() {
+    checkFirstRoundJointProfile();
+    checkFirstRoundFinalColumns();
     checkTransitAndTimedRefuel();
     checkDayBeam();
     checkMovingSupplyKeepsEarlyRefuel();

@@ -95,11 +95,11 @@ class SearchParameters:
 
 @dataclass(frozen=True)
 class RandomSettingParameters:
-    width: int = 32
-    height: int = 32
-    agents: int = 7
-    spots: int = 32
-    brands: int = 28
+    width: int = 16
+    height: int = 16
+    agents: int = 4
+    spots: int = 16
+    brands: int = 14
     days: int = 10
     seconds: int = 60
     teams: int = 2
@@ -977,6 +977,7 @@ class Workflow:
 
     def _run(self, arguments: list[str], *, cwd: Path | None = None,
              ends_at: float = 0, day_seconds: float = 0,
+             local_budget_ms: int = 0,
              reserve_for_submission: bool = False,
              reserve_network_timeout: bool = True) -> CommandResult:
         self.check_stop()
@@ -1038,10 +1039,29 @@ class Workflow:
                     day_limit_ms,
                 ),
             )
+        if local_budget_ms:
+            parameters = replace(
+                parameters,
+                selection_time_ms=min(
+                    parameters.selection_time_ms or local_budget_ms,
+                    local_budget_ms,
+                ),
+            )
+        selection = bool(arguments and arguments[0] == "select")
+        effective_limit = (parameters.selection_time_ms if selection
+                           else parameters.time_limit_ms)
+        if effective_limit and effective_limit <= margin:
+            raise WorkflowError(
+                "探索上限が安全余裕以下です。探索上限を増やすか安全余裕を減らしてください"
+            )
         cutoff = None
         if ends_at:
             assert remaining is not None
             cutoff = time.monotonic() + remaining + 1  # 検証・ファイル保存用の1秒
+        elif local_budget_ms or day_seconds:
+            # ローカルでもC++側の制限に加えてプロセス終了を監視する。
+            limit_ms = local_budget_ms or parameters.time_limit_ms
+            cutoff = time.monotonic() + limit_ms / 1000 + 2
         command = [str(self.solver), *arguments, *parameters.arguments()]
         try:
             process = subprocess.Popen(
@@ -1065,6 +1085,8 @@ class Workflow:
                             process.kill()
                             process.communicate()
                         if expired:
+                            if not ends_at:
+                                raise WorkflowError("ローカル探索の時間上限を超えたためソルバーを終了しました")
                             raise WorkflowError("送信時間確保のためソルバーを終了しました。未完成回答は送信しません")
                         raise Paused("探索を停止しました")
         except OSError as error:
@@ -1145,9 +1167,14 @@ class Workflow:
                 text=True,
                 capture_output=True,
                 check=False,
+                timeout=30,
             )
+        except subprocess.TimeoutExpired as error:
+            temporary.unlink(missing_ok=True)
+            raise WorkflowError("ランダム設定の生成が30秒以内に終了しませんでした") from error
         except OSError as error:
             raise WorkflowError(f"ランダム設定を生成できません: {error}") from error
+        self.check_stop()
         result = CommandResult(tuple(command), completed.stdout, completed.stderr)
         if completed.returncode != 0:
             temporary.unlink(missing_ok=True)
@@ -1438,24 +1465,45 @@ class Workflow:
         self._require_solver()
         setting_value = read_json(setting)
         duration = _day_duration(setting_value, 0)
-        arguments = [str(setting.resolve())]
-        if "localTraffics" in setting_value:
-            kinds_path = self.work_dir / "local-agents.json"
-            self._run(["select", str(setting.resolve()), str(kinds_path)])
-            kinds = read_json(kinds_path)
-            agents = [
-                {"kind": kind, "pos": pos, "fuel": setting_value["fuelLimits"]}
-                for kind, pos in zip(kinds, setting_value["agents"])
-            ]
-            initial = {
-                "day": 0, "endsAt": 0, "agents": agents,
-                "others": [{"id": i, "agents": agents}
-                           for i in range(setting_value["players"] - 1)],
-                "traffics": setting_value["localTraffics"],
-            }
-            state_path = self.work_dir / "local-state.json"
-            atomic_write(state_path, json.dumps(initial).encode())
-            arguments.append(str(state_path))
+        # GUIの0は公式受付時間の意味。ローカルに受付時刻はないため、
+        # 既定10秒（短い日次予算ならその値）で種別選択を終える。
+        # 明示した種別選択予算も、盤面別受付枠を上限にする。
+        local_budget_ms = min(
+            self.parameters.selection_time_ms or min(
+                10000,
+                self.parameters.time_limit_ms or day_time_limit_ms(setting_value, 0),
+            ),
+            agent_selection_seconds(setting_value) * 1000,
+        )
+        # 過去の公式開始時刻はローカル試走の期限に使用しない。
+        # 元のAPI設定は変更せず、選択・探索に同じオフライン用コピーを渡す。
+        local_setting = self.work_dir / "local-setting.json"
+        while local_setting.resolve() == setting.resolve():
+            local_setting = local_setting.with_name(local_setting.stem + "-offline.json")
+        setting_value = {**setting_value, "startsAt": 0}
+        atomic_write(local_setting, json.dumps(setting_value).encode())
+        arguments = [str(local_setting.resolve())]
+        kinds_path = self.work_dir / "local-agents.json"
+        self._run(["select", str(local_setting.resolve()), str(kinds_path)],
+                  local_budget_ms=local_budget_ms)
+        kinds = read_json(kinds_path)
+        agents = [
+            {"kind": kind, "pos": pos, "fuel": setting_value["fuelLimits"]}
+            for kind, pos in zip(kinds, setting_value["agents"])
+        ]
+        initial = {
+            "day": 0, "endsAt": 0, "agents": agents,
+            "others": [{"id": i, "agents": agents}
+                       for i in range(setting_value["players"] - 1)],
+            "traffics": setting_value.get("localTraffics", [
+                {"pos": y * setting_value["map"]["width"] + x, "status": 0}
+                for y, row in enumerate(setting_value["map"]["cells"])
+                for x, terrain in enumerate(row) if terrain == 1
+            ]),
+        }
+        state_path = self.work_dir / "local-state.json"
+        atomic_write(state_path, json.dumps(initial).encode())
+        arguments.append(str(state_path))
         result = self._run(arguments, day_seconds=duration)
         if not result_state.is_file():
             raise WorkflowError("ソルバーが探索後状態 result-state.json を生成しませんでした")

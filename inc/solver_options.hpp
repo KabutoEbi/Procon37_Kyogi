@@ -54,7 +54,9 @@ private:
             name == "--stable-beam-stop" ||
             name == "--sa-stagnation-stop" ||
             name == "--small-board-brand-rescue" ||
-            name == "--auto-beam-width";
+            name == "--small-board-joint-refinement" ||
+            name == "--small-board-final-columns" ||
+            name == "--auto-beam-width" || name == "--arena-agent-prior";
     }
 
     void setOption(std::string_view name, std::int64_t value) {
@@ -90,6 +92,10 @@ private:
         else if (name == "--exact-brands") beam.exactBrands = value != 0;
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
+        else if (name == "--small-board-joint-refinement")
+            beam.smallBoardJointRefinement = value != 0;
+        else if (name == "--small-board-final-columns")
+            beam.smallBoardFinalColumns = value != 0;
         else if (name == "--udon-sa") beam.udonAlns.simulatedAnnealing = value != 0;
         else if (name == "--udon-joint-destroy")
             beam.udonAlns.jointDestroyRepair = value != 0;
@@ -134,7 +140,8 @@ private:
         else if (name == "--auto-beam-width") {
             autoBeamWidth = value != 0;
             hasAutoBeamOption = true;
-        } else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
+        } else if (name == "--arena-agent-prior") selection.arenaScorePrior = value != 0;
+        else if (name == "--trial-candidates") selection.trialCandidateLimit = value;
         else if (name == "--trial-beam-width") selection.trialBeamWidth = value;
         else if (name == "--trial-joint-beam-width") {
             selection.trialJointBeamWidth = value;

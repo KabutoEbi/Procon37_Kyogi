@@ -2,6 +2,7 @@
 
 #include "brain/brain0.hpp"
 #include "brain/brain1.hpp"
+#include "arena_score_model.hpp"
 #include "trial.hpp"
 
 #include <algorithm>
@@ -24,6 +25,7 @@ struct AgentSelectorConfig {
     // 自動決定する。必要なら明示値で半数を超える補給車も許可する。
     std::int32_t minSupplyCount = 1;
     std::int32_t maxSupplyCount = -1;
+    bool arenaScorePrior = true;
 
     // 距離評価後にbrain1で試走する候補数。0なら距離評価だけを使う。
     // 公式受付時間では候補を増やすより1候補あたりの探索を深くする。
@@ -84,27 +86,35 @@ private:
                    : cfg.maxSupplyCount;
     }
 
-    // 公開試合1539～1671の上位結果から推定した中心構成は、
-    // 4台で3巡回+1補給、5台で4+1、7台で5+2。特に5台盤面では
-    // 補給2台だと在庫上限だけで上位の玉数へ届かない試合がある。
-    // 個別の盤面評価で前後の台数へ動かせるよう、これは候補順の中心に
-    // だけ使い、最終決定は距離評価と試走比較に委ねる。
-    // std::clampを使わず、C++標準設定が古い補完環境でも解析できる形にする。
+    // 従来の公開試合から得た安全側の中心（3/4/5巡回）は下げない。
+    // 玉数予測がそれより多い巡回車を必要とする高在庫問題だけ、補給車を
+    // 1台まで減らす。最終決定は従来どおり距離評価と試走比較に委ねる。
     static std::int32_t preferredSupplyCount(
-        std::size_t agentCount, const AgentSelectorConfig& cfg,
+        const MatchSetting& s, const AgentSelectorConfig& cfg,
         std::int32_t maxSupply) noexcept {
+        const std::size_t agentCount = s.agentCount();
         const std::int32_t center = agentCount == 5
             ? 1
             : static_cast<std::int32_t>((agentCount + 1) / 3);
-        return std::max(cfg.minSupplyCount, std::min(center, maxSupply));
+        const std::int32_t baseSupply =
+            std::max(cfg.minSupplyCount, std::min(center, maxSupply));
+        const std::int32_t basePatrol =
+            static_cast<std::int32_t>(agentCount) - baseSupply;
+        const std::int32_t preferredPatrol = std::max(
+            basePatrol, cfg.arenaScorePrior
+                ? predictArenaTopScore(s).minimumPatrols : basePatrol);
+        const std::int32_t predictedSupply =
+            static_cast<std::int32_t>(agentCount) - preferredPatrol;
+        return std::max(
+            cfg.minSupplyCount, std::min(predictedSupply, maxSupply));
     }
 
     static std::vector<std::int32_t> supplyCountOrder(
-        std::size_t agentCount, const AgentSelectorConfig& cfg,
+        const MatchSetting& s, const AgentSelectorConfig& cfg,
         std::int32_t maxSupply) {
         std::vector<std::int32_t> order;
         const std::int32_t preferred =
-            preferredSupplyCount(agentCount, cfg, maxSupply);
+            preferredSupplyCount(s, cfg, maxSupply);
         const std::size_t count = static_cast<std::size_t>(
             maxSupply - cfg.minSupplyCount + 1);
         order.reserve(count);
@@ -210,7 +220,7 @@ private:
         std::int32_t maxSupply) {
         const std::size_t n = s.agentCount();
         const std::int32_t supplyN =
-            preferredSupplyCount(n, cfg, maxSupply);
+            preferredSupplyCount(s, cfg, maxSupply);
         const std::uint32_t masks =
             std::uint32_t{1} << static_cast<std::uint32_t>(n);
         std::uint32_t bestMask = 0;
@@ -460,7 +470,7 @@ public:
             // ブランド到達性は決して上書きせず、同等の候補間だけで補給不足を
             // 避ける程度の重みにする。玉数上限の差が大きければ巡回寄りも選べる。
             const std::int32_t preferredSupply =
-                preferredSupplyCount(n, cfg, maxSupply);
+                preferredSupplyCount(s, cfg, maxSupply);
             // 長期戦では初日の取得上限より、燃料切れを翌日以降へ
             // 連鎖させない構成の価値が高い。試走を省略する全自動でも
             // 7台の中心構成（巡回5＋補給2）が僅差の在庫上限に負けない
@@ -515,7 +525,7 @@ public:
             supplyPressure = s.fuelLimit <= maxDaySteps;
             // 短い締切で最低台数の候補だけを評価して終わらないよう、
             // 巡回車との比率がよい中心台数から近い順に比較する。
-            const auto countOrder = supplyCountOrder(n, cfg, maxSupply);
+            const auto countOrder = supplyCountOrder(s, cfg, maxSupply);
             preferredSupply = countOrder.front();
             auto appendBest = [&](std::int32_t count) {
                 if (trials.size() >= trialLimit) return;

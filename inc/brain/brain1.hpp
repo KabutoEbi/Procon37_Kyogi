@@ -63,6 +63,10 @@ struct BeamSearchConfig {
     std::size_t smallBoardBeamBudgetPercent = 75;
     std::size_t smallBoardBrandSearchNodeLimit = 200000;
     bool useUdonAlns = true;
+    // 一回戦盤面では3巡回車の経路・在庫をまとめて再配分する。
+    bool smallBoardJointRefinement = true;
+    // 通常探索を終えた最終日だけ、残時間で幅広い経路組合せを比較。
+    bool smallBoardFinalColumns = true;
     UdonAlnsConfig udonAlns{};
     // brain1 uses the established hill-climbing ALNS by default. A later
     // solver generation can inject another acceptance policy without copying
@@ -234,6 +238,11 @@ inline AdaptiveLongSearchProfile adaptiveLongSearchProfile(
     profile.quantityBudgetPercent = std::clamp<std::size_t>(
         config.quantityBudgetPercent, 1, 90);
     profile.udonAlns = config.udonAlns;
+    if (config.smallBoardJointRefinement &&
+        setting.field.width == 16 && setting.field.height == 16) {
+        profile.udonAlns.maxPatrols = std::max<std::size_t>(
+            profile.udonAlns.maxPatrols, 3);
+    }
     if (!config.adaptiveLongSearch || effectiveBudgetMs <= 0 ||
         effectiveBudgetMs == std::numeric_limits<std::int64_t>::max() ||
         config.quantityUpgrades) {
@@ -4037,6 +4046,8 @@ inline BeamSearchResult brain1(
                 !longSearch.udonAlns.arenaGuidedNeighborhoods;
             expandedConfig.randomSeed ^=
                 UINT64_C(0xd1b54a32d192ed03);
+            expandedConfig.annealingWarmStart =
+                longSearch.udonAlns.warmStartPortfolio;
             // A proxy for tomorrow is not strong enough to justify changing
             // the endpoint in the extra quantity pass. Intermediate-day
             // alternatives must finish with exactly the incumbent positions
@@ -4094,6 +4105,29 @@ inline BeamSearchResult brain1(
             result.finalState = improved.finalState;
             changed = true;
             remember();
+        }
+    }
+    // 全日で広げる案は翌日の系列とSA乱数列に退行があった。
+    // 既存の最終日探索が完了した後、残時間だけで独立候補を比較する。
+    if (config.smallBoardFinalColumns && routeColumnsActive && finalDay &&
+        setting.field.width == 16 && setting.field.height == 16 &&
+        countBits(result.finalState.score.matchBrands) >= result.matchBrandUpperBound &&
+        countBits(result.finalState.dayBrands) >= result.dailyBrandUpperBound &&
+        Clock::now() < deadline) {
+        auto columnConfig = config.routeColumns;
+        columnConfig.labelWidth = std::max<std::size_t>(columnConfig.labelWidth, 48);
+        columnConfig.columnsPerAgent = std::max<std::size_t>(columnConfig.columnsPerAgent, 48);
+        columnConfig.maxMasterNodes = std::max<std::size_t>(columnConfig.maxMasterNodes, 250000);
+        const auto wide = searchRouteColumns(setting, matchState,
+            previousScore, result.plan, config.spotRouteLns, columnConfig,
+            deadline);
+        result.routeColumnsGenerated += wide.generated;
+        result.routeColumnsMasterNodes += wide.masterNodes;
+        result.routeColumnsImprovements += wide.improvements;
+        if (wide.improvements) {
+            result.plan = wide.plan;
+            result.finalState = wide.finalState;
+            changed = true;
         }
     }
     if (runDayBeam && Clock::now() < hardDeadline) {

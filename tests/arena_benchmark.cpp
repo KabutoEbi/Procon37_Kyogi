@@ -60,13 +60,15 @@ void addMixedTraffic(
 int main(int argc, char** argv) {
     using namespace benzen;
     try {
-        if (argc < 2 || argc > 14) {
+        if (argc < 2 || argc > 18) {
             std::cerr << "usage: " << argv[0]
                       << " setting.json [time-ms] [supply-mask] [traffic]"
                          " [beam-width] [joint-beam-width] [hard-next-day]"
                          " [details] [arena-guidance] [joint-destroy]"
                          " [detour-aware-spots] [differential-insertion]"
-                         " [auto-sized-beam]\n";
+                         " [auto-sized-beam] [quantity-budget-percent]"
+                         " [annealing-warm-start] [small-board-joint]"
+                         " [small-board-final-columns]\n";
             return 2;
         }
         MatchSetting setting;
@@ -83,19 +85,24 @@ int main(int argc, char** argv) {
 
         const int timeMs = argc >= 3 ? std::stoi(argv[2]) : 1000;
         const int supplyMask = argc >= 4 ? std::stoi(argv[3]) : 1;
-        if (timeMs <= 0 || supplyMask < 0) {
+        if (timeMs < 0 || supplyMask < 0) {
             throw std::invalid_argument(
-                "time must be positive and supply mask must be non-negative");
+                "time and supply mask must be non-negative");
         }
 
         MatchRunnerConfig config;
         config.beam.timeLimitMs = timeMs;
         config.beam.safetyMarginMs = 0;
         config.beam.useStateDeadline = false;
-        if (argc >= 5 && std::string(argv[4]) == "mixed") {
+        if (argc >= 5 && (std::string(argv[4]) == "mixed" ||
+                         std::string(argv[4]) == "mixed-after-first")) {
             addMixedTraffic(setting, config);
+            if (std::string(argv[4]) == "mixed-after-first")
+                std::fill(config.trafficByDay.front().begin(),
+                    config.trafficByDay.front().end(), TrafficStatus::Smooth);
         } else if (argc >= 5 && std::string(argv[4]) != "smooth") {
-            throw std::invalid_argument("traffic mode must be 'smooth' or 'mixed'");
+            throw std::invalid_argument(
+                "traffic mode must be smooth, mixed or mixed-after-first");
         }
         if (argc >= 6) config.beam.beamWidth = std::stoul(argv[5]);
         if (argc >= 7) config.beam.jointBeamWidth = std::stoul(argv[6]);
@@ -150,6 +157,39 @@ int main(int argc, char** argv) {
                     "auto-sized-beam must be 0 or 1");
             }
             config.beam.autoSizedBeam = enabled != 0;
+        }
+        if (argc >= 15) {
+            const int percent = std::stoi(argv[14]);
+            if (percent < 1 || percent > 90) {
+                throw std::invalid_argument(
+                    "quantity-budget-percent must be 1..90");
+            }
+            config.beam.quantityBudgetPercent =
+                static_cast<std::size_t>(percent);
+            config.beam.adaptiveLongSearch = false;
+        }
+        if (argc >= 16) {
+            const int enabled = std::stoi(argv[15]);
+            if (enabled < 0 || enabled > 1)
+                throw std::invalid_argument("annealing-warm-start must be 0 or 1");
+            config.beam.udonAlns.warmStartPortfolio = enabled != 0;
+        }
+        if (argc >= 17) {
+            const int enabled = std::stoi(argv[16]);
+            if (enabled < 0 || enabled > 1)
+                throw std::invalid_argument("small-board-joint must be 0 or 1");
+            config.beam.smallBoardJointRefinement = enabled != 0;
+        }
+        if (argc >= 18) {
+            const int enabled = std::stoi(argv[17]);
+            if (enabled < 0 || enabled > 1)
+                throw std::invalid_argument("small-board-final-columns must be 0 or 1");
+            config.beam.smallBoardFinalColumns = enabled != 0;
+        }
+        if (timeMs == 0) {
+            // 固定探索量の比較。0は本番CLIではなく、この計測ツール専用。
+            config.beam.adaptiveBeamWidth = false;
+            config.beam.autoSizedBeam = false;
         }
         const auto match = runMatch(
             setting,

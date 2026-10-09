@@ -304,6 +304,31 @@ class RecoveryTest(unittest.TestCase):
             self.assertEqual(margin, 5000)
             self.assertEqual(limit - margin, 55000)
 
+    def test_local_selection_zero_has_finite_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            w = Workflow(ConnectionConfig("", ""), Path(sys.executable),
+                         Path(directory), SearchParameters(selection_time_ms=0))
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ("", "")
+            with mock.patch("backend.subprocess.Popen", return_value=process):
+                result = w._run(["select"], local_budget_ms=10000)
+            command = result.command
+            self.assertEqual(int(command[command.index("--selection-time-ms") + 1]),
+                             10000)
+
+    def test_local_selection_watchdog_terminates_stuck_solver(self):
+        with tempfile.TemporaryDirectory() as directory:
+            w = Workflow(ConnectionConfig("", ""), Path(sys.executable),
+                         Path(directory), SearchParameters(safety_margin_ms=1000))
+            process = mock.Mock()
+            process.communicate.side_effect = [
+                subprocess.TimeoutExpired("solver", 0.1), ("", "")]
+            with mock.patch("backend.subprocess.Popen", return_value=process), \
+                 mock.patch("backend.time.monotonic", side_effect=[10.0, 15.0]):
+                with self.assertRaisesRegex(WorkflowError, "ローカル探索の時間上限"):
+                    w._run(["select"], local_budget_ms=2000)
+            process.terminate.assert_called_once()
+
     def test_checkpoint_code_round_trip_and_revision_guard(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

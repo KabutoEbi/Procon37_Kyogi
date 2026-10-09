@@ -93,6 +93,8 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 `--compare-adaptive-long-search`は、盤面・実効時間別のALNS上限と後段配分を使う`adaptive-long-search`、従来の固定上限・固定配分を使う`fixed-long-search`を交互に実行する。時間打切りの揺れを減らすため複数seed・複数反復で判断し、短時間、35秒級、55秒級を分けて記録する。
 
+`--compare-small-board-joint-refinement`は、16×16の通常ALNSで3台同時再配分を許す`small-board-joint-refinement`と、従来の2台上限`no-small-board-joint-refinement`を比較する。他の盤面には影響しない。`--compare-warm-start-portfolio`は追加SAの初期訪問列の継承だけを切り替える。これらは他の`--compare-*`と併用できない。
+
 各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`--compare-detour-aware-sa`は利益÷迂回量による低頻度の狙い撃ち、`--compare-differential-insertion`は挿入位置の局所差分評価、`--compare-reachability-rarity`は到達可能巡回車数による希少系列ポートフォリオを、それぞれ直前方式と対比較する。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`no-supply-cleanup`は探索後の補給車周回除去を、`wandering-supply`は合流未割当時の自由移動を有効にする。`unbounded-supply-wait`は補給車の待機上限を0にして旧方式へ戻す。`legacy-supply-schedules`は経路候補組合せの固定待機案を1件、時刻付き合流を最大2回へ戻す比較用設定である。`terminal-wait-fill`は実験的な末尾待機活用を有効化し、`no-transit-pickup-ranking`は32×32の経路ラベルにおける通過取得順位を無効化する。`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
 
 標準エラーへ試合単位の得点合計、時間の中央値・最大値、展開数、辞書順（試合系列→日別系列累計→玉数）での勝ち・同点・負けを出力する。性能値はCPU負荷などに左右されるため、同じ環境・同じビルド設定で比較する。固定シードでも時間打切りの結果は変動し、生成問題での改善が本番問題での改善を保証するものではない。

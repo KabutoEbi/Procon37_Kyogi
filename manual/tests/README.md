@@ -18,6 +18,11 @@
 | [`arena-score-analysis-1905.md`](arena-score-analysis-1905.md) | 公開試合1905までの得点傾向、AHC解法、SA挿入差分評価の採否 |
 | [`arena-score-analysis-1918.md`](arena-score-analysis-1918.md) | 公開試合1918までの上位得点、反復深化、系列上限なし救済の検証 |
 | [`arena-score-analysis-1922-1926.md`](arena-score-analysis-1922-1926.md) | 1922・1926の日別系列不足と翌日急短縮への終端配置改善 |
+| [`arena-score-analysis-1931.md`](arena-score-analysis-1931.md) | 公開98試合、巡回台数下限予測、追加SAの比較、ローカル無制限探索修正 |
+| [`first-round-16-results-2026-10-10.md`](first-round-16-results-2026-10-10.md) | 一回戦16×16限定の3巡回車同時再配分、通常・厳燃料比較 |
+| [`arena-score-analysis-1937-16.md`](arena-score-analysis-1937-16.md) | 最新16×16の上位目標、最終日追加経路候補、退行した案の撤回 |
+| `analyze_small_board_history.py` / `small_board_api_benchmark.py` | 公開詳細の16×16ラウンド集計と1機能の対比較 |
+| `analyze_arena_history.py` | API詳細キャッシュのラウンド重複除去、回収率学習、未学習ラウンド検証 |
 | [`takamatsu-pamphlet-search-analysis.md`](takamatsu-pamphlet-search-analysis.md) | 高松大会パンフレットのビーム・SA解法との照合と希少系列評価の不採用理由 |
 | [`saved_day_benchmark.cpp`](coordinated-refinement-results-2026-10-07.md) | 保存済みの設定・当日状態・得点から1日を再探索する診断ツール |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |

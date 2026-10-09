@@ -63,6 +63,18 @@ void checkSameBrandExtraUdon() {
     assert(improved.finalState.dayUdon == 2);
     const auto replay = simulateDay(s, ms, improved.plan);
     assert(replay.valid && replay.state == improved.finalState);
+
+    // 系列を確保した訪問列からのSAでも、全再生と非退行を確認する。
+    cfg.annealingWarmStart = true;
+    cfg.jointDestroyRepair = false;
+    const auto warm = brain2_detail::improveDayUdonAnnealed(
+        s, ms, {}, incumbent, cfg,
+        std::chrono::steady_clock::time_point::max());
+    assert(warm.greedyAttempts == 0);
+    assert(warm.finalState.dayUdon == 2);
+    assert(warm.finalState.dayBrands == before.state.dayBrands);
+    const auto warmReplay = simulateDay(s, ms, warm.plan);
+    assert(warmReplay.valid && warmReplay.state == warm.finalState);
 }
 
 void checkBrainMaximizesBrandsBeforeUdon() {

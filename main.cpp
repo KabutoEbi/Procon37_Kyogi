@@ -56,6 +56,11 @@ int runSelection(int argc, char* argv[], const SolverOptions& options) {
         return 1;
     }
     std::cout << "agents-json=" << output
+              << "\nselected-patrols=" << setting.agentCount() - selected.supplyCount
+              << "\nselected-supplies=" << selected.supplyCount
+              << "\npredicted-top-udon=" << predictArenaTopScore(setting).targetUdon
+              << "\npredicted-minimum-patrols="
+              << predictArenaTopScore(setting).minimumPatrols
               << "\ntimed-out=" << (selected.timedOut ? "true" : "false") << '\n';
     return 0;
 }
@@ -102,8 +107,6 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
         }
     }
 
-    if (!reportWrite(writeAgentKindsJson(kinds, kAgentsPath), kAgentsPath)) return 1;
-
     ScoreState score;
     const char* checkpointPath = argc > firstArg + 2 ? argv[firstArg + 2] : nullptr;
     if (!loadScore(checkpointPath, setting, state, score)) return 1;
@@ -112,11 +115,16 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
     if (state.endsAt == 0 && !options.hasTimeLimit && !config.exactBrands) {
         // オフライン実行も無制限にしない。60秒枠の5秒前を目標にする。
         config.timeLimitMs = std::min<std::int64_t>(
-            options.autoBeamWidth ? 60000 : 5000,
+            options.autoBeamWidth ? 60000 : 5000 + config.safetyMarginMs,
             static_cast<std::int64_t>(setting.daySeconds[
                 static_cast<std::size_t>(state.day)]) * 1000);
     }
     config = options.beamFor(setting, state, config);
+    if (config.timeLimitMs > 0 && config.timeLimitMs <= config.safetyMarginMs) {
+        std::cerr << "time limit must exceed safety margin\n";
+        return 1;
+    }
+    if (!reportWrite(writeAgentKindsJson(kinds, kAgentsPath), kAgentsPath)) return 1;
 
     std::cout << "parameters brain=2"
               << " beam-width=" << config.beamWidth
@@ -136,7 +144,7 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << config.smallBoardBeamBudgetPercent
               << " small-board-brand-node-limit="
               << config.smallBoardBrandSearchNodeLimit
-              << " day-beam=" << (config.quantityUpgrades && config.useDayBeam ? 1 : 0)
+              << " day-beam=" << (config.useDayBeam ? 1 : 0)
               << " day-beam-width=" << config.dayBeamWidth
               << " day-beam-depth=" << config.dayBeamDepth
               << " day-beam-max-udon-loss=" << config.dayBeamMaxUdonLoss

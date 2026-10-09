@@ -12,6 +12,32 @@ benzen::SolverOptions parse(std::vector<std::string> values) {
 }
 
 int main() {
+    assert(parse({"main"}).beam.smallBoardJointRefinement);
+    assert(parse({"main"}).beam.smallBoardFinalColumns);
+    assert(!parse({"main", "--small-board-final-columns", "0"})
+        .beam.smallBoardFinalColumns);
+    assert(!parse({"main", "--small-board-joint-refinement", "0"})
+        .beam.smallBoardJointRefinement);
+    assert(!parse({"main", "--arena-agent-prior", "0"}).selection.arenaScorePrior);
+    benzen::MatchSetting highStock;
+    highStock.field.width = highStock.field.height = 32;
+    highStock.field.cells.assign(1024, {benzen::CellType::Plain, -1});
+    for (int i = 0; i < 32; ++i)
+        highStock.field.spots.push_back({i % 24, i, 6, -1});
+    assert(highStock.field.rebuildSpotIndex());
+    highStock.agentStarts = {100, 110, 120, 130, 140, 150, 160};
+    highStock.daySteps = {224, 224, 224, 224};
+    highStock.daySeconds = {60, 60, 60, 60};
+    highStock.fuelLimit = 500;
+    const auto target = benzen::predictArenaTopScore(highStock);
+    assert(target.targetUdon > 5 * 32 * 4);
+    assert(target.targetUdon <= 6 * 32 * 4);
+    assert(target.minimumPatrols == 6);
+    benzen::AgentSelectorConfig expiredPrior;
+    expiredPrior.deadlineUnixSeconds = 1;
+    assert(benzen::selectAgentKinds(highStock, expiredPrior).supplyCount == 1);
+    expiredPrior.arenaScorePrior = false;
+    assert(benzen::selectAgentKinds(highStock, expiredPrior).supplyCount == 2);
     assert(parse({"main"}).selection.trialCandidateLimit == 6);
     assert(parse({"main"}).beam.safetyMarginMs == 5000);
     assert(parse({"main"}).beam.coordinatedRefinement);
@@ -63,6 +89,8 @@ int main() {
         {"main", "--stable-beam-stop", "2"},
         {"main", "--sa-stagnation-stop", "2"},
         {"main", "--small-board-brand-rescue", "2"},
+        {"main", "--small-board-joint-refinement", "2"},
+        {"main", "--small-board-final-columns", "2"},
         {"main", "--small-board-beam-budget-percent", "49"},
         {"main", "--small-board-beam-budget-percent", "96"},
         {"main", "--small-board-brand-node-limit", "999"},

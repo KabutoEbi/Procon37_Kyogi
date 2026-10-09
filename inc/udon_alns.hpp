@@ -62,6 +62,9 @@ struct UdonAlnsConfig {
     bool expandedPortfolio = true;
     // brain2がこのALNSを再構築器として使う際の焼きなまし設定。
     bool simulatedAnnealing = true;
+    // 追加SAでは系列満点の訪問列を引き継ぎ、貪欲再構築の予算を節約する。
+    bool annealingWarmStart = false;
+    bool warmStartPortfolio = true;
     // SA担当では、全近傍を十分に試した後に最良解の更新が止まれば、
     // ハードな時刻上限を待たずに終了する。
     bool stopOnStagnation = false;

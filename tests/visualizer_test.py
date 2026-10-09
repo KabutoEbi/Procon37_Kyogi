@@ -60,6 +60,48 @@ from server_client.auto_submit import parser as auto_submit_parser  # noqa: E402
 
 
 class BackendTest(unittest.TestCase):
+    def test_reject_search_budget_not_exceeding_margin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            for limit in (1000, 5000):
+                workflow = Workflow(ConnectionConfig("", ""), work / "main", work,
+                                    SearchParameters(time_limit_ms=limit))
+                with mock.patch("backend.subprocess.Popen") as process:
+                    with self.assertRaisesRegex(WorkflowError, "安全余裕以下"):
+                        workflow._run(["setting.json", "state.json"], day_seconds=60)
+                    process.assert_not_called()
+            workflow.parameters = SearchParameters(selection_time_ms=1000)
+            with mock.patch("backend.subprocess.Popen") as process:
+                with self.assertRaisesRegex(WorkflowError, "安全余裕以下"):
+                    workflow._run(["select", "setting.json"])
+                process.assert_not_called()
+
+    def test_local_selection_ignores_past_start_without_changing_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            # 作業用コピーと同じ名前の入力でも、元ファイルを上書きしない。
+            setting = work / "local-setting.json"
+            source = read_json(ROOT / "sample_maps/sample_16.json")
+            source["startsAt"] = 1
+            setting.write_text(json.dumps(source), encoding="utf-8")
+            original = setting.read_bytes()
+            workflow = Workflow(ConnectionConfig("", ""), work / "main", work)
+
+            def run(arguments, **kwargs):
+                self.assertEqual(read_json(Path(arguments[1] if arguments[0] == "select"
+                                               else arguments[0]))["startsAt"], 0)
+                if arguments[0] == "select":
+                    Path(arguments[2]).write_text(json.dumps([0] * len(source["agents"])))
+                else:
+                    (work / "result-state.json").write_text("{}")
+                return SimpleNamespace(command=tuple(arguments))
+
+            with mock.patch.object(workflow, "_require_solver"), \
+                    mock.patch.object(workflow, "_run", side_effect=run) as executed:
+                workflow.solve_local(setting)
+            self.assertEqual(executed.call_count, 2)
+            self.assertEqual(setting.read_bytes(), original)
+
     def test_default_connection_timeout_is_ten_seconds(self) -> None:
         self.assertEqual(ConnectionConfig("http://example", "secret").timeout, 10.0)
         self.assertEqual(auto_submit_parser().parse_args([]).timeout, 10.0)
@@ -265,7 +307,7 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(
             (defaults.width, defaults.height, defaults.agents,
              defaults.spots, defaults.brands, defaults.days),
-            (32, 32, 7, 32, 28, 10),
+            (16, 16, 4, 16, 14, 10),
         )
         for size, agents, low, high in ((16, 4, 10, 14),
                                         (24, 5, 14, 20),
@@ -777,7 +819,7 @@ result
             self.assertEqual(setting["players"], 3)
             workflow.parameters = SearchParameters(
                 beam_width=8, joint_beam_width=32, threads=1,
-                time_limit_ms=100, safety_margin_ms=0, trial_candidates=0,
+                time_limit_ms=100, safety_margin_ms=0, trial_candidates=6,
             )
             for include_congestion in (0, 1):
                 parameters = RandomSettingParameters(
@@ -840,7 +882,17 @@ result
                     time_limit_ms=100, safety_margin_ms=0, trial_candidates=0,
                 ),
             )
-            workflow.solve_local(setting)
+            completed = workflow.solve_local(setting)
+            self.assertIn("day-beam=1", completed.output)
+            # GUIを経由しないCLIでも、探索時間0になる設定を拒否する。
+            rejected = subprocess.run(
+                [os.environ["PROCON_TEST_SOLVER"], str(setting),
+                 str(work / "local-state.json"), "--time-limit-ms", "1000",
+                 "--safety-margin-ms", "5000"],
+                cwd=work, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("time limit must exceed safety margin", rejected.stderr)
             result_path = work / "result-state.json"
             result = read_json(result_path)
             source = read_json(setting)

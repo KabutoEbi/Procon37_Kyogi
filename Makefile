@@ -86,7 +86,7 @@ test-samples: check-samples $(TEST_DIR)/sample_maps_test
 	$(TEST_DIR)/sample_maps_test
 
 test-python: main
-	$(PY_ENV) $(PYTHON) -m unittest -v tests/visualizer_test.py tests/recovery_test.py tests/visualizer_runtime_test.py
+	$(PY_ENV) $(PYTHON) -m unittest -v tests/visualizer_test.py tests/recovery_test.py tests/visualizer_runtime_test.py tests/small_board_history_test.py
 
 # Explicit opt-in: desktop window / localhost listener / sanitizers required.
 test-gui:
