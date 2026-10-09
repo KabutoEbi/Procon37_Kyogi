@@ -80,7 +80,7 @@ if (result.success) {
 
 ## 結果
 
-`BeamSearchResult`には計画、最終状態、評価内訳、展開数、評価回数、マクロ統計、補給車から除去した周回数`removedSupplyLoops`、補給車ごとの`SupplyUtilization`、経過時間、停止理由が入る。実際に使った配分とALNS上限は`quantityBudgetPercentUsed`、`beamBudgetPercentUsed`、`udonAlnsAttemptLimit`、`udonAlnsNodesPerAttempt`へ記録し、コンソールにも出力する。スポット経路探索の候補上限は`spotPortfolioMaxBrands`、`spotPortfolioMaxUdon`、公式検証済み候補の上限は`spotPortfolioMaxValidUdon`で診断でき、`MatchRunner`から日別結果へ伝播する。利用率は後段の改善が終わった最終採用計画を再生して更新する。`success == false`の場合は`plan`を送信せず、`application.hpp`の`solveDay()`などで待機計画へフォールバックする。
+`BeamSearchResult`には計画、最終状態、評価内訳、展開数、評価回数、マクロ統計、補給車から除去した周回数`removedSupplyLoops`、補給車ごとの`SupplyUtilization`、経過時間、停止理由が入る。実際に使った配分とALNS上限は`quantityBudgetPercentUsed`、`beamBudgetPercentUsed`、`udonAlnsAttemptLimit`、`udonAlnsNodesPerAttempt`へ記録し、コンソールにも出力する。`brain2`利用時は貪欲候補数、共同destroy/repairの試行・展開・改善数、7近傍の提案・受理数も記録する。スポット経路探索の候補上限は`spotPortfolioMaxBrands`、`spotPortfolioMaxUdon`、公式検証済み候補の上限は`spotPortfolioMaxValidUdon`で診断でき、`MatchRunner`から日別結果へ伝播する。利用率は後段の改善が終わった最終採用計画を再生して更新する。`success == false`の場合は`plan`を送信せず、`application.hpp`の`solveDay()`などで待機計画へフォールバックする。
 
 公開入口`brain1()`はビーム、系列救済、全車系列補完、スポット単位ビーム、局所／共同LNS、経路候補組合せ、玉数ALNSを順に試す。玉数改善は先に得た系列数を下限とし、中間日は翌日到達性の近似条件も検査する。標準の自動幅では、実効15秒未満はビーム82%を基本として先行回答を優先し、15〜30秒は75%、30〜45秒は最終日70%／中間日73%、45秒以上は最終日65%／中間日70%へ段階調整する。16×16は系列救済保護のため通常時も70%を下限とする。厳燃料日はビーム85%を維持する。手動幅は従来どおり80%、`adaptiveLongSearch=false`の自動幅は通常75%・厳燃料時85%である。中間日は最後に終端再配置を行う。全車補完は6方向移動と1ステップ待機を列挙し、公式シミュレータと燃料を緩和した距離上限を用いる。`exactBrands=true`では系列証明を優先する。各改善段階の試行数・展開数をレポートする。
 
@@ -92,9 +92,9 @@ if (result.success) {
 
 日次改善は試合系列数、当日系列数、玉数の辞書順で合法計画を選ぶ。最後の日跨ぎ比較だけは、当日系列数が同じ候補間で玉数を設定上限まで譲り、将来の予測得点を優先できる。将来の系列数・玉数は保証されない。巡回車別の経路候補組合せは玉数順に試し、全車の系列制約を検査する。時間・燃料・地形や有限探索による取りこぼしを含めた大域最適性は保証しない。
 
-`comparePeriodicReplanPlans`による経路方式比較は公開入口`brain1()`で行う。最終日、マクロ有効、`macroReplanInterval == 0`で、相対上限が`routePortfolioMinTimeMs`以上または締切のない無制限探索の場合だけ有効になる。有限時間では通常経路へ実効予算のおよそ半分を割り当て、残時間で4イベント周期再計画経路を探索する。最終日は翌日評価が不要なので、周期再計画経路の公式得点が高ければ終端ヒューリスティックにかかわらず採用し、公式得点が同じ場合だけ終端評価で比較する。探索内の完了計画と最終ビームも、系列数を全日で最優先する。小・中盤面でも定期再計画による系列・獲得数の改善が確認されたため、盤面サイズと台数による制限は設けない。
+`comparePeriodicReplanPlans`による経路方式比較は公開入口`brain1()`で行う。`brain2()`も共通処理としてこの入口を呼ぶ。最終日、マクロ有効、`macroReplanInterval == 0`で、相対上限が`routePortfolioMinTimeMs`以上または締切のない無制限探索の場合だけ有効になる。有限時間では通常経路へ実効予算のおよそ半分を割り当て、残時間で4イベント周期再計画経路を探索する。最終日は翌日評価が不要なので、周期再計画経路の公式得点が高ければ終端ヒューリスティックにかかわらず採用し、公式得点が同じ場合だけ終端評価で比較する。探索内の完了計画と最終ビームも、系列数を全日で最優先する。小・中盤面でも定期再計画による系列・獲得数の改善が確認されたため、盤面サイズと台数による制限は設けない。
 
-方式比較時の`elapsedMs`は両探索を含む壁時計時間で、展開数、評価回数、マクロ候補、割当・合流統計は両探索の合計になる。`Brain1::search()`を直接呼ぶと方式比較は行われないため、通常の呼び出し側は`brain1()`、`application.hpp::solveDay()`、`match_runner.hpp::runMatch()`を使用する。中間日の位置を変えて後日の系列数を下げることを避けるため、方式比較は最終日に限定している。
+方式比較時の`elapsedMs`は両探索を含む壁時計時間で、展開数、評価回数、マクロ候補、割当・合流統計は両探索の合計になる。`Brain1::search()`を直接呼ぶと方式比較は行われない。通常実行は`brain2()`、焼きなましを除く比較には`brain1()`を使用する。中間日の位置を変えて後日の系列数を下げることを避けるため、方式比較は最終日に限定している。
 
 `profilePlanning=true`の場合、`assignmentTimeNs`、`flowTimeNs`、`rendezvousTimeNs`を返す。割当時間はキャッシュミス後の共同割当計算時間、最小費用流は最短増加路の実行時間（翌日目的地評価分も含む）、合流は実計算時間を表す。計測範囲が重複するため、3つを加算して総時間としてはならない。並列時は各スレッドの時間を合計し、壁時計時間とは区別する。
 

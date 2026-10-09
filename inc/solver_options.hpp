@@ -53,7 +53,9 @@ private:
         }
         if ((name == "--macro-actions" || name == "--adaptive-beam" ||
              name == "--exact-brands" || name == "--brand-repair" ||
-             name == "--udon-alns" || name == "--spot-route-lns" ||
+             name == "--udon-alns" || name == "--udon-sa" ||
+             name == "--udon-joint-destroy" ||
+             name == "--spot-route-lns" ||
              name == "--route-columns" ||
              name == "--adaptive-long-search" ||
              name == "--next-day-probe" || name == "--day-beam" || name == "--quantity-upgrades" || name == "--coordinated-refinement" ||
@@ -83,6 +85,9 @@ private:
         else if (name == "--exact-brands") beam.exactBrands = value != 0;
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
+        else if (name == "--udon-sa") beam.udonAlns.simulatedAnnealing = value != 0;
+        else if (name == "--udon-joint-destroy")
+            beam.udonAlns.jointDestroyRepair = value != 0;
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
         else if (name == "--adaptive-long-search") beam.adaptiveLongSearch = value != 0;

@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <random>
 #include <tuple>
 
@@ -42,12 +43,21 @@ void checkSameBrandExtraUdon() {
     UdonAlnsConfig cfg;
     cfg.maxAttempts = 12;
     cfg.nodesPerAttempt = 2000;
-    const auto improved = improveDayUdon(s, ms, {}, incumbent, cfg,
+    cfg.initialTemperature = cfg.finalTemperature = 1e6;
+    const auto improved = brain2_detail::improveDayUdonAnnealed(
+        s, ms, {}, incumbent, cfg,
         std::chrono::steady_clock::time_point::max());
     assert(improved.improvements > 0);
+    assert(improved.acceptedWorseMoves > 0);
+    assert(improved.greedyAttempts > 0);
+    assert(improved.jointDestroyAttempts > 0);
+    assert(improved.neighborhoodAttempts[0] > 0); // insertion
+    assert(improved.neighborhoodAttempts[2] > 0); // 2-opt
     assert(improved.attempts > cfg.maxAttempts);
-    assert(improved.attempts <=
-           cfg.maxAttempts + cfg.improvementBonusAttempts);
+    const std::size_t annealingLimit = std::max<std::size_t>(
+        256, (cfg.maxAttempts + cfg.improvementBonusAttempts) * 16);
+    assert(improved.attempts <= annealingLimit +
+        s.field.spots.size() * s.field.spots.size());
     assert(improved.finalState.dayBrands == before.state.dayBrands);
     assert(improved.finalState.score.matchBrands == before.state.score.matchBrands);
     assert(improved.finalState.dayUdon == 2);
@@ -77,6 +87,16 @@ void checkBrainMaximizesBrandsBeforeUdon() {
     assert(result.udonAlnsAttempts > 0);
     const auto replay = simulateDay(s, ms, result.plan);
     assert(replay.valid && replay.state == result.finalState);
+
+    cfg.udonAlns.initialTemperature = 1e6;
+    cfg.udonAlns.finalTemperature = 1e6;
+    const auto annealed = brain2(s, ms, {}, cfg);
+    assert(annealed.success);
+    assert(annealed.udonAlnsAcceptedWorseMoves > 0);
+    assert(brain2_detail::officialScore(annealed.finalState) >=
+           brain2_detail::officialScore(result.finalState));
+    const auto annealedReplay = simulateDay(s, ms, annealed.plan);
+    assert(annealedReplay.valid && annealedReplay.state == annealed.finalState);
 }
 
 void checkIntermediateDayPreservesFutureState() {
@@ -234,6 +254,95 @@ void checkAdaptiveLongSearchProfile() {
     assert(disabled.udonAlns.maxAttempts == 12);
     assert(disabled.udonAlns.nodesPerAttempt == 800);
 }
+
+void checkAnnealingScheduleAndAcceptance() {
+    UdonAlnsConfig cfg;
+    cfg.initialTemperature = 4.0;
+    cfg.finalTemperature = 0.25;
+    const double first = brain2_detail::annealingTemperature(cfg, 0, 9);
+    const double middle = brain2_detail::annealingTemperature(cfg, 4, 9);
+    const double last = brain2_detail::annealingTemperature(cfg, 8, 9);
+    assert(std::abs(first - 4.0) < 1e-12);
+    assert(std::abs(middle - 1.0) < 1e-12);
+    assert(std::abs(last - 0.25) < 1e-12);
+    assert(brain2_detail::annealingAcceptanceProbability(0, 1.0) == 1.0);
+    assert(brain2_detail::annealingAcceptanceProbability(1, 1.0) == 1.0);
+    assert(std::abs(brain2_detail::annealingAcceptanceProbability(-1, 1.0) -
+                    std::exp(-1.0)) < 1e-12);
+    assert(brain2_detail::annealingAcceptanceProbability(-1, 0.0) == 0.0);
+
+    std::uint64_t firstState = 12345;
+    std::uint64_t secondState = 12345;
+    for (int i = 0; i < 8; ++i) {
+        const double a = brain2_detail::annealingUnitRandom(firstState);
+        const double b = brain2_detail::annealingUnitRandom(secondState);
+        assert(a == b && a >= 0.0 && a < 1.0);
+    }
+}
+
+void checkExtendedTourEvaluationUsesOfficialReplay() {
+    auto smoothSetting = line(2, 4, {0}, {{0, 1, 1, -1}});
+    for (auto& cell : smoothSetting.field.cells) cell.type = CellType::Road;
+    auto smoothState = stateFor(smoothSetting, {AgentKind::Patrol});
+    const DailyPlan smoothPlan{{2, -3}};
+    const auto smoothReplay = simulateDay(
+        smoothSetting, smoothState, smoothPlan);
+    assert(smoothReplay.valid);
+    const auto smooth = brain2_detail::evaluateExtendedTour(
+        smoothSetting, smoothState, {}, smoothPlan, smoothReplay);
+    assert(smooth.congestionDelaySteps == 0);
+
+    auto jammedState = smoothState;
+    jammedState.trafficByPos[0] = TrafficStatus::Jammed;
+    const DailyPlan jammedPlan{{2}};
+    const auto jammedReplay = simulateDay(
+        smoothSetting, jammedState, jammedPlan);
+    assert(jammedReplay.valid);
+    const auto jammed = brain2_detail::evaluateExtendedTour(
+        smoothSetting, jammedState, {}, jammedPlan, jammedReplay);
+    assert(jammed.congestionDelaySteps == 3);
+    assert(jammed.congestedRoadExposureSteps == 3);
+    assert(jammed.annealingEnergy < smooth.annealingEnergy);
+
+    auto supplySetting = line(3, 6, {0, 0}, {{0, 2, 1, -1}});
+    auto supplyState = stateFor(
+        supplySetting, {AgentKind::Patrol, AgentKind::Supply});
+    supplyState.agents[0].fuel = 0;
+    const DailyPlan rendezvousPlan{{-1, 2, 2, -1}, {-6}};
+    const auto rendezvousReplay = simulateDay(
+        supplySetting, supplyState, rendezvousPlan);
+    assert(rendezvousReplay.valid);
+    const auto rendezvous = brain2_detail::evaluateExtendedTour(
+        supplySetting, supplyState, {}, rendezvousPlan, rendezvousReplay);
+    assert(rendezvous.refuelEvents >= 1);
+    assert(rendezvous.deliveredFuel == supplySetting.fuelLimit);
+    assert(rendezvous.servedPatrols == 1);
+    assert(rendezvous.minimumPatrolFuel == 0);
+    assert(rendezvous.lowFuelAgentSteps >= 1);
+    assert(rendezvous.strandedAgentSteps >= 1);
+}
+
+void checkArenaGuidedNeighborhoodSampling() {
+    const UdonAlnsConfig defaults;
+    assert(!defaults.arenaGuidedNeighborhoods);
+    assert(defaults.stockWeightedSpotSelection);
+    const auto s = line(2, 4, {0},
+        {{0, 0, 1, -1}, {0, 1, 5, -1}});
+    brain2_detail::SpotRoutes routes;
+    std::array<int, 2> spotDraws{};
+    std::array<int, 7> operationDraws{};
+    std::uint64_t randomState = 987654321;
+    for (int sample = 0; sample < 10000; ++sample) {
+        ++spotDraws[brain2_detail::chooseStockWeightedSpot(
+            s, routes, randomState)];
+        ++operationDraws[brain2_detail::chooseAnnealingOperation(
+            randomState)];
+    }
+    assert(spotDraws[1] > spotDraws[0]);
+    assert(operationDraws[0] > operationDraws[1]);
+    assert(operationDraws[2] > operationDraws[1]);
+    for (const int draws : operationDraws) assert(draws > 0);
+}
 }  // namespace
 
 void checkReassignConsumedStock() {
@@ -263,4 +372,7 @@ int main() {
     checkRandomValidityAndPreservedBrandCounts();
     checkNearestSupplyUsesTrafficTravelTime();
     checkAdaptiveLongSearchProfile();
+    checkAnnealingScheduleAndAcceptance();
+    checkExtendedTourEvaluationUsesOfficialReplay();
+    checkArenaGuidedNeighborhoodSampling();
 }

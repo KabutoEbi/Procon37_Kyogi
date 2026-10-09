@@ -25,6 +25,7 @@
 
 - [`brain/brain0.hpp`](brain/brain0.md): ダイクストラ法と燃料制約付き最短路
 - [`brain/brain1.hpp`](brain/brain1.md): ビームサーチ、実効時間別の後段改善配分、最終日の経路方式比較
+- [`brain/brain2.hpp`](brain/brain2.md): `brain1`の探索基盤に焼きなまし付き玉数ALNSを差し込む通常実行入口
 - [`brand_repair.hpp`](brand_repair.md): 未獲得系列を救済する連鎖再計画
 - [`brand_search.hpp`](brand_search.md): 全車の系列最大化と最適性証明
 - [`spot_route_lns.hpp`](spot_route_lns.md): スポット単位ビームと複数巡回車の訪問列再編

@@ -60,6 +60,19 @@ struct UdonAlnsConfig {
     bool allowFuturePositionChange = true;
     // 最終日は従来近傍と広い近傍を比較し、公式得点が高い方だけを採る。
     bool expandedPortfolio = true;
+    // brain2がこのALNSを再構築器として使う際の焼きなまし設定。
+    bool simulatedAnnealing = true;
+    // Before patrol-route SA, jointly rebuild several patrol suffixes and the
+    // nearest supply route. This is the large-neighborhood phase of brain2.
+    bool jointDestroyRepair = true;
+    // Operation-probability guidance remains experimental: combining it with
+    // stock guidance regressed on public match 1866.
+    bool arenaGuidedNeighborhoods = false;
+    // Prefer spots whose stock still supports assignment to another patrol.
+    bool stockWeightedSpotSelection = true;
+    double initialTemperature = 2.0;
+    double finalTemperature = 0.05;
+    std::uint64_t randomSeed = 0x9e3779b97f4a7c15ULL;
 };
 
 struct UdonAlnsResult {
@@ -68,6 +81,14 @@ struct UdonAlnsResult {
     std::size_t attempts = 0;
     std::size_t expanded = 0;
     std::size_t improvements = 0;
+    std::size_t acceptedMoves = 0;
+    std::size_t acceptedWorseMoves = 0;
+    std::size_t greedyAttempts = 0;
+    std::size_t jointDestroyAttempts = 0;
+    std::size_t jointDestroyExpanded = 0;
+    std::size_t jointDestroyImprovements = 0;
+    std::array<std::size_t, 7> neighborhoodAttempts{};
+    std::array<std::size_t, 7> neighborhoodAccepted{};
     bool interrupted = false;
 };
 

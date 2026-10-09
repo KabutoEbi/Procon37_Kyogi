@@ -106,6 +106,10 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `--current-only`: `--variant`の構成だけを実行する。異なるバイナリの同条件比較用。
 - `--compare-brand-repair`: 連鎖再計画だけを切り替えた`no-brand-repair`と`brand-repair`を同じ時間予算・問題で交互に実行する。他の探索機能は両方で有効。`--current-only`との併用は不可。
 - `--compare-udon-alns`: ALNSだけを切り替えた`no-udon-alns`と`udon-alns`を同じ条件で交互に実行する。`--compare-brand-repair`との併用は不可。
+- `--compare-udon-sa`: 同じ玉数ALNSで焼きなましだけを切り替えた`no-udon-sa`と`udon-sa`を交互に実行する。
+- `--variant no-arena-guidance`: SAの追加・置換スポットを一様乱数へ戻し、公開得点から導いた在庫重み付き誘導を切り分ける。
+- `--variant arena-stock-guidance`, `arena-both-guidance`: 在庫重みだけ、または在庫重みと実験的な近傍確率変更を有効にする。
+- `--variant no-joint-destroy-repair`: SA前の複数巡回車・補給車共同再構築だけを無効化する。
 - `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
 - `--agents N`, `--supplies N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、補給車数、スポット数、系列数、日数を上書きする。補給車数は台数未満でなければならない。
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。

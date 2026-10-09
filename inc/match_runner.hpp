@@ -1,6 +1,6 @@
 #pragma once
 
-#include "brain/brain1.hpp"
+#include "brain/brain2.hpp"
 #include "simulator.hpp"
 
 #include <cstddef>
@@ -200,7 +200,7 @@ public:
             record.startState = st;
 
             const BeamSearchResult search =
-                brain1(s, st, score, cfg.beam);
+                brain2(s, st, score, cfg.beam);
             record.expandedNodes = search.expandedNodes;
             record.elapsedMs = search.elapsedMs;
             record.assignmentCacheHits = search.assignmentCacheHits;

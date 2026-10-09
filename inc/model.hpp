@@ -5,6 +5,7 @@
 #include "agent_selector.hpp"
 #include "brain/brain0.hpp"
 #include "brain/brain1.hpp"
+#include "brain/brain2.hpp"
 #include "cell.hpp"
 #include "console.hpp"
 #include "create.hpp"

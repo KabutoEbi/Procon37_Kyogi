@@ -4,7 +4,7 @@
 
 GUIから渡すビーム幅、スレッド数、時間制限、マクロ設定、`--route-columns 0/1`などの反映と不正値の拒否を検査する。種別選択の既定値が補給車を最低1台要求することも確認する。
 
-2026-10-07以降は`--coordinated-refinement`、実験的な`--quantity-upgrades` / `--day-beam`、16×16専用の`--small-board-brand-rescue`、ビーム予算割合50〜95、系列探索上限1000以上も範囲検査する。
+2026-10-07以降は`--coordinated-refinement`、実験的な`--quantity-upgrades` / `--day-beam`、16×16専用の`--small-board-brand-rescue`、ビーム予算割合50〜95、系列探索上限1000以上も範囲検査する。2026-10-09以降は`--udon-sa 0/1`と`--udon-joint-destroy 0/1`の反映、不正値の拒否も検査する。
 
 ```sh
 c++ -std=c++17 -O2 -pthread -Iinc tests/solver_options_test.cpp -o /tmp/solver_options_test

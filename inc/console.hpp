@@ -318,6 +318,28 @@ inline void printConsoleReport(
         << "  udon-alns-attempts=" << result.udonAlnsAttempts << '\n'
         << "  udon-alns-expanded=" << result.udonAlnsExpanded << '\n'
         << "  udon-alns-improvements=" << result.udonAlnsImprovements << '\n'
+        << "  udon-alns-accepted-moves=" << result.udonAlnsAcceptedMoves << '\n'
+        << "  udon-alns-accepted-worse-moves="
+        << result.udonAlnsAcceptedWorseMoves << '\n'
+        << "  udon-alns-greedy-attempts="
+        << result.udonAlnsGreedyAttempts << '\n'
+        << "  udon-joint-destroy="
+        << result.udonJointDestroyAttempts << '/'
+        << result.udonJointDestroyExpanded << '/'
+        << result.udonJointDestroyImprovements << '\n'
+        << "  udon-sa-neighborhood-attempts=";
+    for (std::size_t i = 0;
+         i < result.udonAlnsNeighborhoodAttempts.size(); ++i) {
+        if (i) out << ',';
+        out << result.udonAlnsNeighborhoodAttempts[i];
+    }
+    out << '\n' << "  udon-sa-neighborhood-accepted=";
+    for (std::size_t i = 0;
+         i < result.udonAlnsNeighborhoodAccepted.size(); ++i) {
+        if (i) out << ',';
+        out << result.udonAlnsNeighborhoodAccepted[i];
+    }
+    out << '\n'
         << "  quantity-budget-percent-used="
         << result.quantityBudgetPercentUsed << '\n'
         << "  beam-budget-percent-used=" << result.beamBudgetPercentUsed << '\n'
