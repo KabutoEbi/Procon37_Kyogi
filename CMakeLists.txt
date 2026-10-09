@@ -17,6 +17,11 @@ endfunction()
 
 function(procon_windows_stack target)
     if(WIN32)
+        if(MINGW)
+            # Keep thread-local destruction in the compiler's own runtime.
+            # DLLs found through PATH can crash when worker threads exit.
+            target_link_options(${target} PRIVATE -static-libgcc -static-libstdc++)
+        endif()
         if(MSVC)
             target_link_options(${target} PRIVATE /STACK:16777216)
         else()

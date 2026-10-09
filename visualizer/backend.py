@@ -320,11 +320,17 @@ def solver_build_command(output: Path) -> list[str]:
         command.append("-pthread")
     else:
         command.append("-Wl,--stack,16777216")
+        command.extend(("-static-libgcc", "-static-libstdc++"))
     return [*command, str(source), "-o", str(output)]
 
 
 def process_exit_detail(returncode: int) -> str:
     unsigned = returncode & 0xFFFFFFFF
+    if unsigned == 0xC0000374:
+        return (
+            f"終了コード {returncode} (0xC0000374: Windowsヒープメモリ破損。"
+            "MinGWではC++ランタイムを静的リンクした設定でmain.exeを再ビルドしてください)"
+        )
     if unsigned == 0xC00000FD:
         return (
             f"終了コード {returncode} (0xC00000FD: Windowsスタックオーバーフロー。"

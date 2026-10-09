@@ -247,7 +247,8 @@ inline UdonAlnsResult improveDayUdon(
             for (const AgentIndex other : patrols) {
                 if (other == primary) continue;
                 int opportunity = 0;
-                for (std::size_t spot = 0; spot < s.field.spots.size(); ++spot) {
+                 for (std::size_t spot = 0;
+                     spot < s.field.spots.size() && spot < kMaxSpots; ++spot) {
                     if (targetState.remainingStocks[spot] > 0 &&
                         !(targetState.acquiredSpots[other] & spotBit(spot)))
                         ++opportunity;
@@ -281,7 +282,8 @@ inline UdonAlnsResult improveDayUdon(
                 pending = PendingAction{};
             }
             if (neighborhood.freeAgents[a] && ms.agents[a].isPatrol()) {
-                for (std::size_t spot = 0; spot < s.field.spots.size(); ++spot) {
+                 for (std::size_t spot = 0;
+                     spot < s.field.spots.size() && spot < kMaxSpots; ++spot) {
                     // start already contains the stock at the cut: do not add
                     // stock again. Freed suffix acquisitions can change owner.
                     if (!(targetState.acquiredSpots[a] & spotBit(spot)) &&
