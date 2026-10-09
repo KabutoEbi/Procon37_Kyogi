@@ -21,7 +21,7 @@ import math
 import queue
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 import tkinter as tk
 from pathlib import Path
@@ -54,6 +54,7 @@ from backend import (
     map_acquisition_totals,
     parse_solver_result,
     default_solver_path,
+    parse_spoken_checkpoint,
     read_json,
     simple_server_teams,
 )
@@ -61,16 +62,30 @@ from backend import (
 
 APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
 
+@dataclass(frozen=True)
+class TeamRoleProfile:
+    label: str
+    build_label: str
+    time_limit_ms: int
+    udon_sa: int
+    stable_beam_stop: int = 0
+    sa_stagnation_stop: int = 0
+
+
+TEAM_ROLE_PROFILES = {
+    "lead": TeamRoleProfile(
+        "担当1 先行ビーム（約15秒）", "担当1・短時間ビーム", 20000, 0,
+    ),
+    "middle": TeamRoleProfile(
+        "担当2 収束ビーム（上限約35秒）", "担当2・収束ビーム", 40000, 0, 1, 0,
+    ),
+    "long": TeamRoleProfile(
+        "担当3 収束SA（上限約45秒）", "担当3・収束SA", 50000, 1, 0, 1,
+    ),
+}
 TEAM_ROLE_LABELS = {
     "normal": "通常",
-    "lead": "担当1 先行（約15秒）",
-    "middle": "担当2 追走（約35秒）",
-    "long": "担当3 本命（約55秒）",
-}
-TEAM_ROLE_TIME_LIMITS = {
-    "lead": 20000,
-    "middle": 40000,
-    "long": 60000,
+    **{role: profile.label for role, profile in TEAM_ROLE_PROFILES.items()},
 }
 
 
@@ -304,6 +319,7 @@ class SolverGUI(tk.Tk):
         self._clock_day_ends_at = 0.0
         self._automatic_phase = "未実行"
         self._automatic_phase_started = 0.0
+        self._final_answer_accepted = False
         self._simple_server = SimpleServer(PROJECT_ROOT / "runtime/simple-server")
         self._simple_teams: tuple[tuple[str, str], ...] = ()
         self.mode_var = tk.StringVar(value="manual")
@@ -329,6 +345,8 @@ class SolverGUI(tk.Tk):
         self.setting_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/setting.json"))
         self.state_var = tk.StringVar(value=str(PROJECT_ROOT / "runtime/state-day0.json"))
         self.score_var = tk.StringVar()
+        self.spoken_checkpoint_var = tk.StringVar()
+        self.spoken_result_var = tk.StringVar(value="- - -")
         # GUI表示は1始まり。API・JSON・ファイル名へ渡す直前に0始まりへ戻す。
         self.day_var = tk.IntVar(value=1)
         self.status_var = tk.StringVar(value="準備完了")
@@ -472,7 +490,28 @@ class SolverGUI(tk.Tk):
         self.team_role_box.set(TEAM_ROLE_LABELS["normal"])
         self.stop_button = ttk.Button(mode, text="停止", command=self._request_stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=6)
-        ttk.Label(mode, text="dayは1始まり / 設定変更は次の実行から適用").pack(side=tk.LEFT, padx=10)
+        spoken = ttk.Frame(mode)
+        spoken.pack(side=tk.LEFT, padx=10)
+        ttk.Label(
+            spoken,
+            textvariable=self.spoken_result_var,
+            anchor=tk.CENTER,
+            font=("TkDefaultFont", 11, "bold"),
+        ).pack(fill=tk.X)
+        spoken_input = ttk.Frame(spoken)
+        spoken_input.pack(fill=tk.X)
+        self.spoken_checkpoint_entry = ttk.Entry(
+            spoken_input, textvariable=self.spoken_checkpoint_var, width=25,
+        )
+        self.spoken_checkpoint_entry.pack(side=tk.LEFT, padx=(0, 2))
+        self.spoken_checkpoint_entry.bind(
+            "<Return>", lambda _event: self._import_spoken_checkpoint()
+        )
+        self.spoken_import_button = ttk.Button(
+            spoken_input, text="取込", command=self._import_spoken_checkpoint,
+        )
+        self.spoken_import_button.pack(side=tk.LEFT, padx=(2, 0))
+        self._action_buttons.append(self.spoken_import_button)
 
         clock = ttk.Frame(mode, width=210, height=52, padding=(10, 0, 0, 0))
         self.match_clock_frame = clock
@@ -573,13 +612,6 @@ class SolverGUI(tk.Tk):
         check = ttk.Button(config, text="通信確認（手動）", command=self._check_connection)
         check.grid(row=2, column=5, sticky=tk.E)
         self._action_buttons.append(check)
-        self._path_row(
-            config, 3, 0, "共有フォルダ", self.shared_var,
-            self._choose_shared_dir,
-        )
-        ttk.Label(
-            config, text="有線LAN共有フォルダ（3人運用では必須）"
-        ).grid(row=3, column=3, columnspan=3, sticky=tk.W, padx=(12, 0))
         self._build_file_panel(config)
         self._build_random_setting_panel(config)
         window.withdraw()
@@ -665,7 +697,7 @@ class SolverGUI(tk.Tk):
         notebook.add(frame, text="探索パラメータ")
         self.parameters_frame = frame
         fields = [
-            ("auto_beam_width", "ビーム幅の自動選択", "1: 盤面・当日のステップ数に応じ約55秒 / 0: 下の手動幅"),
+            ("auto_beam_width", "ビーム幅の自動選択", "1: 盤面・当日・時間上限に応じる / 0: 下の手動幅"),
             ("beam_width", "ビーム幅", "各展開で保持する状態数"),
             ("joint_beam_width", "同時行動ビーム幅", "複数台への行動割当の幅"),
             ("threads", "スレッド数", "0: 自動 / 1: 直列"),
@@ -674,6 +706,9 @@ class SolverGUI(tk.Tk):
             ("max_actions", "各車の行動候補数", "0: 全候補"),
             ("macro_actions", "マクロ行動", "1: 有効 / 0: 無効"),
             ("adaptive_beam", "ビーム幅自動調整", "自動選択が0のときだけ使用"),
+            ("udon_sa", "玉数の焼きなまし", "担当1・2は0（ビーム系）/ 担当3は1（SA）"),
+            ("stable_beam_stop", "ビーム安定時に終了", "担当2は1: 連続2段階で結果が同じなら終了"),
+            ("sa_stagnation_stop", "SA停滞時に終了", "担当3は1: 全近傍試行後の無改善で終了"),
             ("trial_candidates", "種別選択の試走候補数", "0: 距離評価のみ"),
             ("trial_beam_width", "種別選択の試走ビーム幅", "1以上"),
             ("trial_joint_beam_width", "種別選択の同時行動幅", "1以上"),
@@ -699,8 +734,8 @@ class SolverGUI(tk.Tk):
                     row=row, column=2, sticky=tk.W
                 )
 
-        add_fields(daily, fields[:9])
-        add_fields(selection, fields[9:])
+        add_fields(daily, fields[:10])
+        add_fields(selection, fields[10:])
 
     def _path_row(
         self,
@@ -725,18 +760,15 @@ class SolverGUI(tk.Tk):
             row=0, column=0, sticky=tk.W, pady=(0, 8)
         )
 
-        actions = [("0  mainをビルド", self._build_solver, False)]
         row = 1
-        for text, command, primary in actions:
-            button = ttk.Button(
-                parent,
-                text=text,
-                command=command,
-                style="Primary.TButton" if primary else "TButton",
-            )
-            button.grid(row=row, column=0, sticky=tk.EW, pady=3)
-            self._action_buttons.append(button)
-            row += 1
+        self.build_solver_button = ttk.Button(
+            parent,
+            text="0  mainを最適化ビルド",
+            command=self._build_solver,
+        )
+        self.build_solver_button.grid(row=row, column=0, sticky=tk.EW, pady=3)
+        self._action_buttons.append(self.build_solver_button)
+        row += 1
 
         self.prepare_button = ttk.Button(
             parent,
@@ -955,8 +987,6 @@ class SolverGUI(tk.Tk):
         except ValueError as error:
             raise WorkflowError("timeoutは数値、探索パラメータは整数で指定してください") from error
         shared_text = self.shared_var.get().strip()
-        if self._team_role() != "normal" and not shared_text:
-            raise WorkflowError("3人運用では共有フォルダを設定してください")
         shared_dir = Path(shared_text) if shared_text else None
         if shared_dir is not None and not shared_dir.expanduser().is_dir():
             raise WorkflowError(f"共有フォルダを開けません: {shared_dir}")
@@ -1132,6 +1162,17 @@ class SolverGUI(tk.Tk):
                       if follower_mode else
                       "1b 問題公開待ち・設定取得・種別選択・送信")
             )
+        if hasattr(self, "build_solver_button"):
+            profile = TEAM_ROLE_PROFILES.get(role)
+            self.build_solver_button.configure(
+                text=(f"0  mainを最適化ビルド（{profile.build_label}）" if profile else
+                      "0  mainを最適化ビルド")
+            )
+        if hasattr(self, "spoken_import_button"):
+            self.spoken_import_button.configure(
+                state=(tk.NORMAL if not self._busy or waiting_candidate
+                       else tk.DISABLED)
+            )
 
     def _team_role(self) -> str:
         selected = self.team_role_var.get()
@@ -1144,17 +1185,35 @@ class SolverGUI(tk.Tk):
         role = self._team_role()
         if role != "normal":
             self.mode_var.set("auto" if role == "lead" else "manual")
-            self.parameter_vars["auto_beam_width"].set("1")
-            self.parameter_vars["time_limit_ms"].set(
-                str(TEAM_ROLE_TIME_LIMITS[role])
-            )
+            self._apply_team_role_profile(role)
+            profile = TEAM_ROLE_PROFILES[role]
             send_mode = "自動送信" if role == "lead" else "手動送信"
             self._log(
-                f"3人運用: {TEAM_ROLE_LABELS[role]} / {send_mode}"
+                f"3人運用: {profile.label} / {send_mode} / "
+                f"udon-sa={profile.udon_sa} / "
+                f"stable-beam-stop={profile.stable_beam_stop} / "
+                f"sa-stagnation-stop={profile.sa_stagnation_stop}"
             )
         else:
+            self.parameter_vars["stable_beam_stop"].set("0")
+            self.parameter_vars["sa_stagnation_stop"].set("0")
             self._sync_day_time_limit()
         self._mode_changed()
+
+    def _apply_team_role_profile(self, role: str) -> None:
+        """担当別の時間・探索方式をGUI引数へ一括反映する。"""
+        profile = TEAM_ROLE_PROFILES.get(role)
+        if profile is None:
+            return
+        self.parameter_vars["auto_beam_width"].set("1")
+        self.parameter_vars["time_limit_ms"].set(str(profile.time_limit_ms))
+        self.parameter_vars["udon_sa"].set(str(profile.udon_sa))
+        self.parameter_vars["stable_beam_stop"].set(
+            str(profile.stable_beam_stop)
+        )
+        self.parameter_vars["sa_stagnation_stop"].set(
+            str(profile.sa_stagnation_stop)
+        )
 
     def _waiting_resubmission_candidate(
         self,
@@ -1297,6 +1356,7 @@ class SolverGUI(tk.Tk):
         self.day_var.set(1)
         self._selected_kinds = []
         self._day_count = 0
+        self._final_answer_accepted = False
         self._current_snapshot = None
         self._logged_schedule = None
         self._milestones.clear()
@@ -1447,10 +1507,100 @@ class SolverGUI(tk.Tk):
                 messagebox.showerror(".env読込", str(error), parent=self)
 
     def _build_solver(self) -> None:
+        role = self._team_role()
+        self._apply_team_role_profile(role)
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
-        self._run_task("mainのビルド", workflow.build_solver)
+        profile = TEAM_ROLE_PROFILES.get(role)
+        label = profile.build_label if profile else "通常"
+        self._run_task(f"mainの最適化ビルド（{label}）", workflow.build_solver)
+
+    @staticmethod
+    def _spoken_checkpoint_text(checkpoint: dict[str, Any]) -> str:
+        parsed = parse_spoken_checkpoint(
+            f"{checkpoint.get('matchBrands')} {checkpoint.get('totalUdon')} "
+            f"{checkpoint.get('sumOfDailyBrandCounts')}",
+            checkpoint.get("nextDay"),
+        )
+        return (
+            f"{parsed['matchBrands']} {parsed['totalUdon']} "
+            f"{parsed['sumOfDailyBrandCounts']}"
+        )
+
+    def _show_spoken_checkpoint(self, checkpoint: Path) -> None:
+        value = read_json(checkpoint)
+        if not isinstance(value, dict):
+            raise WorkflowError("次日チェックポイントの形式が不正です")
+        text = self._spoken_checkpoint_text(value)
+        self.spoken_result_var.set(text)
+        next_day = value["nextDay"]
+        self._final_answer_accepted = bool(
+            self._day_count and next_day >= self._day_count
+        )
+        if self._final_answer_accepted:
+            self.status_var.set("最終日回答受理: 3値の取込不要")
+            self._log(
+                "✓ 最終結果3値（次日への取込不要、系列mask 玉数 "
+                f"日別系列累計）: {text}"
+            )
+        else:
+            self.status_var.set(f"口頭共有 day={next_day + 1}: {text}")
+            self._log(
+                f"✓ 口頭共有3値（系列mask 玉数 日別系列累計）: {text}"
+            )
+
+    def _show_spoken_candidate(self, checkpoint: Path) -> None:
+        try:
+            value = read_json(checkpoint)
+            if not isinstance(value, dict):
+                raise WorkflowError("次日チェックポイントの形式が不正です")
+            text = self._spoken_checkpoint_text(value)
+            self.spoken_result_var.set(text)
+            self._log(
+                f"✓ 探索結果の伝達3値（系列mask 玉数 日別系列累計）: {text}"
+            )
+        except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+            self._log(f"探索結果の伝達3値を表示できません: {error}")
+
+    def _import_spoken_checkpoint(self) -> None:
+        try:
+            past_last_day = bool(
+                self._day_count and self.day_var.get() > self._day_count
+            )
+        except tk.TclError:
+            past_last_day = False
+        if self._final_answer_accepted or past_last_day:
+            message = "最終日の回答後は次の日がないため、3値の取込は不要です。"
+            self.status_var.set("全日程終了: 3値の取込不要")
+            self._log(f"✓ {message}")
+            messagebox.showinfo("口頭引継ぎ", message, parent=self)
+            return
+        waiting = self._waiting_resubmission_candidate()
+        workflow = waiting[0] if waiting is not None else self._workflow_or_dialog()
+        if workflow is None:
+            return
+        next_day = self._day_or_dialog()
+        if next_day is None:
+            return
+        try:
+            with workflow.artifact_lock:
+                output = workflow.import_spoken_checkpoint(
+                    self.spoken_checkpoint_var.get(), next_day,
+                )
+            self.spoken_checkpoint_var.set("")
+            self.score_var.set(str(output))
+            for context, (state, _checkpoint, digest) in list(self._daily_inputs.items()):
+                if context[-1] == next_day:
+                    self._daily_inputs[context] = (state, output, digest)
+            self.status_var.set(
+                f"口頭引継ぎ完了: day={next_day + 1}"
+            )
+            self._log(
+                f"✓ 口頭引継ぎ day={next_day + 1}: {output}"
+            )
+        except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+            messagebox.showerror("口頭引継ぎ", str(error), parent=self)
 
     def _check_connection(self) -> None:
         workflow = self._workflow_or_dialog()
@@ -1562,14 +1712,25 @@ class SolverGUI(tk.Tk):
             self._state_loaded(state)
         elif key == "solved":
             self._show_search_result(data)
+            if self._automatic_workflow is not None:
+                self._show_spoken_candidate(
+                    self._automatic_workflow.work_dir / "score-next.json"
+                )
         elif key == "answer":
             self._show_answer_route(Path(data))
             self._show_json(Path(data))
+        elif key == "result_state":
+            self._state_loaded(Path(data))
         elif key == "accepted":
             revision, checkpoint, next_day = data
             self.score_var.set(str(checkpoint))
             self.day_var.set(next_day + 1)
             self._log(f"revision={revision}\n次日チェックポイント: {checkpoint}")
+            if self._automatic_workflow is not None:
+                try:
+                    self._show_spoken_checkpoint(checkpoint)
+                except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+                    self._log(f"口頭共有3値の表示に失敗しました: {error}")
         elif key == "prefetch_done":
             self._prefetching_days.discard(data)
         elif key == "prefetch_error":
@@ -1604,6 +1765,7 @@ class SolverGUI(tk.Tk):
         self.score_var.set("")
         self._selected_kinds = []
         self._day_count = 0
+        self._final_answer_accepted = False
         self.day_spinbox.configure(to=10)
         self.day_var.set(1)
         self._sync_day_time_limit()
@@ -1789,10 +1951,9 @@ class SolverGUI(tk.Tk):
     def _sync_day_time_limit(self) -> None:
         """設定済みの対象日の試合時間を探索上限の初期値にする。"""
         role = self._team_role()
-        if role in TEAM_ROLE_TIME_LIMITS:
-            self.parameter_vars["time_limit_ms"].set(
-                str(TEAM_ROLE_TIME_LIMITS[role])
-            )
+        profile = TEAM_ROLE_PROFILES.get(role)
+        if profile is not None:
+            self.parameter_vars["time_limit_ms"].set(str(profile.time_limit_ms))
             return
         try:
             setting = read_json(Path(self.setting_var.get()).expanduser())
@@ -1872,6 +2033,7 @@ class SolverGUI(tk.Tk):
             if result_state.is_file():
                 self._state_loaded(result_state)
             self._show_search_result(result)
+            self._show_spoken_candidate(self._work_path("score-next.json"))
             self._show_json(self._work_path("answer.json"))
             if auto_send:
                 self.after_idle(
@@ -1984,6 +2146,10 @@ class SolverGUI(tk.Tk):
             self._log(
                 f"revision={revision}\n再送: {archived}\n次日チェックポイント: {checkpoint}"
             )
+            try:
+                self._show_spoken_checkpoint(checkpoint)
+            except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+                self._log(f"口頭共有3値の表示に失敗しました: {error}")
 
         def worker() -> None:
             try:
@@ -2021,6 +2187,10 @@ class SolverGUI(tk.Tk):
             self._log(
                 f"revision={revision}\n保存: {archived}\n次日チェックポイント: {checkpoint}"
             )
+            try:
+                self._show_spoken_checkpoint(checkpoint)
+            except (WorkflowError, OSError, ValueError, tk.TclError) as error:
+                self._log(f"口頭共有3値の表示に失敗しました: {error}")
             if after_accepted is not None:
                 after_accepted()
 
@@ -2105,6 +2275,7 @@ class SolverGUI(tk.Tk):
 
     def _begin_search_result(self, target: str) -> None:
         self._clear_search_result()
+        self.spoken_result_var.set("- - -")
         self.search_result_vars["status"].set("探索中…")
         self.search_result_vars["target"].set(target)
 

@@ -21,7 +21,7 @@ struct SolverOptions {
     bool autoBeamWidth = true;
     bool hasAutoBeamOption = false;
     bool hasManualBeamWidth = false;
-    bool hasQuantityBudgetOption = false;
+    bool quantityBudgetSpecified = false;
 
     SolverOptions() {
         // CLIの標準60秒枠では約55秒を探索へ使う。
@@ -42,6 +42,21 @@ private:
         return value;
     }
 
+    static bool isBooleanOption(std::string_view name) {
+        return name == "--macro-actions" || name == "--adaptive-beam" ||
+            name == "--exact-brands" || name == "--brand-repair" ||
+            name == "--udon-alns" || name == "--udon-sa" ||
+            name == "--udon-joint-destroy" || name == "--spot-route-lns" ||
+            name == "--route-columns" || name == "--adaptive-long-search" ||
+            name == "--next-day-probe" || name == "--day-beam" ||
+            name == "--quantity-upgrades" ||
+            name == "--coordinated-refinement" ||
+            name == "--stable-beam-stop" ||
+            name == "--sa-stagnation-stop" ||
+            name == "--small-board-brand-rescue" ||
+            name == "--auto-beam-width";
+    }
+
     void setOption(std::string_view name, std::int64_t value) {
         const bool isWidth =
             name == "--beam-width" || name == "--joint-beam-width" ||
@@ -51,15 +66,7 @@ private:
             throw std::invalid_argument(
                 "width must be positive: " + std::string(name));
         }
-        if ((name == "--macro-actions" || name == "--adaptive-beam" ||
-             name == "--exact-brands" || name == "--brand-repair" ||
-             name == "--udon-alns" || name == "--spot-route-lns" ||
-             name == "--route-columns" ||
-             name == "--adaptive-long-search" ||
-             name == "--next-day-probe" || name == "--day-beam" || name == "--quantity-upgrades" || name == "--coordinated-refinement" ||
-             name == "--small-board-brand-rescue" ||
-             name == "--auto-beam-width") &&
-            value > 1) {
+        if (isBooleanOption(name) && value > 1) {
             throw std::invalid_argument(
                 "expected 0 or 1: " + std::string(name));
         }
@@ -83,12 +90,18 @@ private:
         else if (name == "--exact-brands") beam.exactBrands = value != 0;
         else if (name == "--brand-repair") beam.useBrandRepair = value != 0;
         else if (name == "--udon-alns") beam.useUdonAlns = value != 0;
+        else if (name == "--udon-sa") beam.udonAlns.simulatedAnnealing = value != 0;
+        else if (name == "--udon-joint-destroy")
+            beam.udonAlns.jointDestroyRepair = value != 0;
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
         else if (name == "--adaptive-long-search") beam.adaptiveLongSearch = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
         else if (name == "--quantity-upgrades") beam.quantityUpgrades = value != 0;
         else if (name == "--coordinated-refinement") beam.coordinatedRefinement = value != 0;
+        else if (name == "--stable-beam-stop") beam.stopOnStableBeam = value != 0;
+        else if (name == "--sa-stagnation-stop")
+            beam.udonAlns.stopOnStagnation = value != 0;
         else if (name == "--supply-wait-steps") beam.maxSupplyWaitSteps = value;
         else if (name == "--small-board-brand-rescue") {
             beam.adaptiveSmallBoardBrandRescue = value != 0;
@@ -116,7 +129,7 @@ private:
         } else if (name == "--quantity-budget-percent") {
             if (value < 1 || value > 90) throw std::invalid_argument("quantity budget must be 1..90");
             beam.quantityBudgetPercent = value;
-            hasQuantityBudgetOption = true;
+            quantityBudgetSpecified = true;
             beam.adaptiveLongSearch = false;
         }
         else if (name == "--auto-beam-width") {
@@ -152,7 +165,7 @@ public:
         }
         if (!options.hasAutoBeamOption && options.hasManualBeamWidth)
             options.autoBeamWidth = false;
-        if (options.hasQuantityBudgetOption)
+        if (options.quantityBudgetSpecified)
             options.beam.adaptiveLongSearch = false;
         return options;
     }

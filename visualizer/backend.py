@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import random
 import secrets
 import hashlib
+import hmac
 import math
 import os
 import platform
@@ -22,6 +25,7 @@ from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TIMEOUT_SECONDS = 10.0
+CHECKPOINT_CODE_PREFIX = "P37C1:"
 SERVER_CLIENT_DIR = PROJECT_ROOT / "server_client"
 if str(SERVER_CLIENT_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_CLIENT_DIR))
@@ -60,11 +64,17 @@ class SearchParameters:
     max_actions: int = 4
     macro_actions: int = 1
     adaptive_beam: int = 1
-    # 全自動では種別受付を逃さないことを優先する。
-    trial_candidates: int = 0
+    # 0は従来の改善専用ALNS、1はbrain2の焼きなましを使う。
+    udon_sa: int = 1
+    # 3人運用の担当2・3だけが早期終了判定を有効にする。
+    stable_beam_stop: int = 0
+    sa_stagnation_stop: int = 0
+    # 種別選択は順位の回答時間に含まれないため、基本候補を試走する。
+    trial_candidates: int = 6
     trial_beam_width: int = 32
     trial_joint_beam_width: int = 128
-    selection_time_ms: int = 10000
+    # 0なら盤面別の受付終了時刻まで使う。
+    selection_time_ms: int = 0
     send_reserve_ms: int = 5000
     clock_margin_ms: int = 1000
 
@@ -76,7 +86,9 @@ class SearchParameters:
             if name in ("beam_width", "joint_beam_width",
                         "trial_beam_width", "trial_joint_beam_width") and value == 0:
                 raise WorkflowError(f"{name}: 1以上を指定してください")
-            if name in ("macro_actions", "adaptive_beam", "auto_beam_width") and value not in (0, 1):
+            if name in ("macro_actions", "adaptive_beam", "auto_beam_width",
+                        "udon_sa", "stable_beam_stop",
+                        "sa_stagnation_stop") and value not in (0, 1):
                 raise WorkflowError(f"{name}: 0または1を指定してください")
         return _option_arguments(values, ("send_reserve_ms", "clock_margin_ms"))
 
@@ -295,14 +307,15 @@ def solver_build_command(output: Path) -> list[str]:
     if compiler_name in ("cl", "cl.exe"):
         artifact_dir = PROJECT_ROOT / ".build" / "gui"
         return [
-            compiler, "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4", "/utf-8",
+            compiler, "/nologo", "/std:c++17", "/O2", "/DNDEBUG",
+            "/EHsc", "/W4", "/utf-8", f"/I{PROJECT_ROOT / 'inc'}",
             str(source), f"/Fe:{output}",
             f"/Fo:{artifact_dir / 'main.obj'}",
             f"/Fd:{artifact_dir / 'main.pdb'}",
             "/link", "/STACK:16777216",
         ]
-    command = [compiler, "-std=c++17", "-O2", "-Wall", "-Wextra",
-               "-Wpedantic", "-Werror"]
+    command = [compiler, "-std=c++17", "-O3", "-DNDEBUG", "-Wall",
+               "-Wextra", "-Wpedantic", "-Werror", "-Iinc"]
     if platform.system() != "Windows":
         command.append("-pthread")
     else:
@@ -754,6 +767,33 @@ def official_score_tuple(checkpoint: dict[str, Any]) -> tuple[int, int, int]:
     return bin(int(match_brands)).count("1"), daily_brands, total_udon
 
 
+def parse_spoken_checkpoint(text: str, next_day: int) -> dict[str, int]:
+    """口頭共有された3整数を次日用チェックポイントへ変換する。"""
+    if type(next_day) is not int or not 1 <= next_day <= 10:
+        raise WorkflowError("口頭引継ぎはday=2以降の対象日を選んで実行してください")
+    parts = text.split()
+    if len(parts) != 3:
+        raise WorkflowError(
+            "口頭引継ぎは「系列mask 玉数 日別系列累計」の3整数を入力してください"
+        )
+    try:
+        match_brands, total_udon, daily_brands = map(int, parts)
+    except ValueError as error:
+        raise WorkflowError("口頭引継ぎの3項目は10進整数で入力してください") from error
+    if not 0 <= match_brands <= 0xFFFFFFFF:
+        raise WorkflowError("系列maskは0以上4294967295以下で入力してください")
+    if not 0 <= total_udon <= 2147483647:
+        raise WorkflowError("玉数は0以上2147483647以下で入力してください")
+    if not 0 <= daily_brands <= 2147483647:
+        raise WorkflowError("日別系列累計は0以上2147483647以下で入力してください")
+    return {
+        "nextDay": next_day,
+        "matchBrands": match_brands,
+        "totalUdon": total_udon,
+        "sumOfDailyBrandCounts": daily_brands,
+    }
+
+
 class Workflow:
     def __init__(
         self,
@@ -789,6 +829,115 @@ class Workflow:
             raise WorkflowError(f"共有フォルダを開けません: {self.shared_dir}")
         return self.shared_dir
 
+    def _checkpoint_package(
+        self, checkpoint: Path, setting: Path, revision: int
+    ) -> dict[str, Any]:
+        value = read_json(checkpoint)
+        next_day = value.get("nextDay") if isinstance(value, dict) else None
+        if type(next_day) is not int or next_day <= 0:
+            raise WorkflowError("共有するチェックポイントのnextDayが不正です")
+        if type(revision) is not int or revision < 0:
+            raise WorkflowError("共有するrevisionが不正です")
+        package = {
+            "version": 1,
+            "setting": file_hash(setting),
+            "identity": self.identity(),
+            "nextDay": next_day,
+            "revision": revision,
+            "publishedAt": time.time(),
+            "checkpoint": value,
+        }
+        package["signature"] = self._checkpoint_signature(package)
+        return package
+
+    def _checkpoint_signature(self, package: dict[str, Any]) -> str:
+        signed = {key: value for key, value in package.items() if key != "signature"}
+        payload = json.dumps(signed, separators=(",", ":"), sort_keys=True).encode()
+        return hmac.new(
+            self.connection.token.encode(), payload, hashlib.sha256
+        ).hexdigest()
+
+    def _validate_checkpoint_package(
+        self, package: Any, setting: Path
+    ) -> tuple[int, int, dict[str, Any]]:
+        if not isinstance(package, dict):
+            raise WorkflowError("共有コードの形式が不正です")
+        revision = package.get("revision")
+        next_day = package.get("nextDay")
+        checkpoint = package.get("checkpoint")
+        signature = package.get("signature")
+        if (package.get("version") != 1
+                or package.get("setting") != file_hash(setting)
+                or package.get("identity") != self.identity()
+                or type(next_day) is not int or next_day <= 0
+                or type(revision) is not int or revision < 0
+                or not isinstance(checkpoint, dict)
+                or checkpoint.get("nextDay") != next_day
+                or not isinstance(signature, str)
+                or not hmac.compare_digest(
+                    signature, self._checkpoint_signature(package)
+                )):
+            raise WorkflowError("共有コードが別の試合・チーム、または不正な内容です")
+        return revision, next_day, checkpoint
+
+    def export_checkpoint_code(
+        self, checkpoint: Path, setting: Path, revision: int
+    ) -> str:
+        """受理済み得点をチャットで渡せる1行コードにする。"""
+        package = self._checkpoint_package(checkpoint, setting, revision)
+        raw = json.dumps(package, separators=(",", ":"), sort_keys=True).encode()
+        encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        return CHECKPOINT_CODE_PREFIX + encoded
+
+    def import_checkpoint_code(
+        self, code: str, setting: Path
+    ) -> tuple[int, int, Path]:
+        """共有コードを検証し、次日用チェックポイントへ保存する。"""
+        text = code.strip()
+        if not text.startswith(CHECKPOINT_CODE_PREFIX):
+            raise WorkflowError("共有コードはP37C1:から始まる必要があります")
+        encoded = "".join(text[len(CHECKPOINT_CODE_PREFIX):].split())
+        try:
+            padding = "=" * ((4 - len(encoded) % 4) % 4)
+            package = json.loads(base64.urlsafe_b64decode(encoded + padding))
+        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WorkflowError("共有コードを読み取れません") from error
+        revision, next_day, checkpoint = self._validate_checkpoint_package(
+            package, setting
+        )
+        record = self.work_dir / f"checkpoint-code-day{next_day}.json"
+        if record.is_file():
+            previous = read_json(record)
+            old_revision, _, old_checkpoint = self._validate_checkpoint_package(
+                previous, setting
+            )
+            if revision < old_revision:
+                raise WorkflowError(
+                    f"古いrevision={revision}は取り込みません（現在={old_revision}）"
+                )
+            if revision == old_revision and checkpoint != old_checkpoint:
+                raise WorkflowError("同じrevisionの共有コード内容が一致しません")
+        journal = self.work_dir / f"submission-day{next_day - 1}.json"
+        if journal.is_file():
+            submitted = read_json(journal)
+            local_revision = submitted.get("revision")
+            if (submitted.get("status") == "accepted"
+                    and type(local_revision) is int and local_revision > revision):
+                raise WorkflowError(
+                    f"ローカルのrevision={local_revision}より古いコードは取り込みません"
+                )
+        output = self.work_dir / f"score-day{next_day}.json"
+        atomic_write(output, json.dumps(checkpoint).encode())
+        atomic_write(record, json.dumps(package).encode())
+        return revision, next_day, output
+
+    def import_spoken_checkpoint(self, text: str, next_day: int) -> Path:
+        """対象日からnextDayを補い、口頭共有の3値をローカルへ保存する。"""
+        checkpoint = parse_spoken_checkpoint(text, next_day)
+        output = self.work_dir / f"score-day{next_day}.json"
+        atomic_write(output, json.dumps(checkpoint, indent=2).encode())
+        return output
+
     def publish_checkpoint(
         self, checkpoint: Path, setting: Path, revision: int
     ) -> Path | None:
@@ -796,23 +945,10 @@ class Workflow:
         if self.shared_dir is None:
             return None
         directory = self._require_shared_dir()
-        value = read_json(checkpoint)
-        next_day = value.get("nextDay") if isinstance(value, dict) else None
-        if type(next_day) is not int or next_day <= 0:
-            raise WorkflowError("共有するチェックポイントのnextDayが不正です")
-        if type(revision) is not int or revision < 0:
-            raise WorkflowError("共有するrevisionが不正です")
-        setting_digest = file_hash(setting)
-        identity_digest = self.identity()
-        package = {
-            "version": 1,
-            "setting": setting_digest,
-            "identity": identity_digest,
-            "nextDay": next_day,
-            "revision": revision,
-            "publishedAt": time.time(),
-            "checkpoint": value,
-        }
+        package = self._checkpoint_package(checkpoint, setting, revision)
+        setting_digest = package["setting"]
+        identity_digest = package["identity"]
+        next_day = package["nextDay"]
         output = directory / (
             f"checkpoint-{setting_digest[:12]}-{identity_digest[:12]}-day{next_day}-"
             f"revision{revision}.json"
@@ -908,6 +1044,12 @@ class Workflow:
                 raise WorkflowError("1日の試合時間が不正です")
             # 終了処理にも必ず時間を残し、探索だけで1日分を使い切らない。
             margin = max(margin, 1000)
+        now = time.time()
+        remaining = None
+        if ends_at:
+            remaining = ends_at - now - reserve / 1000
+            if remaining <= 0:
+                raise WorkflowError("送信時間を確保できないため探索を開始しません")
         extra = margin - self.parameters.safety_margin_ms
         parameters = replace(
             self.parameters, safety_margin_ms=margin,
@@ -916,6 +1058,21 @@ class Workflow:
             selection_time_ms=min(2147483647, self.parameters.selection_time_ms + extra)
                 if self.parameters.selection_time_ms else 0,
         )
+        if reserve_for_submission and ends_at:
+            # 種別選択の相対上限を0（無制限）にしても、設定取得時に
+            # 記録した公式受付時間を越えない。C++側はここからmarginを
+            # 差し引くため、残りを最大限探索しつつPOST時間を確保する。
+            selection_limit_ms = min(
+                2147483647,
+                max(1, math.floor((ends_at - now) * 1000)),
+            )
+            parameters = replace(
+                parameters,
+                selection_time_ms=min(
+                    parameters.selection_time_ms or selection_limit_ms,
+                    selection_limit_ms,
+                ),
+            )
         if day_seconds:
             day_limit_ms = min(2147483647, math.floor(day_seconds * 1000))
             if day_limit_ms <= margin:
@@ -929,9 +1086,7 @@ class Workflow:
             )
         cutoff = None
         if ends_at:
-            remaining = ends_at - time.time() - reserve / 1000
-            if remaining <= 0:
-                raise WorkflowError("送信時間を確保できないため探索を開始しません")
+            assert remaining is not None
             cutoff = time.monotonic() + remaining + 1  # 検証・ファイル保存用の1秒
         command = [str(self.solver), *arguments, *parameters.arguments()]
         try:
@@ -1641,6 +1796,9 @@ class AutomaticMatch:
                 self.emit("solved", result)
                 self.phase = "send_answer"
                 self.emit("answer", w.work_dir / "answer.json")
+                # 回答経路は当日開始位置から描いた後、状態表だけでなく
+                # マップ上の車両・スポット在庫も探索後状態へ更新する。
+                self.emit("result_state", w.work_dir / "result-state.json")
             elif phase == "send_answer":
                 w.check_stop()
                 self.retryable = False

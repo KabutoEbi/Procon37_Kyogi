@@ -60,6 +60,35 @@ struct UdonAlnsConfig {
     bool allowFuturePositionChange = true;
     // 最終日は従来近傍と広い近傍を比較し、公式得点が高い方だけを採る。
     bool expandedPortfolio = true;
+    // brain2がこのALNSを再構築器として使う際の焼きなまし設定。
+    bool simulatedAnnealing = true;
+    // SA担当では、全近傍を十分に試した後に最良解の更新が止まれば、
+    // ハードな時刻上限を待たずに終了する。
+    bool stopOnStagnation = false;
+    std::size_t stagnationAttempts = 512;
+    std::size_t minimumAnnealingAttempts = 1024;
+    std::size_t minimumAttemptsPerNeighborhood = 8;
+    // Before patrol-route SA, jointly rebuild several patrol suffixes and the
+    // nearest supply route. This is the large-neighborhood phase of brain2.
+    bool jointDestroyRepair = true;
+    // Operation-probability guidance remains experimental: combining it with
+    // stock guidance regressed on public match 1866.
+    bool arenaGuidedNeighborhoods = false;
+    // Prefer spots whose stock still supports assignment to another patrol.
+    bool stockWeightedSpotSelection = true;
+    // Use remaining stock, travel-aware insertion positions and short block
+    // moves. The official lexicographic guard still decides every best plan.
+    bool quantityAwareNeighborhoods = true;
+    // Evaluate an insertion from the two replaced route edges instead of
+    // rebuilding and rescoring the entire visit sequence at every position.
+    bool differentialInsertionEvaluation = true;
+    // AHC-style low-frequency targeted move: prefer remaining stock and
+    // uncovered brands only when they can be inserted with a small exact
+    // traffic-aware route detour. Broad stock-weighted moves remain dominant.
+    bool detourAwareSpotSelection = false;
+    double initialTemperature = 2.0;
+    double finalTemperature = 0.05;
+    std::uint64_t randomSeed = 0x9e3779b97f4a7c15ULL;
 };
 
 struct UdonAlnsResult {
@@ -68,6 +97,15 @@ struct UdonAlnsResult {
     std::size_t attempts = 0;
     std::size_t expanded = 0;
     std::size_t improvements = 0;
+    std::size_t acceptedMoves = 0;
+    std::size_t acceptedWorseMoves = 0;
+    std::size_t greedyAttempts = 0;
+    std::size_t jointDestroyAttempts = 0;
+    std::size_t jointDestroyExpanded = 0;
+    std::size_t jointDestroyImprovements = 0;
+    std::array<std::size_t, 7> neighborhoodAttempts{};
+    std::array<std::size_t, 7> neighborhoodAccepted{};
+    bool stagnationStopped = false;
     bool interrupted = false;
 };
 

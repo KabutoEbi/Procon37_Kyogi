@@ -34,6 +34,10 @@ struct SpotRouteLnsConfig {
     std::size_t spotPortfolioBeamWidth = 256;
     std::size_t spotPortfolioCandidatesPerDepth = 12;
     std::int32_t spotPortfolioHardnessWeight = 4;
+    // Prefer a brand that fewer patrols can still reach within today's time
+    // and fuel budget. This is only a tie-break below the official brand and
+    // quantity objectives in the portfolio beam.
+    bool spotPortfolioReachabilityRarity = false;
     bool reflectTransit = true;
 };
 
@@ -816,11 +820,34 @@ inline SpotRouteLnsResult searchSpotPortfolio(
     std::vector<int> brandDifficulty(setting.field.brands.size(), 0);
     for (std::size_t brand = 0; brand < brandDifficulty.size(); ++brand) {
         int nearest = kImpassableCost;
-        for (const AgentIndex a : patrols)
-            for (std::size_t i = 0; i < spots; ++i)
-                if (setting.field.spots[i].brandIndex == static_cast<int>(brand))
-                    nearest = std::min(nearest, costs[a][i].steps);
-        brandDifficulty[brand] = nearest < kImpassableCost ? nearest : 0;
+        std::size_t reachablePatrols = 0;
+        for (const AgentIndex a : patrols) {
+            bool reachable = false;
+            for (std::size_t i = 0; i < spots; ++i) {
+                if (setting.field.spots[i].brandIndex !=
+                    static_cast<int>(brand)) continue;
+                const auto& cost = costs[a][i];
+                nearest = std::min(nearest, cost.steps);
+                if (cost.reachable() &&
+                    cost.steps <= setting.daySteps[
+                        static_cast<std::size_t>(matchState.day)] &&
+                    (config.reflectTransit ||
+                     cost.fuel <= matchState.agents[a].fuel)) {
+                    reachable = true;
+                }
+            }
+            reachablePatrols += reachable;
+        }
+        if (nearest >= kImpassableCost) continue;
+        brandDifficulty[brand] = nearest;
+        if (config.spotPortfolioReachabilityRarity && reachablePatrols > 0) {
+            const auto scarcePatrols = patrols.size() - reachablePatrols;
+            const int rarityUnit = std::max<int>(1,
+                setting.daySteps[static_cast<std::size_t>(matchState.day)] /
+                    static_cast<int>(patrols.size()));
+            brandDifficulty[brand] +=
+                static_cast<int>(scarcePatrols) * rarityUnit;
+        }
     }
     const int daySteps = setting.daySteps[static_cast<std::size_t>(matchState.day)];
     struct Node {

@@ -1,5 +1,6 @@
 """永続復旧・締切管理の回帰テスト（外部通信なし）。"""
 
+import base64
 import json
 import sys
 import tempfile
@@ -239,6 +240,30 @@ class RecoveryTest(unittest.TestCase):
                     w._run([], ends_at=time.time() + 1)
                 spawn.assert_not_called()
 
+    def test_agent_selection_uses_recorded_window_until_submission_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            w = Workflow(
+                ConnectionConfig("http://example", "secret", 10),
+                Path(sys.executable), Path(directory),
+                SearchParameters(
+                    selection_time_ms=0, safety_margin_ms=5000,
+                    send_reserve_ms=0,
+                ),
+            )
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ("", "")
+            with mock.patch("backend.time.time", return_value=40.0), \
+                 mock.patch("backend.subprocess.Popen", return_value=process):
+                result = w._run(
+                    [], ends_at=100.0, reserve_for_submission=True,
+                )
+            command = result.command
+            margin = int(command[command.index("--safety-margin-ms") + 1])
+            limit = int(command[command.index("--selection-time-ms") + 1])
+            self.assertEqual(margin, 12200)
+            self.assertEqual(limit, 60000)
+            self.assertEqual(limit - margin, 47800)
+
     def test_solver_time_is_capped_below_day_duration(self):
         with tempfile.TemporaryDirectory() as directory:
             w = Workflow(
@@ -278,6 +303,52 @@ class RecoveryTest(unittest.TestCase):
             limit = int(command[command.index("--time-limit-ms") + 1])
             self.assertEqual(margin, 5000)
             self.assertEqual(limit - margin, 55000)
+
+    def test_checkpoint_code_round_trip_and_revision_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sender_dir = root / "sender"
+            receiver_dir = root / "receiver"
+            sender_dir.mkdir()
+            receiver_dir.mkdir()
+            setting = root / "setting.json"
+            setting.write_text('{"map":{"width":16}}')
+            checkpoint = sender_dir / "score-day1.json"
+            checkpoint.write_text(json.dumps({
+                "nextDay": 1, "matchBrands": 5,
+                "sumOfDailyBrandCounts": 3, "totalUdon": 12,
+            }))
+            connection = ConnectionConfig("http://example", "team-token")
+            sender = Workflow(connection, Path(sys.executable), sender_dir)
+            receiver = Workflow(connection, Path(sys.executable), receiver_dir)
+
+            code = sender.export_checkpoint_code(checkpoint, setting, 4)
+            revision, next_day, output = receiver.import_checkpoint_code(
+                code, setting
+            )
+            self.assertEqual((revision, next_day), (4, 1))
+            self.assertEqual(read_json(output), read_json(checkpoint))
+
+            older = sender.export_checkpoint_code(checkpoint, setting, 3)
+            with self.assertRaisesRegex(WorkflowError, "古いrevision"):
+                receiver.import_checkpoint_code(older, setting)
+
+            other_team = Workflow(
+                ConnectionConfig("http://example", "other-token"),
+                Path(sys.executable), receiver_dir,
+            )
+            with self.assertRaisesRegex(WorkflowError, "別の試合・チーム"):
+                other_team.import_checkpoint_code(code, setting)
+
+            encoded = code.split(":", 1)[1]
+            padding = "=" * ((4 - len(encoded) % 4) % 4)
+            package = json.loads(base64.urlsafe_b64decode(encoded + padding))
+            package["checkpoint"]["totalUdon"] = 999
+            changed = base64.urlsafe_b64encode(
+                json.dumps(package).encode()
+            ).decode().rstrip("=")
+            with self.assertRaisesRegex(WorkflowError, "不正な内容"):
+                receiver.import_checkpoint_code("P37C1:" + changed, setting)
 
     def test_equal_score_replacement_is_not_sent(self):
         with tempfile.TemporaryDirectory() as directory:

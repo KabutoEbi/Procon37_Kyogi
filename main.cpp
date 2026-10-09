@@ -118,7 +118,8 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
     }
     config = options.beamFor(setting, state, config);
 
-    std::cout << "parameters beam-width=" << config.beamWidth
+    std::cout << "parameters brain=2"
+              << " beam-width=" << config.beamWidth
               << " joint-beam-width=" << config.jointBeamWidth
               << " threads=" << config.threadCount
               << " time-limit-ms=" << config.timeLimitMs
@@ -127,11 +128,10 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " route-columns=" << (config.routeColumns.enabled ? 1 : 0)
               << " quantity-budget-percent=" << config.quantityBudgetPercent
               << " adaptive-long-search=" << (config.adaptiveLongSearch ? 1 : 0)
-              << " quantity-upgrades=" << (config.quantityUpgrades ? 1 : 0)
-              << " coordinated-refinement=" << (config.coordinatedRefinement ? 1 : 0)
-              << " supply-wait-steps=" << config.maxSupplyWaitSteps
-              << " small-board-brand-rescue="
-              << (config.adaptiveSmallBoardBrandRescue ? 1 : 0)
+              << " udon-sa=" << (config.udonAlns.simulatedAnnealing ? 1 : 0)
+              << " stable-beam-stop=" << (config.stopOnStableBeam ? 1 : 0)
+              << " sa-stagnation-stop="
+              << (config.udonAlns.stopOnStagnation ? 1 : 0)
               << " small-board-beam-budget-percent="
               << config.smallBoardBeamBudgetPercent
               << " small-board-brand-node-limit="

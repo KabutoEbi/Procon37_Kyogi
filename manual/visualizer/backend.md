@@ -22,23 +22,24 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | メソッド | 処理 |
 |---|---|
 | `check_connection()` | `GET /setting`で到達・認証・形式を確認 |
-| `build_solver()` | C++17・`-O2`で`main.cpp`をビルド。Windowsは`main.exe`を使い、MinGW/Clang/MSVCを判別。それ以外では`-pthread`を追加 |
+| `build_solver()` | C++17の本番最適化で担当共通の`main.cpp`をビルド。Windowsは`main.exe`とMinGW／Clang／MSVCを自動判別し、GCC／Clangは`-O3 -DNDEBUG`、MSVCは`/O2 /DNDEBUG`を使用。非Windowsだけ`-pthread`を追加 |
 | `generate_random_setting()` | C++の`generate`モードで公式設定形式を一時生成し、検査後に保存 |
 | `fetch_setting()` / `fetch_state()` | 公式JSONを安全に保存し、dayを検査 |
 | `wait_for_setting()` | 未公開中の403・一時的な接続失敗を1秒間隔で再試行し、停止要求へ応答 |
 | `wait_for_state()` | 未公開の当日状態を待機し、前日の応答は再試行、期待日を越えた応答は拒否 |
 | `select_agents()` / `solve_day()` | C++の`select` / `solve`モードを実行 |
 | `send_agents()` / `send_answer()` | 種別・日次回答をPOST |
-| `publish_checkpoint()` / `import_checkpoint()` | 受理済み得点を共有し、次日に最大revisionを取り込む |
+| `import_spoken_checkpoint()` | 口頭で受けた3整数へ対象day由来の`nextDay`を加え、次日チェックポイントとして保存 |
+| `publish_checkpoint()` / `import_checkpoint()` | 旧共有フォルダ方式の互換用API |
 | `solve_local()` | 通信せずサンプル設定を探索し、`result-state.json`の生成を確認 |
 
-設定取得時刻と設定ハッシュを`setting-received.json`へ保存し、盤面幅に対応する公式の種別選択時間（60／90／120秒）から受付終了を求める。同じ設定を再取得しても時刻を延長しない。`startsAt`がそれより早い場合だけ上限として使う。種別選択後は設定・種別・接続先・受付終了時刻を`selected-agents.json`へ保存する。全自動の既定は種別試走を0件とし、全日程の軽量評価後すぐ送信段階へ進む。日次探索後は設定・状態・回答・得点候補・締切・接続先を`prepared-answer.json`へ保存する。送信前に一致を検証し、回答受理後だけ`score-dayN.json`を確定する。
+設定取得時刻と設定ハッシュを`setting-received.json`へ保存し、盤面幅に対応する公式の種別選択時間（60／90／120秒）から受付終了を求める。同じ設定を再取得しても時刻を延長しない。`startsAt`がそれより早い場合だけ上限として使う。種別選択後は設定・種別・接続先・受付終了時刻を`selected-agents.json`へ保存する。全自動の既定は6候補を試走し、通信timeout・時計ずれ・保存処理の余裕を除いて受付終了直前まで探索する。日次探索後は設定・状態・回答・得点候補・締切・接続先を`prepared-answer.json`へ保存する。送信前に一致を検証し、回答受理後だけ`score-dayN.json`を確定する。
 
 通常の接続timeoutは10秒。SSLハンドシェイクを含む接続timeoutでPOST結果が不明になった場合、全自動は自動再送せず停止する。エラーには`timeout(s)`を15へ増やし、作業フォルダを維持したまま再開する手順を表示する。再開処理は保存済みハッシュを検査し、同じ種別・回答だけを扱う。
 
 ## 共通検証とCLI引数
 
-`SearchParameters.arguments()`と`RandomSettingParameters.arguments()`は、それぞれの値域を検証した後、共通の`_option_arguments()`でCLI引数へ変換する。Python内部の`snake_case`はC++側の`--kebab-case`へ変換され、送信専用の余裕設定やローカル交通設定は必要な呼び出し先へだけ渡す。
+`SearchParameters.arguments()`と`RandomSettingParameters.arguments()`は、それぞれの値域を検証した後、共通の`_option_arguments()`でCLI引数へ変換する。Python内部の`snake_case`はC++側の`--kebab-case`へ変換され、`udon_sa`は`--udon-sa`として渡る。送信専用の余裕設定やローカル交通設定は必要な呼び出し先へだけ渡す。
 
 日次探索とローカル探索は`_day_duration()`で`daySeconds`の存在、対象日、数値型を共通検証する。ソルバーを起動する操作は`Workflow._require_solver()`で実行ファイルの存在を同じエラー形式で確認する。これらの補助関数は内部用で、`Workflow`の公開操作手順は変わらない。
 
@@ -91,13 +92,17 @@ finally:
 
 通常モードと担当1は全自動を最終日まで利用できる。担当1は問題公開待ちから種別選択・送信、全日の探索・回答送信までを実行する。担当2・3だけGUI側で全自動起動を無効化し、手動送信を個別操作として実行する。担当2・3の次日状態先行取得は全自動とは独立したバックグラウンド処理である。
 
-`Workflow.shared_dir`を指定した場合、回答受理後に`checkpoint-<設定hash>-<接続先・TOKEN hash>-dayN-revisionR.json`を共有フォルダへ一時ファイル経由で配置する。共有ファイルはrevision別に残し、他端末の書き込みで上書きしない。次日の状態取得後はチーム識別hash・設定ハッシュ・`nextDay`を検証し、最大revisionのチェックポイントだけをローカルの`score-dayN.json`へ取り込む。TOKENそのものは共有しない。共有失敗は回答受理記録を維持したままエラーとし、再開時に同じ受理済み回答から再共有できる。
+現在のGUIは口頭引継ぎを使用する。`parse_spoken_checkpoint()`は空白区切りの`系列mask 玉数 日別系列累計`を3個の10進整数として検査し、GUIで選んだ対象dayから得た`nextDay`を付ける。`Workflow.import_spoken_checkpoint()`はその4項目を`score-dayN.json`へ原子的に保存する。day 1相当の`nextDay=0`は、直前日のチェックポイントが存在しないため拒否する。GUIは保存成功後だけ入力欄を空にし、検査エラー時は修正できるよう入力を残す。最終回答受理後または対象dayが総日数を越えた状態では、バックエンドを呼ばずに取込不要と案内して新しいチェックポイントを作らない。
+
+`Workflow.export_checkpoint_code()`と`import_checkpoint_code()`は旧方式との互換用に残るが、現在のGUIには表示しない。前者は設定hash・接続先とTOKENから作るチーム識別hash・`nextDay`・revision・得点チェックポイントを署名付き`P37C1:`コードにし、後者は検証後に取り込む。
+
+`Workflow.shared_dir`を使う旧共有フォルダ処理も互換用に残るが、現在のGUIでは共有フォルダを設定しない。
 
 POST前に`submission-agents.json`／`submission-dayN.json`と不変の候補`submitted-*.json`を保存する。受理記録を先に保存し、その後にチェックポイントを確定するため、途中終了しても受理済み候補から復元できる。結果不明の別回答への置換を拒否し、明示再開時だけ当日状態を再取得して同一回答を再送する。締切後や日程進行後は未確定のまま停止する。APIには最後の有効回答を照会する機能がないため、その場合の自動確定は行わない。
 
 `SimpleServer.clear_client_work()`は簡易サーバー停止中に限り、`runtime/simple-server/client/`直下のクライアント成果物を削除して空のフォルダを残す。サーバーログと設定JSON原本は対象外である。GUIでは確認ダイアログを通して呼び出す。
 
-サーバー締切がある通常モードと担当1では、`max(safety_margin_ms, send_reserve_ms, timeout*1000 + clock_margin_ms + 1200)`を探索から確保する。手動送信する担当2・3は探索時に通信timeoutを予約せず、5秒の安全余裕を使うため、60秒設定の担当3は約55秒探索できる。相対探索予算を保つためCLIへ渡す相対上限を補正する。プロセス監視とPOST直前・レート制限待機後の締切検査も行う。時刻差は指定余裕で吸収する方式で、自動同期や受理保証ではない。同じ作業フォルダの同時使用は禁止。待機ポーリングの既定は1秒である。
+サーバー締切がある通常モードと担当1では、`max(safety_margin_ms, send_reserve_ms, timeout*1000 + clock_margin_ms + 1200)`を探索から確保する。手動送信する担当2・3は探索時に通信timeoutを予約せず、40,000／50,000msの時間上限から5秒の安全余裕を確保するため、実探索上限は約35／45秒になる。相対探索予算を保つためCLIへ渡す相対上限を補正する。プロセス監視とPOST直前・レート制限待機後の締切検査も行う。時刻差は指定余裕で吸収する方式で、自動同期や受理保証ではない。同じ作業フォルダの同時使用は禁止。待機ポーリングの既定は1秒である。
 
 通信監査ではGET／POSTの成功レスポンスに加え、POST本文と本文のあるHTTPエラーレスポンスを`logs/`へ時刻付きで保存する。送信記録には作成・試行・受理時刻を残す。
 

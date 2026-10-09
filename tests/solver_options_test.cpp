@@ -12,6 +12,7 @@ benzen::SolverOptions parse(std::vector<std::string> values) {
 }
 
 int main() {
+    assert(parse({"main"}).selection.trialCandidateLimit == 6);
     assert(parse({"main"}).beam.safetyMarginMs == 5000);
     assert(parse({"main"}).beam.coordinatedRefinement);
     assert(!parse({"main", "--coordinated-refinement", "0"}).beam.coordinatedRefinement);
@@ -26,6 +27,18 @@ int main() {
     assert(smallRescue.beam.smallBoardBrandSearchNodeLimit == 150000);
     assert(!parse({"main"}).beam.quantityUpgrades);
     assert(parse({"main"}).beam.adaptiveLongSearch);
+    assert(parse({"main"}).beam.udonAlns.simulatedAnnealing);
+    assert(parse({"main"}).beam.udonAlns.jointDestroyRepair);
+    assert(!parse({"main"}).beam.stopOnStableBeam);
+    assert(!parse({"main"}).beam.udonAlns.stopOnStagnation);
+    assert(parse({"main", "--stable-beam-stop", "1"})
+        .beam.stopOnStableBeam);
+    assert(parse({"main", "--sa-stagnation-stop", "1"})
+        .beam.udonAlns.stopOnStagnation);
+    assert(!parse({"main", "--udon-sa", "0"})
+        .beam.udonAlns.simulatedAnnealing);
+    assert(!parse({"main", "--udon-joint-destroy", "0"})
+        .beam.udonAlns.jointDestroyRepair);
     assert(!parse({"main", "--adaptive-long-search", "0"})
         .beam.adaptiveLongSearch);
     assert(parse({"main", "--quantity-upgrades", "1"}).beam.quantityUpgrades);
@@ -42,6 +55,10 @@ int main() {
     for (const auto& args : std::vector<std::vector<std::string>>{
         {"main", "--coordinated-refinement", "2"},
         {"main", "--adaptive-long-search", "2"},
+        {"main", "--udon-sa", "2"},
+        {"main", "--udon-joint-destroy", "2"},
+        {"main", "--stable-beam-stop", "2"},
+        {"main", "--sa-stagnation-stop", "2"},
         {"main", "--small-board-brand-rescue", "2"},
         {"main", "--small-board-beam-budget-percent", "49"},
         {"main", "--small-board-beam-budget-percent", "96"},

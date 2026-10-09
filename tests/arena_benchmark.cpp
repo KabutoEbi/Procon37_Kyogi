@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -59,14 +60,23 @@ void addMixedTraffic(
 int main(int argc, char** argv) {
     using namespace benzen;
     try {
-        if (argc < 2 || argc > 9) {
+        if (argc < 2 || argc > 13) {
             std::cerr << "usage: " << argv[0]
                       << " setting.json [time-ms] [supply-mask] [traffic]"
                          " [beam-width] [joint-beam-width] [hard-next-day]"
-                         " [details]\n";
+                         " [details] [arena-guidance] [joint-destroy]"
+                         " [detour-aware-spots] [differential-insertion]\n";
             return 2;
         }
-        MatchSetting setting = readMatchSettingJson(argv[1]);
+        MatchSetting setting;
+        if (std::string(argv[1]) == "-") {
+            const std::string json{
+                std::istreambuf_iterator<char>(std::cin),
+                std::istreambuf_iterator<char>()};
+            setting = parseMatchSettingJson(json);
+        } else {
+            setting = readMatchSettingJson(argv[1]);
+        }
         // 公開済みの過去試合でも、オフライン測定では締切を相対時間にする。
         setting.startsAt = 0;
 
@@ -96,6 +106,42 @@ int main(int argc, char** argv) {
             config.beam.prioritizeHardNextDayTargets = enabled != 0;
         }
         const bool details = argc >= 9 && std::stoi(argv[8]) != 0;
+        if (argc >= 10) {
+            const int enabled = std::stoi(argv[9]);
+            if (enabled < 0 || enabled > 3) {
+                throw std::invalid_argument(
+                    "arena-guidance must be 0..3");
+            }
+            config.beam.udonAlns.arenaGuidedNeighborhoods =
+                (enabled & 1) != 0;
+            config.beam.udonAlns.stockWeightedSpotSelection =
+                (enabled & 2) != 0;
+        }
+        if (argc >= 11) {
+            const int enabled = std::stoi(argv[10]);
+            if (enabled < 0 || enabled > 1) {
+                throw std::invalid_argument(
+                    "joint-destroy must be 0 or 1");
+            }
+            config.beam.udonAlns.jointDestroyRepair = enabled != 0;
+        }
+        if (argc >= 12) {
+            const int enabled = std::stoi(argv[11]);
+            if (enabled < 0 || enabled > 1) {
+                throw std::invalid_argument(
+                    "detour-aware-spots must be 0 or 1");
+            }
+            config.beam.udonAlns.detourAwareSpotSelection = enabled != 0;
+        }
+        if (argc >= 13) {
+            const int enabled = std::stoi(argv[12]);
+            if (enabled < 0 || enabled > 1) {
+                throw std::invalid_argument(
+                    "differential-insertion must be 0 or 1");
+            }
+            config.beam.udonAlns.differentialInsertionEvaluation =
+                enabled != 0;
+        }
         const auto match = runMatch(
             setting,
             kindsFor(setting.agentCount(), static_cast<std::uint64_t>(supplyMask)),
@@ -125,6 +171,15 @@ int main(int argc, char** argv) {
                               << agent.pos << '/' << agent.fuel;
                 }
                 std::cerr << '\n';
+                std::cerr << "  refine spot=" << day.spotRouteLnsAttempts
+                          << '/' << day.spotRouteLnsImprovements
+                          << " portfolio=" << day.spotPortfolioMaxBrands
+                          << '/' << day.spotPortfolioMaxUdon
+                          << '/' << day.spotPortfolioMaxValidUdon
+                          << " columns=" << day.routeColumnsGenerated
+                          << '/' << day.routeColumnsImprovements
+                          << " alns=" << day.udonAlnsAttempts
+                          << '/' << day.udonAlnsImprovements << '\n';
             }
         }
         std::cout << "result=" << countBits(match.score.matchBrands) << '/'

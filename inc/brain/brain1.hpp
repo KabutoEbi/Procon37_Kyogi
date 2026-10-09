@@ -37,6 +37,10 @@
 
 namespace benzen {
 
+using UdonRefiner = std::function<UdonAlnsResult(
+    const MatchSetting&, const MatchState&, ScoreState, const DailyPlan&,
+    const UdonAlnsConfig&, std::chrono::steady_clock::time_point)>;
+
 struct BeamSearchConfig {
     // Experimental portfolio. Enable explicitly until fixed-time match
     // benchmarks establish a benefit across more than the tuning instances.
@@ -59,6 +63,10 @@ struct BeamSearchConfig {
     std::size_t smallBoardBrandSearchNodeLimit = 200000;
     bool useUdonAlns = true;
     UdonAlnsConfig udonAlns{};
+    // brain1 uses the established hill-climbing ALNS by default. A later
+    // solver generation can inject another acceptance policy without copying
+    // the beam/search pipeline.
+    UdonRefiner udonRefiner{};
     // 本選3区分と実効探索時間からビーム／改善時間、ALNS上限を調整する。
     // falseなら従来の固定配分とUdonAlnsConfigをそのまま使う。
     bool adaptiveLongSearch = true;
@@ -98,6 +106,10 @@ struct BeamSearchConfig {
     std::size_t minimumJointBeamWidth = 64;
     // 固定幅を早く完走した場合、締切まで幅と候補数を広げて再探索する。
     bool iterativeDeepening = true;
+    // 追走ビームでは、完成した幅を広げても探索結果が連続して変わらなければ
+    // 時刻上限を待たず、その安定幅の結果を採用する。
+    bool stopOnStableBeam = false;
+    std::size_t stableBeamPasses = 2;
 
     // 有効な途中解を再シミュレーションして保存する間隔。
     std::size_t incumbentInterval = 4;
@@ -290,6 +302,17 @@ struct BeamSearchResult {
     std::size_t udonAlnsAttempts = 0;
     std::size_t udonAlnsExpanded = 0;
     std::size_t udonAlnsImprovements = 0;
+    std::size_t udonAlnsAcceptedMoves = 0;
+    std::size_t udonAlnsAcceptedWorseMoves = 0;
+    std::size_t udonAlnsGreedyAttempts = 0;
+    std::size_t udonJointDestroyAttempts = 0;
+    std::size_t udonJointDestroyExpanded = 0;
+    std::size_t udonJointDestroyImprovements = 0;
+    std::array<std::size_t, 7> udonAlnsNeighborhoodAttempts{};
+    std::array<std::size_t, 7> udonAlnsNeighborhoodAccepted{};
+    bool stableBeamStopped = false;
+    bool udonSaStagnationStopped = false;
+    std::size_t selectedBeamWidth = 0;
     std::size_t quantityBudgetPercentUsed = 0;
     std::size_t beamBudgetPercentUsed = 0;
     std::size_t udonAlnsAttemptLimit = 0;
@@ -3390,7 +3413,9 @@ inline BeamSearchResult brain1Beam(
     const auto started = Clock::now();
 
     if (!config.iterativeDeepening) {
-        return brain1Pass(setting, matchState, previousScore, config);
+        auto result = brain1Pass(setting, matchState, previousScore, config);
+        result.selectedBeamWidth = config.beamWidth;
+        return result;
     }
 
     std::int64_t effectiveMs = std::numeric_limits<std::int64_t>::max();
@@ -3408,15 +3433,23 @@ inline BeamSearchResult brain1Beam(
             std::max<std::int64_t>(0, left - config.safetyMarginMs));
     }
     if (effectiveMs == std::numeric_limits<std::int64_t>::max()) {
-        return brain1Pass(setting, matchState, previousScore, config);
+        auto result = brain1Pass(setting, matchState, previousScore, config);
+        result.selectedBeamWidth = config.beamWidth;
+        return result;
     }
     if (effectiveMs <= 0) {
-        return brain1Pass(setting, matchState, previousScore, config);
+        auto result = brain1Pass(setting, matchState, previousScore, config);
+        result.selectedBeamWidth = config.beamWidth;
+        return result;
     }
 
     const auto deadline = started + std::chrono::milliseconds(effectiveMs);
     BeamSearchResult best;
     BeamSearchResult totalWork;
+    using StabilitySignature = std::tuple<int, int, int, int, int, int, int, int>;
+    StabilitySignature previousCompletedSignature{};
+    bool haveCompletedSignature = false;
+    std::size_t unchangedCompletedPasses = 0;
 
     const bool finalDay = matchState.day >= 0 &&
         static_cast<std::size_t>(matchState.day + 1) >= setting.dayCount();
@@ -3463,13 +3496,32 @@ inline BeamSearchResult brain1Beam(
         pass.timeLimitMs = remaining;
         BeamSearchResult current = brain1Pass(
             setting, matchState, previousScore, pass);
+        current.selectedBeamWidth = pass.beamWidth;
 
         totalWork.addSearchWork(current);
 
         const bool timedOut = current.stopReason == SearchStopReason::TimeLimit;
+        const bool completed = current.success && !timedOut;
+        if (config.stopOnStableBeam && completed) {
+            const auto signature = resultScore(current);
+            if (haveCompletedSignature && signature == previousCompletedSignature) {
+                ++unchangedCompletedPasses;
+            } else {
+                unchangedCompletedPasses = 0;
+            }
+            previousCompletedSignature = signature;
+            haveCompletedSignature = true;
+        }
         if (better(current, best)) best = std::move(current);
         if (timedOut) break;
-        if (config.quantityUpgrades && config.stopBeamAtBrandUpperBound && best.success &&
+        if (config.stopOnStableBeam && config.stableBeamPasses > 0 &&
+            unchangedCompletedPasses >= config.stableBeamPasses) {
+            best.stableBeamStopped = true;
+            best.selectedBeamWidth = pass.beamWidth;
+            break;
+        }
+        if ((config.quantityUpgrades || config.coordinatedRefinement) &&
+            config.stopBeamAtBrandUpperBound && best.success &&
             (config.useSpotRouteLns || config.useUdonAlns) &&
             Clock::now() - started >= std::chrono::milliseconds(effectiveMs / 2)) {
             BrandMask all = 0;
@@ -3529,6 +3581,7 @@ inline BeamSearchResult brain1Beam(
         fallback.safetyMarginMs = 1;
         fallback.useStateDeadline = false;
         best = brain1Pass(setting, matchState, previousScore, fallback);
+        best.selectedBeamWidth = fallback.beamWidth;
         totalWork.addSearchWork(best);
     }
     best.copySearchWork(totalWork);
@@ -3650,6 +3703,14 @@ inline BeamSearchResult brain1(
         ? 20 : static_cast<std::size_t>(beamBudgetPercent);
     result.udonAlnsAttemptLimit = longSearch.udonAlns.maxAttempts;
     result.udonAlnsNodesPerAttempt = longSearch.udonAlns.nodesPerAttempt;
+    // 担当2は、安定した幅を見つけた時点のビーム解をそのまま採用する。
+    // 後段改善へ残り時間を渡すと結局ハード上限まで探索してしまうため、
+    // このモードだけは収束を日次探索全体の終了条件とする。
+    if (result.stableBeamStopped) {
+        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - started).count();
+        return result;
+    }
     std::vector<DayPlanCandidate> futureCandidates;
     bool changed = false;
     const auto remember = [&] {
@@ -3759,6 +3820,12 @@ inline BeamSearchResult brain1(
                 // transit/refuel model: their finite beams explore different routes.
                 portfolioConfig.reflectTransit = pass != 0 && config.spotRouteLns.reflectTransit;
                 portfolioConfig.spotPortfolioHardnessWeight = hardnessWeights[pass];
+                // Preserve the established route rankings in the first two
+                // passes. The later, wider passes diversify toward brands
+                // that only a few patrols can still reach today.
+                portfolioConfig.spotPortfolioReachabilityRarity =
+                    config.spotRouteLns.spotPortfolioReachabilityRarity &&
+                    pass >= 2;
                 const auto maxPortfolioWidth = setting.field.cellCount() >= 1024
                     ? std::size_t{512} : std::size_t{2048};
                 portfolioConfig.spotPortfolioBeamWidth = std::min<std::size_t>(
@@ -3857,13 +3924,23 @@ inline BeamSearchResult brain1(
         }
     }
     if (runUdonAlns) {
+        const auto refineUdon = [&](const DailyPlan& plan,
+                                    const UdonAlnsConfig& alnsConfig,
+                                    Clock::time_point alnsDeadline) {
+            if (config.udonRefiner) {
+                return config.udonRefiner(setting, matchState, previousScore,
+                    plan, alnsConfig, alnsDeadline);
+            }
+            return improveDayUdon(setting, matchState, previousScore,
+                plan, alnsConfig, alnsDeadline);
+        };
         const bool reserveExpanded = limited && finalDay &&
             longSearch.udonAlns.expandedPortfolio &&
             (config.quantityUpgrades || searchBudget >= 30000);
         const auto normalDeadline = reserveExpanded
             ? Clock::now() + std::max(Clock::duration::zero(),
                 deadline - Clock::now()) * 2 / 3 : deadline;
-        auto improved = improveDayUdon(setting, matchState, previousScore,
+        auto improved = refineUdon(
             result.plan, longSearch.udonAlns, normalDeadline);
         const bool reachedBrandBound =
             countBits(improved.finalState.score.matchBrands) >=
@@ -3876,7 +3953,7 @@ inline BeamSearchResult brain1(
         // official lexicographic score chooses the returned plan.
         const bool expandedQuantityPortfolio = longSearch.udonAlns.expandedPortfolio &&
             (finalDay || (setting.field.width >= 24 && reachedBrandBound));
-        if (expandedQuantityPortfolio &&
+        if (expandedQuantityPortfolio && !improved.stagnationStopped &&
             Clock::now() < deadline) {
             auto expandedConfig = longSearch.udonAlns;
             expandedConfig.maxAttempts = std::max<std::size_t>(
@@ -3891,13 +3968,28 @@ inline BeamSearchResult brain1(
             // and fuel; the final day has no downstream state to protect.
             expandedConfig.allowFuturePositionChange = finalDay;
             expandedConfig.expandedPortfolio = false;
-            const auto expanded = improveDayUdon(
-                setting, matchState, previousScore, result.plan,
-                expandedConfig, deadline);
+            const auto expanded = refineUdon(
+                result.plan, expandedConfig, deadline);
             improved.attempts += expanded.attempts;
             improved.expanded += expanded.expanded;
             improved.improvements += expanded.improvements;
+            improved.acceptedMoves += expanded.acceptedMoves;
+            improved.acceptedWorseMoves += expanded.acceptedWorseMoves;
+            improved.greedyAttempts += expanded.greedyAttempts;
+            improved.jointDestroyAttempts += expanded.jointDestroyAttempts;
+            improved.jointDestroyExpanded += expanded.jointDestroyExpanded;
+            improved.jointDestroyImprovements +=
+                expanded.jointDestroyImprovements;
+            for (std::size_t i = 0;
+                 i < improved.neighborhoodAttempts.size(); ++i) {
+                improved.neighborhoodAttempts[i] +=
+                    expanded.neighborhoodAttempts[i];
+                improved.neighborhoodAccepted[i] +=
+                    expanded.neighborhoodAccepted[i];
+            }
             improved.interrupted = improved.interrupted || expanded.interrupted;
+            improved.stagnationStopped =
+                improved.stagnationStopped || expanded.stagnationStopped;
             const auto score = [](const GameState& state) {
                 return std::make_tuple(
                     countBits(state.score.matchBrands),
@@ -3912,6 +4004,16 @@ inline BeamSearchResult brain1(
         result.udonAlnsAttempts = improved.attempts;
         result.udonAlnsExpanded = improved.expanded;
         result.udonAlnsImprovements = improved.improvements;
+        result.udonAlnsAcceptedMoves = improved.acceptedMoves;
+        result.udonAlnsAcceptedWorseMoves = improved.acceptedWorseMoves;
+        result.udonAlnsGreedyAttempts = improved.greedyAttempts;
+        result.udonJointDestroyAttempts = improved.jointDestroyAttempts;
+        result.udonJointDestroyExpanded = improved.jointDestroyExpanded;
+        result.udonJointDestroyImprovements =
+            improved.jointDestroyImprovements;
+        result.udonAlnsNeighborhoodAttempts = improved.neighborhoodAttempts;
+        result.udonAlnsNeighborhoodAccepted = improved.neighborhoodAccepted;
+        result.udonSaStagnationStopped = improved.stagnationStopped;
         if (improved.improvements) {
             result.plan = improved.plan;
             result.finalState = improved.finalState;

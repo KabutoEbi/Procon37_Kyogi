@@ -24,10 +24,6 @@ struct ConsoleConfig {
     std::size_t maxTraceLines = 120;
 };
 
-inline const char* agentKindName(AgentKind kind) noexcept {
-    return kind == AgentKind::Patrol ? "patrol" : "supply";
-}
-
 inline const char* searchStopReasonName(SearchStopReason reason) noexcept {
     switch (reason) {
         case SearchStopReason::Completed:
@@ -294,6 +290,8 @@ inline void printConsoleReport(
         << "  success=" << std::boolalpha << result.success << '\n'
         << "  stop=" << searchStopReasonName(result.stopReason) << '\n'
         << "  elapsed-ms=" << result.elapsedMs << '\n'
+        << "  stable-beam-stopped=" << result.stableBeamStopped << '\n'
+        << "  selected-beam-width=" << result.selectedBeamWidth << '\n'
         << "  brand-optimal=" << result.brandOptimal << '\n'
         << "  match-brand-upper-bound=" << result.matchBrandUpperBound << '\n'
         << "  daily-brand-upper-bound=" << result.dailyBrandUpperBound << '\n'
@@ -318,6 +316,30 @@ inline void printConsoleReport(
         << "  udon-alns-attempts=" << result.udonAlnsAttempts << '\n'
         << "  udon-alns-expanded=" << result.udonAlnsExpanded << '\n'
         << "  udon-alns-improvements=" << result.udonAlnsImprovements << '\n'
+        << "  udon-alns-accepted-moves=" << result.udonAlnsAcceptedMoves << '\n'
+        << "  udon-alns-accepted-worse-moves="
+        << result.udonAlnsAcceptedWorseMoves << '\n'
+        << "  udon-alns-greedy-attempts="
+        << result.udonAlnsGreedyAttempts << '\n'
+        << "  udon-sa-stagnation-stopped="
+        << result.udonSaStagnationStopped << '\n'
+        << "  udon-joint-destroy="
+        << result.udonJointDestroyAttempts << '/'
+        << result.udonJointDestroyExpanded << '/'
+        << result.udonJointDestroyImprovements << '\n'
+        << "  udon-sa-neighborhood-attempts=";
+    for (std::size_t i = 0;
+         i < result.udonAlnsNeighborhoodAttempts.size(); ++i) {
+        if (i) out << ',';
+        out << result.udonAlnsNeighborhoodAttempts[i];
+    }
+    out << '\n' << "  udon-sa-neighborhood-accepted=";
+    for (std::size_t i = 0;
+         i < result.udonAlnsNeighborhoodAccepted.size(); ++i) {
+        if (i) out << ',';
+        out << result.udonAlnsNeighborhoodAccepted[i];
+    }
+    out << '\n'
         << "  quantity-budget-percent-used="
         << result.quantityBudgetPercentUsed << '\n'
         << "  beam-budget-percent-used=" << result.beamBudgetPercentUsed << '\n'

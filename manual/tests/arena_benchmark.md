@@ -11,10 +11,24 @@ make .build/tools/arena_benchmark
 .build/tools/arena_benchmark problem.json 1000 8
 .build/tools/arena_benchmark problem.json 1000 8 mixed
 .build/tools/arena_benchmark problem.json 5000 17 smooth 128 512 0
+.build/tools/arena_benchmark problem.json 1000 16 mixed 128 512 1 1 0
 ```
 
+設定パスを`-`にすると標準入力から問題JSONを読む。公開APIレスポンスの`problem`だけを渡す例:
+
+```sh
+curl -fsS https://procon37arena.online/api/matches/1866 |
+  jq '.problem' |
+  .build/tools/arena_benchmark - 1000 16 mixed
+```
+
+最後から3番目の省略可能引数は公開得点誘導SAのモード。`0`は全て一様、`1`は実験的な近傍確率だけ、`2`は在庫重み付きスポット選択だけ、`3`は両方を有効にする。省略時は既定の`2`相当。
+
+続く省略可能引数は、共同destroy/repair、残在庫・未取得系列の利益と交通込み挿入迂回量を組み合わせるスポット選択、挿入位置の局所差分評価の有効・無効（各1/0）である。
+
 位置引数は順に、問題JSON、1日あたりの探索上限ms、補給車ビットマスク、
-任意の交通モード、ビーム幅、同時行動幅、難所翌日配置の0/1、詳細表示の0/1である。
+任意の交通モード、ビーム幅、同時行動幅、難所翌日配置の0/1、詳細表示の0/1、
+公開得点誘導モード0〜3、共同destroy/repairの0/1、迂回量考慮スポット選択の0/1、挿入位置の局所差分評価の0/1である。
 ビット`i`が1ならエージェント`i`を補給車にする。
 補給車0台も指定できるが、全車を補給車にはできない。`mixed`は道路セルだけを対象に、
 日・位置から再現可能な混雑20%、渋滞10%の条件を生成する。指定しなければ

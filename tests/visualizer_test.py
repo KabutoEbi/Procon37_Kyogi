@@ -46,12 +46,13 @@ from backend import (  # noqa: E402
     default_solver_path,
     solver_build_command,
     process_exit_detail,
+    parse_spoken_checkpoint,
     trace_answer_routes,
     simple_server_teams,
 )
 from app import (  # noqa: E402
     SolverGUI,
-    TEAM_ROLE_TIME_LIMITS,
+    TEAM_ROLE_PROFILES,
     automatic_phase_is_waiting,
     compact_clock_status,
     duration_text,
@@ -69,14 +70,20 @@ class BackendTest(unittest.TestCase):
                 command = solver_build_command(Path("main.exe"))
                 self.assertEqual(command[0], "cl.exe")
                 self.assertIn("/std:c++17", command)
+                self.assertIn("/O2", command)
+                self.assertIn("/DNDEBUG", command)
                 self.assertIn("/Fe:main.exe", command)
                 self.assertIn("/utf-8", command)
+                self.assertTrue(any(value.startswith("/I") for value in command))
                 self.assertIn("/STACK:16777216", command)
                 self.assertNotIn("-pthread", command)
             with mock.patch.dict("backend.os.environ", {"CXX": "g++.exe"}, clear=False):
                 command = solver_build_command(Path("main.exe"))
                 self.assertEqual(command[0], "g++.exe")
                 self.assertIn("-std=c++17", command)
+                self.assertIn("-O3", command)
+                self.assertIn("-DNDEBUG", command)
+                self.assertIn("-Iinc", command)
                 self.assertIn("-Wl,--stack,16777216", command)
                 self.assertNotIn("-pthread", command)
 
@@ -94,8 +101,12 @@ class BackendTest(unittest.TestCase):
 
     def test_three_person_presets_and_spoken_score(self) -> None:
         self.assertEqual(
-            TEAM_ROLE_TIME_LIMITS,
-            {"lead": 20000, "middle": 40000, "long": 60000},
+            {role: (profile.time_limit_ms, profile.udon_sa,
+                    profile.stable_beam_stop, profile.sa_stagnation_stop)
+             for role, profile in TEAM_ROLE_PROFILES.items()},
+            {"lead": (20000, 0, 0, 0),
+             "middle": (40000, 0, 1, 0),
+             "long": (50000, 1, 0, 1)},
         )
         summary = SolverResultSummary(
             day=2, stop="completed", elapsed_ms=1, expanded=2,
@@ -103,6 +114,34 @@ class BackendTest(unittest.TestCase):
             match_brands=11, total_daily_brands=27,
         )
         self.assertEqual(official_score_text(summary), "11 / 27 / 31")
+
+    def test_spoken_checkpoint_uses_selected_target_day(self) -> None:
+        self.assertEqual(
+            parse_spoken_checkpoint("15 42 12", 2),
+            {
+                "nextDay": 2,
+                "matchBrands": 15,
+                "totalUdon": 42,
+                "sumOfDailyBrandCounts": 12,
+            },
+        )
+        for text, next_day in (
+            ("15 42", 2),
+            ("15 x 12", 2),
+            ("-1 42 12", 2),
+            ("15 42 12", 0),
+        ):
+            with self.assertRaises(WorkflowError):
+                parse_spoken_checkpoint(text, next_day)
+
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            workflow = Workflow(
+                ConnectionConfig("http://example", "secret"), ROOT / "main", work,
+            )
+            output = workflow.import_spoken_checkpoint("15 42 12", 2)
+            self.assertEqual(output, (work / "score-day2.json").resolve())
+            self.assertEqual(read_json(output)["nextDay"], 2)
 
     def test_compact_clock_status(self) -> None:
         values = {"phase": "開始前（エージェント選択）", "progress": "0/8日"}
@@ -296,17 +335,45 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(SearchParameters().time_limit_ms, 60000)
         self.assertEqual(SearchParameters().safety_margin_ms, 5000)
         self.assertEqual(SearchParameters().send_reserve_ms, 5000)
-        self.assertEqual(SearchParameters().trial_candidates, 0)
-        self.assertEqual(SearchParameters().selection_time_ms, 10000)
+        self.assertEqual(SearchParameters().trial_candidates, 6)
+        self.assertEqual(SearchParameters().selection_time_ms, 0)
         self.assertIn("--auto-beam-width", SearchParameters(auto_beam_width=1).arguments())
+        self.assertIn("--udon-sa", SearchParameters(udon_sa=0).arguments())
+        self.assertIn("--stable-beam-stop", SearchParameters(
+            stable_beam_stop=1).arguments())
+        self.assertIn("--sa-stagnation-stop", SearchParameters(
+            sa_stagnation_stop=1).arguments())
         with self.assertRaisesRegex(WorkflowError, "auto_beam_width"):
             SearchParameters(auto_beam_width=2).arguments()
+        with self.assertRaisesRegex(WorkflowError, "udon_sa"):
+            SearchParameters(udon_sa=2).arguments()
+        with self.assertRaisesRegex(WorkflowError, "stable_beam_stop"):
+            SearchParameters(stable_beam_stop=2).arguments()
+        with self.assertRaisesRegex(WorkflowError, "sa_stagnation_stop"):
+            SearchParameters(sa_stagnation_stop=2).arguments()
         setting = {"daySeconds": [60, 12.5, 3_000_000]}
         self.assertEqual(day_time_limit_ms(setting, 0), 60000)
         self.assertEqual(day_time_limit_ms(setting, 1), 12500)
         self.assertEqual(day_time_limit_ms(setting, 2), 2147483647)
         with self.assertRaisesRegex(WorkflowError, "当日の試合時間"):
             day_time_limit_ms(setting, 3)
+
+    def test_gui_build_uses_release_optimization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            solver = work / "main"
+            workflow = Workflow(
+                ConnectionConfig("", ""), solver, work,
+            )
+            completed = mock.Mock(returncode=0, stdout="", stderr="")
+            with mock.patch("backend.subprocess.run", return_value=completed) as run:
+                result = workflow.build_solver()
+            command = result.command
+            self.assertIn("-O3", command)
+            self.assertIn("-DNDEBUG", command)
+            self.assertIn("-Werror", command)
+            self.assertNotIn("-O2", command)
+            run.assert_called_once()
 
     def test_agent_selection_always_reserves_submission_time(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -609,6 +676,17 @@ result
                 self.assertEqual([c for c in calls if c.startswith("send")], ["send0", "send1"])
                 self.assertEqual(calls.count("state"), 3)
                 self.assertEqual(sum(kind == "solved" for kind, _ in events), 2)
+                result_states = [
+                    Path(value) for kind, value in events
+                    if kind == "result_state"
+                ]
+                self.assertEqual(
+                    [path.resolve() for path in result_states],
+                    [(work / "result-state.json").resolve()] * 2,
+                )
+                for index, (kind, _value) in enumerate(events):
+                    if kind == "result_state":
+                        self.assertEqual(events[index - 1][0], "answer")
                 send_agents.assert_called_once()
 
             runner.phase = "send_answer"

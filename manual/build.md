@@ -64,7 +64,7 @@ CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの
 | `make test-brand-repair` | 役割交換、補給、固定行動、巻き戻しの系列救済を検証 |
 | `make test-udon-alns` | 系列マスクを固定したALNSの玉数改善と非退行を検証 |
 | `make test-quantity-search` | 途中取得、時刻付き補給、日跨ぎ候補と中断時の元計画保持を検証 |
-| `make test-python` | Python 53テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
+| `make test-python` | Python 55テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |
 | `make test-sanitize` | モデル・探索・引数・公式Q&A・プロパティテストをASan/UBSanでビルド・実行 |
@@ -84,7 +84,9 @@ CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの
 
 2026-10-09の3人運用更新後に、`make test-core`（C++コアテストとPython 53件）、`make test-gui`（実画面1件）、`git diff --check`が成功した。問題・状態の公開待ち、担当別プリセット、担当1の全自動、追走端末の手動送信、受理済みチェックポイントの共有と最大revision取込を含む。公式実サーバーへの回答送信を実行したという意味ではない。
 
-同日の`windows`ブランチ更新後に、このMacで`make test-core`（Windows向けコマンド生成テストを含むPython 54件）とC++回帰が成功した。Windows実機でのCMake/MSVCまたはMinGWビルドは、本番前の物理3台リハーサルで別途確認する。
+同日の現行GUI更新後は、担当プリセットを15／35／45秒へ変更し、探索終了後の伝達3値表示と口頭3値の取込を追加した。`make -j3 test-core`ではPython 57件を含む回帰テスト、`make test-gui`では実画面1件が成功した。
+
+2026-10-10の`windows`ブランチ更新では、Windows向けコマンド生成、`main.exe`既定パス、同梱Windows版簡易サーバー、CMake／PowerShellビルドを最新`main`へ統合した。Mac上で`make -j4 test-core`（Windows向けコマンド生成を含むPython 58件）と`make -j4 test-sanitize`が成功した。このMacにはCMakeがないためCMake経路は実行できておらず、Windows実機でのCMake/MSVCまたはMinGWビルドは、本番前の物理3台リハーサルで別途確認する。
 
 ## コンパイラ等の指定
 

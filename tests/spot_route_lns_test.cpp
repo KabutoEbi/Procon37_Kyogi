@@ -99,6 +99,7 @@ void checkRoutePathCountsTransitPickups() {
 }
 
 void checkJointRouteSearch() {
+    assert(!SpotRouteLnsConfig{}.spotPortfolioReachabilityRarity);
     MatchSetting setting;
     setting.field.width = 8;
     setting.field.height = 1;
