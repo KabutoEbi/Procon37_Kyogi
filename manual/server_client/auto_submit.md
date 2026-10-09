@@ -27,7 +27,7 @@ python3 server_client/auto_submit.py
 - `setting.json`, `agents.json`
 - `state-dayN.json`, `answer-dayN.json`
 - `score-dayN.json`: 受理済み回答に対応する翌日用チェックポイント
-- `logs/`: GETレスポンスとPOSTレスポンス
+- `logs/`: GETレスポンス、POST本文、POSTの成功レスポンスと本文のあるHTTPエラーレスポンス
 
 ## 主なオプション
 

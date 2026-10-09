@@ -22,7 +22,7 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 | `make test-brand-repair` | 役割交換、補給、固定行動、巻き戻しの系列救済を検証 |
 | `make test-udon-alns` | 系列マスクを固定したALNSの玉数改善と非退行を検証 |
 | `make test-quantity-search` | 途中取得、時刻付き補給、日跨ぎ候補と中断時の元計画保持を検証 |
-| `make test-python` | Python 38テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
+| `make test-python` | Python 53テスト。ソルバーを自動ビルドして連携テストのスキップを防止 |
 | `make test-gui` | ウィンドウを表示するGUI操作テスト。通信はモック |
 | `make test-server` | 同梱簡易サーバーをlocalhostで起動し、実ソルバーで探索・送信 |
 | `make test-sanitize` | モデル・探索・引数・公式Q&A・プロパティテストをASan/UBSanでビルド・実行 |
@@ -39,6 +39,8 @@ make test-sanitize   # ASan/UBSanによるC++テスト
 2026-10-07の協調改善と公開得点追跡改善後に、`make test`（C++ 11テスト、公開3サイズ、Python 38件）、`make test-sanitize`（C++ 10テスト）、`git diff --check`が成功した。GUI実画面と簡易サーバーはこの変更後に再実行していない。
 
 2026-10-08の5台時エージェント構成改善後に、`make test-core`（C++コアテストとPython 39件）、`make test-sanitize`（C++ 10テスト）、公開3サイズの`sample_maps_test`、`git diff --check`が成功した。GUI実画面、簡易サーバー、公式実サーバーへの回答送信はこの変更後に実行していない。
+
+2026-10-09の3人運用更新後に、`make test-core`（C++コアテストとPython 53件）、`make test-gui`（実画面1件）、`git diff --check`が成功した。問題・状態の公開待ち、担当別プリセット、担当1の全自動、追走端末の手動送信、受理済みチェックポイントの共有と最大revision取込を含む。公式実サーバーへの回答送信を実行したという意味ではない。
 
 ## コンパイラ等の指定
 
