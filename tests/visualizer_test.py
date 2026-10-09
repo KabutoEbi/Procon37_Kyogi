@@ -168,51 +168,51 @@ class BackendTest(unittest.TestCase):
             self.assertIsNone(gui._waiting_resubmission_candidate())
 
     def test_match_clock_values(self) -> None:
-        self.assertEqual(duration_text(3661.9), "01:01:01")
+        self.assertEqual(duration_text(3661.9), "61:01")
         before = match_clock_values(1000, (60, 90), 970, 990)
         self.assertEqual(before["phase"], "開始前（エージェント選択）")
-        self.assertEqual(before["selection"], "残り 00:00:20")
-        self.assertIn("開始まで 00:00:30", before["match"])
-        self.assertEqual(before["timer"], "00:00:20")
+        self.assertEqual(before["selection"], "残り 00:20")
+        self.assertIn("開始まで 00:30", before["match"])
+        self.assertEqual(before["timer"], "00:20")
 
         waiting = match_clock_values(1000, (60, 90), 995, 990)
         self.assertEqual(waiting["phase"], "開始前（試合待機）")
-        self.assertEqual(waiting["timer"], "00:00:05")
+        self.assertEqual(waiting["timer"], "00:05")
 
         first = match_clock_values(1000, (60, 90), 1025, 990)
         self.assertEqual(first["phase"], "1日目")
         self.assertEqual(first["progress"], "1/2日")
-        self.assertIn("残り 00:00:35", first["day"])
-        self.assertEqual(first["timer"], "00:00:35")
+        self.assertIn("残り 00:35", first["day"])
+        self.assertEqual(first["timer"], "00:35")
 
         second = match_clock_values(1000, (60, 90), 1080, 990)
         self.assertEqual(second["phase"], "2日目")
         self.assertEqual(second["progress"], "2/2日")
-        self.assertIn("経過 00:00:20", second["day"])
+        self.assertIn("経過 00:20", second["day"])
 
         finished = match_clock_values(1000, (60, 90), 1160, 990)
         self.assertEqual(finished["phase"], "全日程終了")
-        self.assertEqual(finished["day"], "終了後 00:00:10")
-        self.assertEqual(finished["timer"], "00:00:10")
+        self.assertEqual(finished["day"], "終了後 00:10")
+        self.assertEqual(finished["timer"], "00:10")
 
         unknown = match_clock_values(0, (60, 60), 100)
         self.assertEqual(unknown["phase"], "時刻情報待ち")
-        self.assertEqual(unknown["match"], "予定 00:02:00")
-        self.assertEqual(unknown["timer"], "--:--:--")
+        self.assertEqual(unknown["match"], "予定 02:00")
+        self.assertEqual(unknown["timer"], "--:--")
 
         deadline_only = match_clock_values(
             0, (60, 90), 1025, current_day=1, day_ends_at=1090
         )
         self.assertEqual(deadline_only["phase"], "2日目")
         self.assertEqual(deadline_only["progress"], "2/2日")
-        self.assertIn("残り 00:01:05", deadline_only["day"])
-        self.assertEqual(deadline_only["timer"], "00:01:05")
+        self.assertIn("残り 01:05", deadline_only["day"])
+        self.assertEqual(deadline_only["timer"], "01:05")
 
         deadline_passed = match_clock_values(
             0, (60, 90), 1100, current_day=1, day_ends_at=1090
         )
         self.assertEqual(deadline_passed["phase"], "2日目終了")
-        self.assertEqual(deadline_passed["timer"], "00:00:10")
+        self.assertEqual(deadline_passed["timer"], "00:10")
 
     def test_unknown_setting_keeps_simple_server_clock(self) -> None:
         gui = SimpleNamespace(

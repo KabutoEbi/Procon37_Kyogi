@@ -42,8 +42,9 @@ using UdonRefiner = std::function<UdonAlnsResult(
     const UdonAlnsConfig&, std::chrono::steady_clock::time_point)>;
 
 struct BeamSearchConfig {
-    // Experimental portfolio. Enable explicitly until fixed-time match
-    // benchmarks establish a benefit across more than the tuning instances.
+    // Experimental quantity portfolio. The multi-day beam is controlled
+    // independently so the official cumulative daily-brand objective is
+    // considered without enabling every quantity experiment.
     bool quantityUpgrades = false;
     // Fuel-aware end placement, anticipatory supply assignment and a reserved
     // quantity-refinement slice. Independent of the experimental day beam.
@@ -174,6 +175,16 @@ struct BeamSearchConfig {
 };
 
 namespace detail {
+
+inline bool isSharplyShorterNextDay(
+    const MatchSetting& setting, std::int32_t day) noexcept {
+    if (day < 0) return false;
+    const auto current = static_cast<std::size_t>(day);
+    const auto next = current + 1;
+    return next < setting.daySteps.size() &&
+        3LL * setting.daySteps[next] <=
+            2LL * setting.daySteps[current];
+}
 
 inline bool isFuelRiskDay(const MatchSetting& setting,
                           const MatchState& matchState) {
@@ -1280,13 +1291,22 @@ private:
             (currentDay && dist.planning.twoSpotLookahead ? 2 * n + 1 : n + 1) + 1;
         const std::int64_t daily = pickup * (n + 1);
         const std::int64_t fresh = daily * (n + 1);
+        const auto currentDayIndex = state.day >= 0
+            ? static_cast<std::size_t>(state.day) : setting.daySteps.size();
+        const auto nextDayIndex = state.day >= 0
+            ? static_cast<std::size_t>(state.day + 1) : setting.daySteps.size();
+        const bool hasNextDay = currentDayIndex < setting.daySteps.size() &&
+            nextDayIndex < setting.daySteps.size();
+        const bool sharplyShorterNextDay =
+            detail::isSharplyShorterNextDay(setting, state.day);
+        const bool finalTightFuelDay = hasNextDay &&
+            setting.field.cellCount() >= 32U * 32U && dist.lightTraffic &&
+            nextDayIndex + 1 >= setting.dayCount() &&
+            5LL * setting.fuelLimit <=
+                6LL * setting.daySteps[nextDayIndex];
         const bool prioritizeHardFuture =
             !currentDay && dist.planning.prioritizeHardNextDayTargets &&
-            setting.field.cellCount() >= 32U * 32U && dist.lightTraffic &&
-            static_cast<std::size_t>(state.day + 1) < setting.daySteps.size() &&
-            static_cast<std::size_t>(state.day + 2) >= setting.dayCount() &&
-            5LL * setting.fuelLimit <=
-                6LL * setting.daySteps[static_cast<std::size_t>(state.day + 1)];
+            (sharplyShorterNextDay || finalTightFuelDay);
         if (prioritizeHardFuture) {
             std::array<std::int32_t, kMaxBrands> spotsPerBrand{};
             for (const Spot& spot : setting.field.spots) {
@@ -3482,12 +3502,26 @@ inline BeamSearchResult brain1Beam(
     BeamSearchConfig pass = config;
     pass.useStateDeadline = false;
     pass.safetyMarginMs = 0;
+    const std::size_t configuredBeamWidth = pass.beamWidth;
+    const std::size_t configuredJointBeamWidth = pass.jointBeamWidth;
+    // Automatically calibrated widths are upper targets for a long run, not
+    // necessarily the best first width.  Start with a completed narrow pass
+    // and retain its official-score result while deepening.  This avoids
+    // spending the entire deadline in one oversized, unfinished pass.
+    if (pass.autoSizedBeam && effectiveMs >= 10000 &&
+        pass.beamWidth >= 4 * pass.minimumBeamWidth &&
+        pass.jointBeamWidth >= 4 * pass.minimumJointBeamWidth) {
+        pass.beamWidth = std::max(
+            pass.minimumBeamWidth, pass.beamWidth / 4);
+        pass.jointBeamWidth = std::max(
+            pass.minimumJointBeamWidth, pass.jointBeamWidth / 4);
+    }
     const std::size_t maxBeam = std::max<std::size_t>(
-        pass.beamWidth,
-        std::min<std::size_t>(8192, pass.beamWidth * 16));
+        configuredBeamWidth,
+        std::min<std::size_t>(8192, configuredBeamWidth * 16));
     const std::size_t maxJoint = std::max<std::size_t>(
-        pass.jointBeamWidth,
-        std::min<std::size_t>(32768, pass.jointBeamWidth * 16));
+        configuredJointBeamWidth,
+        std::min<std::size_t>(32768, configuredJointBeamWidth * 16));
 
     while (Clock::now() < deadline) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3599,7 +3633,6 @@ inline BeamSearchResult brain1(
     using Clock = std::chrono::steady_clock;
     auto config = requestedConfig;
     if (!config.quantityUpgrades) {
-        config.useDayBeam = false;
         config.spotRouteLns.reflectTransit = false;
         config.routeColumns.maxSupplySchedules = 0;
         config.udonAlns.reallocateStock = false;
@@ -3703,14 +3736,9 @@ inline BeamSearchResult brain1(
         ? 20 : static_cast<std::size_t>(beamBudgetPercent);
     result.udonAlnsAttemptLimit = longSearch.udonAlns.maxAttempts;
     result.udonAlnsNodesPerAttempt = longSearch.udonAlns.nodesPerAttempt;
-    // 担当2は、安定した幅を見つけた時点のビーム解をそのまま採用する。
-    // 後段改善へ残り時間を渡すと結局ハード上限まで探索してしまうため、
-    // このモードだけは収束を日次探索全体の終了条件とする。
-    if (result.stableBeamStopped) {
-        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            Clock::now() - started).count();
-        return result;
-    }
+    // 安定幅はビームを広げる終了条件であって、系列最大性の証明ではない。
+    // 担当2でもこの後の系列修復・系列最大化までは必ず通し、玉数専用の
+    // 後段探索だけを省略して早期終了する。
     std::vector<DayPlanCandidate> futureCandidates;
     bool changed = false;
     const auto remember = [&] {
@@ -3793,6 +3821,46 @@ inline BeamSearchResult brain1(
         result.finalState = refined.finalState;
         changed = true;
         remember();
+    }
+    // A node cap is only a fast first pass. If its relaxed upper bound is
+    // still open, spend the remaining brand-search slice proving or reaching
+    // the maximum before any quantity-only refinement. The hard wall-clock
+    // deadline remains authoritative, so this cannot delay submission.
+    if (limited && !result.brandOptimal && Clock::now() < brandDeadline &&
+        brandScore(result.finalState) < std::make_pair(
+            result.matchBrandUpperBound, result.dailyBrandUpperBound)) {
+        const auto rescue = maximizeDayBrands(
+            setting, matchState, previousScore, result.plan,
+            0, brandDeadline);
+        result.brandSearchExpanded += rescue.expanded;
+        result.brandOptimal = rescue.optimal;
+        result.matchBrandUpperBound = rescue.matchUpperBound;
+        result.dailyBrandUpperBound = rescue.dailyUpperBound;
+        if (brandScore(rescue.finalState) > brandScore(result.finalState)) {
+            result.plan = rescue.plan;
+            result.finalState = rescue.finalState;
+            changed = true;
+            remember();
+        }
+    }
+    if (result.stableBeamStopped) {
+        if (changed) {
+            EvaluationContext context;
+            context.scoreAtDayStart = previousScore;
+            result.evaluation = evaluateGameState(
+                result.finalState, context, config.weights);
+        }
+        const auto finalReplay = simulateDay(
+            setting, matchState, result.plan, previousScore);
+        if (finalReplay.valid) {
+            result.supplyUtilization = finalReplay.supplyUtilization;
+        }
+        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - started).count();
+        if (limited && Clock::now() >= brandDeadline && !result.brandOptimal) {
+            result.stopReason = SearchStopReason::TimeLimit;
+        }
+        return result;
     }
     if (runSpotRouteLns && Clock::now() < deadline) {
         auto routeDeadline = deadline;
@@ -3962,6 +4030,13 @@ inline BeamSearchResult brain1(
                 expandedConfig.nodesPerAttempt, 1600);
             expandedConfig.maxPatrols = std::max<std::size_t>(
                 expandedConfig.maxPatrols, 3);
+            // Problem instances favor different SA neighborhoods.  Make the
+            // independent pass explore the other distribution and RNG stream;
+            // the official lexicographic score still selects the result.
+            expandedConfig.arenaGuidedNeighborhoods =
+                !longSearch.udonAlns.arenaGuidedNeighborhoods;
+            expandedConfig.randomSeed ^=
+                UINT64_C(0xd1b54a32d192ed03);
             // A proxy for tomorrow is not strong enough to justify changing
             // the endpoint in the extra quantity pass. Intermediate-day
             // alternatives must finish with exactly the incumbent positions

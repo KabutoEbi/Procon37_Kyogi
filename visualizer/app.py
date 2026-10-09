@@ -97,11 +97,10 @@ def official_score_text(summary: SolverResultSummary) -> str:
 
 
 def duration_text(seconds: float) -> str:
-    """経過・残り時間を、長時間でも桁落ちしない時分秒で表示する。"""
+    """経過・残り時間を、長時間でも桁落ちしない分秒で表示する。"""
     value = max(0, int(seconds))
-    hours, remainder = divmod(value, 3600)
-    minutes, secs = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    minutes, secs = divmod(value, 60)
+    return f"{minutes:02d}:{secs:02d}"
 
 
 def automatic_phase_is_waiting(label: str) -> bool:
@@ -164,7 +163,7 @@ def match_clock_values(
             "match": "-",
             "day": "-",
             "progress": "0/0日",
-            "timer": "--:--:--",
+            "timer": "--:--",
         }
 
     if starts_at <= 0:
@@ -196,7 +195,7 @@ def match_clock_values(
             "match": f"予定 {duration_text(total)}",
             "day": "-",
             "progress": f"0/{len(day_seconds)}日",
-            "timer": "--:--:--",
+            "timer": "--:--",
         }
 
     if selection_ends_at > 0:
@@ -358,7 +357,7 @@ class SolverGUI(tk.Tk):
             "day": tk.StringVar(value="-"),
             "progress": tk.StringVar(value="0/0日"),
             "automatic": tk.StringVar(value="未実行"),
-            "timer": tk.StringVar(value="--:--:--"),
+            "timer": tk.StringVar(value="--:--"),
         }
         self.map_info_var = tk.StringVar(value="試合設定を取得または読み込んでください")
         self.search_result_vars = {
@@ -1458,9 +1457,9 @@ class SolverGUI(tk.Tk):
             or values["phase"] == "開始前（試合待機）"
         )
         if waiting:
-            values["timer"] = "--:--:--"
+            values["timer"] = "--:--"
             self.match_clock_vars["timer"].set(values["timer"])
-        elif values["timer"] == "--:--:--" and self._automatic_phase_started > 0:
+        elif values["timer"] == "--:--" and self._automatic_phase_started > 0:
             values["timer"] = duration_text(
                 time.monotonic() - self._automatic_phase_started
             )

@@ -60,12 +60,13 @@ void addMixedTraffic(
 int main(int argc, char** argv) {
     using namespace benzen;
     try {
-        if (argc < 2 || argc > 13) {
+        if (argc < 2 || argc > 14) {
             std::cerr << "usage: " << argv[0]
                       << " setting.json [time-ms] [supply-mask] [traffic]"
                          " [beam-width] [joint-beam-width] [hard-next-day]"
                          " [details] [arena-guidance] [joint-destroy]"
-                         " [detour-aware-spots] [differential-insertion]\n";
+                         " [detour-aware-spots] [differential-insertion]"
+                         " [auto-sized-beam]\n";
             return 2;
         }
         MatchSetting setting;
@@ -141,6 +142,14 @@ int main(int argc, char** argv) {
             }
             config.beam.udonAlns.differentialInsertionEvaluation =
                 enabled != 0;
+        }
+        if (argc >= 14) {
+            const int enabled = std::stoi(argv[13]);
+            if (enabled < 0 || enabled > 1) {
+                throw std::invalid_argument(
+                    "auto-sized-beam must be 0 or 1");
+            }
+            config.beam.autoSizedBeam = enabled != 0;
         }
         const auto match = runMatch(
             setting,

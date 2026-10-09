@@ -23,11 +23,11 @@ if (result.success) {
 
 ## 主要設定
 
-- `quantityUpgrades`: 日跨ぎビーム等を有効化する試験設定。既定false。以下の65/10/25%配分・日跨ぎ探索はtrueの場合に適用する
+- `quantityUpgrades`: 実験的な玉数改善群と65/10/25%の固定配分を有効化する試験設定。既定false。日跨ぎビームとは独立
 - `coordinatedRefinement`: 翌日の燃料・配置準備と先回り補給を含む改善。既定true。`quantityUpgrades`とは独立して終端再配置、在庫再配分、追加補給候補、時間予約を有効にする。詳細は[翌日配置と補給](../overnight_refinement.md)
 - `beamWidth`: 各展開で残す状態数
 - `refineBrands`: 系列補完を有効化。既定true
-- `brandSearchNodeLimit`: 系列補完の状態展開上限。既定50000。24×24以上の厳燃料時は10000へ抑える
+- `brandSearchNodeLimit`: 系列補完の高速な初回探索で使う状態展開上限。既定50000。24×24以上の厳燃料時は10000へ抑える。時間制限付き探索で初回が系列上限に届かなければ、残りの系列用時間はノード上限なしの救済探索へ使い、玉数専用探索へは渡さない
 - `exactBrands`: 補完の状態展開上限を解除。締切は維持。既定false
 - `useBrandRepair`: 未獲得系列を対象とした連鎖再計画。既定true
 - `brandRepair`: 局所探索の試行数（16）、各試行の展開上限（1000）、巡回車数（2）。詳細は[系列救済](../brand_repair.md)
@@ -44,12 +44,13 @@ if (result.success) {
 - `quantityBudgetPercent`: 自動調整を無効にした場合、または実験的`quantityUpgrades`で使う玉数改善の基準割合。既定25。未使用時間は後段へ渡す
 - `stopBeamAtBrandUpperBound`: `quantityUpgrades`または`coordinatedRefinement`が有効なとき、ビーム割当時間の半分以上を探索し、完了パスが全系列を取得したら反復深化を終了して後段の玉数改善へ時間を渡す。既定true
 - `autoSizedBeam`: 日全体向けに校正した自動幅を、実際のビーム時間枠の比率で縮小してから探索する。手動幅は変更しない
-- `useDayBeam` / `dayBeamWidth` / `dayBeamDepth` / `dayBeamMaxUdonLoss`: 複数の終端候補による先読み。既定true・幅4・2日先・当日減少最大2玉。[日跨ぎ候補探索](../day_beam.md)を参照
+- `useDayBeam` / `dayBeamWidth` / `dayBeamDepth` / `dayBeamMaxUdonLoss`: 複数の終端候補による先読み。通常設定でも既定trueで、`quantityUpgrades`とは独立。幅4・2日先・当日減少最大2玉。[日跨ぎ候補探索](../day_beam.md)を参照
 - `jointBeamWidth`: 同時に空いた複数台へ行動を割り当てる途中幅
 - `timeLimitMs`: 相対時間制限。0なら指定なし
 - `useStateDeadline`: `MatchState::endsAt`も締切に使う
 - `safetyMarginMs`: 締切前に残す余裕
-- `iterativeDeepening`: 固定幅の探索が早く完了したとき、残り時間でビーム幅・行動候補・合流候補を段階的に広げて再探索。既定true
+- `iterativeDeepening`: 固定幅の探索が早く完了したとき、残り時間でビーム幅・行動候補・合流候補を段階的に広げて再探索。ビーム割当が10秒以上（全体枠ではおよそ15秒以上）の自動調整幅では最初に目標幅の4分の1を完走し、その公式得点を保持したまま2倍ずつ広げる。短時間探索は従来の目標幅から始める。既定true
+- `stopOnStableBeam`: 反復深化の完成結果が連続して変わらない場合に幅拡大を終了する。安定は系列最大性の証明とはみなさず、系列上限に未到達なら系列修復・全車系列最大化・上限なし救済まで実行してから返す。安定終了時は玉数専用の後段探索を省略する
 - `threadCount`: 0で自動、1で並列無効
 - `maxActionsPerAgent`: 各台で残す合法行動数。0で全候補
 - `useMacroActions`: スポットや合流点への経路をまとめて生成
@@ -71,7 +72,7 @@ if (result.success) {
 - `sharedRendezvous`: 同じ補給車・同じセルへの合流を複数巡回車で共有。既定true
 - `diversifyAcquiredSpots`: 系列と位置が同じでも、各車の取得済みスポットが異なる状態を多様性枠へ残す。既定true
 - `quantityEnhancementsMinTimeMs`: 上記3改善を使う最小実効探索時間。既定500ms
-- `prioritizeHardNextDayTargets`: 32x32以上の軽交通・燃料制約下で、最終日前日に遠隔の一意系列へ巡回車を寄せる。既定true
+- `prioritizeHardNextDayTargets`: 翌日のステップ数が当日の約3分の2以下へ急減する場合、盤面サイズによらず遠隔の一意系列へ巡回車を寄せる。従来の32×32以上・軽交通・燃料制約下の最終日前日にも適用する。既定true
 - `lookaheadCandidateLimit`: 距離順で調べる2店目候補数。既定6
 - `assignmentCacheLimit`: 日次探索内の割当キャッシュ件数上限。既定4096、0で無効
 - `profilePlanning`: 割当・最小費用流・合流計算の時間を計測する。既定false。計測は負荷を加えるため速度比較ではオフにする
@@ -83,7 +84,7 @@ if (result.success) {
 
 `BeamSearchResult`には計画、最終状態、評価内訳、展開数、評価回数、マクロ統計、補給車から除去した周回数`removedSupplyLoops`、補給車ごとの`SupplyUtilization`、経過時間、停止理由が入る。実際に使った配分とALNS上限は`quantityBudgetPercentUsed`、`beamBudgetPercentUsed`、`udonAlnsAttemptLimit`、`udonAlnsNodesPerAttempt`へ記録し、コンソールにも出力する。`brain2`利用時は貪欲候補数、共同destroy/repairの試行・展開・改善数、7近傍の提案・受理数も記録する。スポット経路探索の候補上限は`spotPortfolioMaxBrands`、`spotPortfolioMaxUdon`、公式検証済み候補の上限は`spotPortfolioMaxValidUdon`で診断でき、`MatchRunner`から日別結果へ伝播する。利用率は後段の改善が終わった最終採用計画を再生して更新する。`success == false`の場合は`plan`を送信せず、`application.hpp`の`solveDay()`などで待機計画へフォールバックする。
 
-公開入口`brain1()`はビーム、系列救済、全車系列補完、スポット単位ビーム、局所／共同LNS、経路候補組合せ、玉数ALNSを順に試す。玉数改善は先に得た系列数を下限とし、中間日は翌日到達性の近似条件も検査する。標準の自動幅では、実効15秒未満はビーム82%を基本として先行回答を優先し、15〜30秒は75%、30〜45秒は最終日70%／中間日73%、45秒以上は最終日65%／中間日70%へ段階調整する。16×16は系列救済保護のため通常時も70%を下限とする。厳燃料日はビーム85%を維持する。手動幅は従来どおり80%、`adaptiveLongSearch=false`の自動幅は通常75%・厳燃料時85%である。中間日は最後に終端再配置を行う。全車補完は6方向移動と1ステップ待機を列挙し、公式シミュレータと燃料を緩和した距離上限を用いる。`exactBrands=true`では系列証明を優先する。各改善段階の試行数・展開数をレポートする。
+公開入口`brain1()`はビーム、系列救済、全車系列補完、スポット単位ビーム、局所／共同LNS、経路候補組合せ、玉数ALNSを順に試す。玉数改善は先に得た系列数を下限とし、中間日は翌日到達性の近似条件も検査する。標準の自動幅では、実効15秒未満はビーム82%を基本として先行回答を優先し、15〜30秒は75%、30〜45秒は最終日70%／中間日73%、45秒以上は最終日65%／中間日70%へ段階調整する。16×16は系列救済保護のため通常時も70%を下限とする。厳燃料日はビーム85%を維持する。手動幅は従来どおり80%、`adaptiveLongSearch=false`の自動幅は通常75%・厳燃料時85%である。中間日は最後に終端再配置を行う。全車補完は6方向移動と1ステップ待機を列挙し、公式シミュレータと燃料を緩和した距離上限を用いる。初回ノード上限で停止して系列上限が残る場合は、系列用締切まで上限なしで再探索し、未解決のまま玉数専用探索へ進まない。`exactBrands=true`では最初から系列証明を優先する。各改善段階の試行数・展開数をレポートする。
 
 `brandOptimal=true`は、指定種別・当日交通に対する「当日終了時の試合系列数、当日系列数」の辞書順最大値を証明したことを表す。上限達成または全探索完了で証明する。`matchBrandUpperBound`と`dailyBrandUpperBound`は系列上限、`brandSearchExpanded`は補完の状態展開数。上限未達で時間・展開数上限に達した場合は`brandOptimal=false`を返し、得られた合法な最良計画を保持する。補完は系列数が厳密に改善した場合だけ計画を置換する。同系列数の玉数は後段のスポット探索とALNS、翌日配置はビームと中間日採用条件が担当する。全日・種別選択の大域最適性はこの証明の対象外。
 

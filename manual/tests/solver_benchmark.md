@@ -85,7 +85,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 `no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流、拡張ALNSポートフォリオをまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`、`no-expanded-alns`は各機能のアブレーションに使う。
 
-`--quantity-upgrades`で新しい5項目を有効化する（CLI本体と違い値なしのベンチ用フラグ）。`--no-day-beam`は日跨ぎ先読みを無効化する。`--keep-beam-iterations`は系列上限での早期終了を無効化する。`--quantity-budget-percent N`（1〜90）は玉数用の予約割合を変更し、時間配分の切り分けに使う。これら3つの調整は`--quantity-upgrades`と併用する。
+`--quantity-upgrades`で実験的な玉数改善群を有効化する（CLI本体と違い値なしのベンチ用フラグ）。日跨ぎ先読みは独立して既定有効で、`--no-day-beam`により無効化する。`--keep-beam-iterations`は系列上限での早期終了を無効化する。`--quantity-budget-percent N`（1〜90）は玉数用の予約割合を変更し、時間配分の切り分けに使う。玉数改善群の比較では後ろ2つを`--quantity-upgrades`と併用し、日跨ぎの有無は別軸で比較する。
 
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 

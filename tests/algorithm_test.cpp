@@ -1007,6 +1007,79 @@ void testDynamicFuelRiskDetection() {
     assert(detail::isFuelRiskDay(severe, severeState));
 }
 
+void testSharplyShorterNextDayDetection() {
+    auto s = line(3, {145, 143, 189, 83, 200}, 200, {0},
+                  {{0, 2, 1, -1}});
+    assert(!detail::isSharplyShorterNextDay(s, -1));
+    assert(!detail::isSharplyShorterNextDay(s, 0));
+    assert(!detail::isSharplyShorterNextDay(s, 1));
+    assert(detail::isSharplyShorterNextDay(s, 2));
+    assert(!detail::isSharplyShorterNextDay(s, 3));
+    assert(!detail::isSharplyShorterNextDay(s, 4));
+
+    s.daySteps = {83, 77, 58, 32};
+    assert(!detail::isSharplyShorterNextDay(s, 0));
+    assert(!detail::isSharplyShorterNextDay(s, 1));
+    assert(detail::isSharplyShorterNextDay(s, 2));
+}
+
+void testStableBeamStillRunsBrandMaximization() {
+    auto s = line(5, {8}, 8, {0},
+                  {{0, 2, 1, -1}, {1, 4, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol});
+    BeamSearchConfig cfg;
+    cfg.beamWidth = 1;
+    cfg.jointBeamWidth = 1;
+    cfg.minimumBeamWidth = 1;
+    cfg.minimumJointBeamWidth = 1;
+    cfg.maxActionsPerAgent = 1;
+    cfg.adaptiveActionLimit = false;
+    cfg.comparePeriodicReplanPlans = false;
+    cfg.useSpotRouteLns = false;
+    cfg.useUdonAlns = false;
+    cfg.useBrandRepair = false;
+    cfg.stopOnStableBeam = true;
+    cfg.stableBeamPasses = 1;
+    cfg.timeLimitMs = 1000;
+    cfg.safetyMarginMs = 0;
+    cfg.threadCount = 1;
+    cfg.useStateDeadline = false;
+
+    const auto result = brain1(s, ms, {}, cfg);
+    assert(result.success);
+    assert(result.stableBeamStopped);
+    // 安定終了後もmaximizeDayBrandsを通ったことを、上限計算で確認する。
+    assert(result.matchBrandUpperBound > 0);
+    assert(result.dailyBrandUpperBound > 0);
+    assert(validateDailyPlan(s, ms, result.plan).valid);
+}
+
+void testDayBeamRunsWithoutQuantityUpgrades() {
+    auto s = line(5, {8, 8}, 8, {0},
+                  {{0, 2, 1, -1}, {1, 4, 1, -1}});
+    auto ms = stateFor(s, {AgentKind::Patrol});
+    BeamSearchConfig cfg;
+    cfg.beamWidth = 4;
+    cfg.jointBeamWidth = 8;
+    cfg.iterativeDeepening = false;
+    cfg.comparePeriodicReplanPlans = false;
+    cfg.useSpotRouteLns = false;
+    cfg.useUdonAlns = false;
+    cfg.useBrandRepair = false;
+    cfg.quantityUpgrades = false;
+    cfg.useDayBeam = true;
+    cfg.timeLimitMs = 5000;
+    cfg.safetyMarginMs = 0;
+    cfg.threadCount = 1;
+    cfg.useStateDeadline = false;
+
+    const auto result = brain1(s, ms, {}, cfg);
+    assert(result.success);
+    // quantityUpgradesが無効でも、通常の日跨ぎ候補生成まで進む。
+    assert(result.dayBeamCandidates > 0);
+    assert(validateDailyPlan(s, ms, result.plan).valid);
+}
+
 } // namespace
 
 int main() {
@@ -1030,5 +1103,8 @@ int main() {
     testTrialsAndTuning();
     testFutureFuelDivisorValidation();
     testDynamicFuelRiskDetection();
+    testSharplyShorterNextDayDetection();
+    testStableBeamStillRunsBrandMaximization();
+    testDayBeamRunsWithoutQuantityUpgrades();
     testConsoleReport();
 }

@@ -116,7 +116,6 @@ private:
         }
         else if (name == "--day-beam") {
             beam.useDayBeam = value != 0;
-            if (value) beam.quantityUpgrades = true;
         }
         else if (name == "--day-beam-width") {
             if (value < 2 || value > 8) throw std::invalid_argument("day beam width must be 2..8");

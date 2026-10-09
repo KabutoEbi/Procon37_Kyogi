@@ -26,6 +26,7 @@ int main() {
     assert(smallRescue.beam.smallBoardBeamBudgetPercent == 80);
     assert(smallRescue.beam.smallBoardBrandSearchNodeLimit == 150000);
     assert(!parse({"main"}).beam.quantityUpgrades);
+    assert(parse({"main"}).beam.useDayBeam);
     assert(parse({"main"}).beam.adaptiveLongSearch);
     assert(parse({"main"}).beam.udonAlns.simulatedAnnealing);
     assert(parse({"main"}).beam.udonAlns.jointDestroyRepair);
@@ -42,7 +43,9 @@ int main() {
     assert(!parse({"main", "--adaptive-long-search", "0"})
         .beam.adaptiveLongSearch);
     assert(parse({"main", "--quantity-upgrades", "1"}).beam.quantityUpgrades);
-    assert(parse({"main", "--day-beam", "1"}).beam.quantityUpgrades);
+    const auto dayBeamOnly = parse({"main", "--day-beam", "1"});
+    assert(dayBeamOnly.beam.useDayBeam);
+    assert(!dayBeamOnly.beam.quantityUpgrades);
     const auto quantity = parse({"main", "--day-beam", "0", "--day-beam-width", "6",
         "--day-beam-depth", "3", "--quantity-budget-percent", "30",
         "--day-beam-max-udon-loss", "0"});
