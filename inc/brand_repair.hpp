@@ -2,6 +2,7 @@
 
 #include "brand_search.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>

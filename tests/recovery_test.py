@@ -289,6 +289,47 @@ class RecoveryTest(unittest.TestCase):
             self.assertEqual(limit, 60000)
             self.assertEqual(limit - margin, 47800)
 
+    def test_agent_selection_three_stage_deadlines_keep_submission_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            w = Workflow(
+                ConnectionConfig("http://example", "secret"),
+                ROOT / "main", work,
+            )
+            timing = work / "setting-received.json"
+            timing.write_text(json.dumps({
+                "receivedAt": 100.0,
+                "selectionEndsAt": 220.0,
+            }))
+            self.assertEqual(
+                w._selection_stage_ends_at(intermediate=True), 165.0
+            )
+            self.assertEqual(
+                w._selection_stage_ends_at(intermediate=False), 220.0
+            )
+
+            timing.write_text(json.dumps({
+                "receivedAt": 100.0,
+                "selectionEndsAt": 190.0,
+            }))
+            self.assertEqual(
+                w._selection_stage_ends_at(intermediate=True), 150.0
+            )
+            self.assertEqual(
+                w._selection_stage_ends_at(intermediate=False), 190.0
+            )
+
+            timing.write_text(json.dumps({
+                "receivedAt": 100.0,
+                "selectionEndsAt": 160.0,
+            }))
+            self.assertEqual(
+                w._selection_stage_ends_at(intermediate=True), 135.0
+            )
+            self.assertEqual(
+                w._selection_stage_ends_at(intermediate=False), 160.0
+            )
+
     def test_solver_time_is_capped_below_day_duration(self):
         with tempfile.TemporaryDirectory() as directory:
             w = Workflow(
