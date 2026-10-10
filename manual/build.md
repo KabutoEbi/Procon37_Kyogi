@@ -99,3 +99,5 @@ make -B CXXFLAGS='-O2 -Wall -Wextra -Wpedantic -Werror'
 `CXX`、`PYTHON`、`CPPFLAGS`、`CXXFLAGS`、`LDFLAGS`、`LDLIBS`を指定できる。コンパイラやフラグの変更だけでは再ビルドを検出しないため、変更時は`-B`を付ける。サニタイザ用には通常バイナリと別の出力先・専用フラグを使用する。
 
 本番前には通常・GUI・簡易サーバー・サニタイザを通し、使用したコミット、コンパイラ、フラグを記録して`main`を別途バックアップする。これらのテストは公式実サーバーでのリハーサルを代替しない。
+
+WindowsのMinGWビルドでは、C++ランタイムを-static-libgcc -static-libstdc++で静的リンクする。PATH上のランタイムDLLによるスレッド終了時のヒープ破損（0xC0000374）を避けるため、CMakeとGUIのビルドで共通に指定する。設定変更後はmain.exeを再ビルドする。

@@ -6,6 +6,7 @@
 #include <queue>
 #include <random>
 #include <sstream>
+#include <thread>
 
 using namespace benzen;
 
@@ -1083,6 +1084,27 @@ void testDayBeamRunsWithoutQuantityUpgrades() {
 } // namespace
 
 int main() {
+    // Exercise destruction of both assignment workspaces on worker exit.
+    // Dynamic MinGW runtimes previously crashed here with 0xC0000374.
+    for (int round = 0; round < 3; ++round) {
+        std::vector<std::thread> workers;
+        for (int worker = 0; worker < 7; ++worker) {
+            workers.emplace_back([] {
+                static thread_local MinCostFlow patrol(0);
+                static thread_local MinCostFlow supply(0);
+                for (int iteration = 0; iteration < 100; ++iteration) {
+                    for (auto* flow : {&patrol, &supply}) {
+                        flow->reset(4);
+                        flow->addEdge(0, 1, 1, 0);
+                        flow->addEdge(1, 3, 1, -1);
+                        const auto result = flow->run(0, 3, 1);
+                        assert(result.first == 1 && result.second == -1);
+                    }
+                }
+            });
+        }
+        for (auto& worker : workers) worker.join();
+    }
     testCompleteIncumbentRoutes();
     testCompletionPreservesIncumbentScore();
     testFinalDayRoutePortfolio();

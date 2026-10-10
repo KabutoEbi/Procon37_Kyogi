@@ -87,6 +87,8 @@ class BackendTest(unittest.TestCase):
                 self.assertIn("-DNDEBUG", command)
                 self.assertIn("-Iinc", command)
                 self.assertIn("-Wl,--stack,16777216", command)
+                self.assertIn("-static-libgcc", command)
+                self.assertIn("-static-libstdc++", command)
                 self.assertNotIn("-pthread", command)
 
         with mock.patch("backend.platform.system", return_value="Darwin"), \
@@ -95,6 +97,8 @@ class BackendTest(unittest.TestCase):
             self.assertIn("-pthread", solver_build_command(Path("main")))
 
         self.assertIn("0xC00000FD", process_exit_detail(3221225725))
+        self.assertIn("0xC0000374", process_exit_detail(3221226356))
+        self.assertIn("0xC0000374", process_exit_detail(-1073740940))
         self.assertEqual(process_exit_detail(7), "終了コード 7")
 
     def test_reject_search_budget_not_exceeding_margin(self) -> None:
