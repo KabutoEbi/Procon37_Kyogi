@@ -102,6 +102,19 @@ CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの
 
 CMakeを直接使う場合は`-DPROCON_BUILD_BENCHMARK=ON`で有効化する。実行時間は探索時間の比較枠であり、ビルド時間ではない。Windows実機・MSVC／MinGWでの実行確認は別途必要である。
 
+## 2026-10-11 最新mainと準決勝条件の反映
+
+`main`の`8adacba`までを`windows`へ取り込み、系列完了ボーナス、7台時の系列重視エージェント選択、3段階提出、準決勝の確定条件を反映した。Windowsでは引き続き`main.exe`を使用し、準決勝は1人・1端末、3人運用「通常」で実行する。設定取得後は24×24、6日、日別ステップ`48,56,68,68,56,72`、5台、24スポット、18系列、最大在庫合計60、燃料80、混雑1、渋滞2を完全一致で検査する。
+
+本番用ビルドと回帰テストはDeveloper PowerShellまたはMinGW／ClangのPATHを設定したPowerShellで次を実行する。
+
+```powershell
+./build-windows.ps1 -Configuration Release -Test
+./run-visualizer-windows.ps1 --check-runtime
+```
+
+このブランチを更新したmacOS環境にはWindows用コンパイラ、CMake、PowerShellがないため、ネイティブ`main.exe`の生成とWindows GUI実画面確認はWindows端末で行う。
+
 ## コンパイラ等の指定
 
 ```sh

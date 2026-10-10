@@ -2,6 +2,12 @@
 
 最終更新: 2026-10-11
 
+## 2026-10-11 Windowsへの最新main反映
+
+- `main`の`8adacba`を`windows`へマージし、系列重視探索、準決勝確定条件、1人全自動運用、3段階提出を反映した。
+- Windows専用の`main.exe`既定パス、CMake／PowerShellビルド、MSVCの16MBスタック、MinGWの静的C++ランタイム、Windows版簡易サーバー選択を維持した。
+- Windows向けビルドコマンド生成を含む回帰はmacOS上で確認する。Windows実機で`./build-windows.ps1 -Configuration Release -Test`とGUI起動を行うまで、ネイティブ動作確認は未完了として扱う。
+
 ## 2026-10-11の本選1日目からの準決勝・決勝予測
 
 - `match_info/maps/本選問題_1日目/`の一回戦6面を集計し、地形平均、外周スポット比、5日手数、燃料、系列重複を保つ24×24／32×32予測モデルを`solver_benchmark`へ追加した。
