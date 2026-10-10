@@ -1813,6 +1813,7 @@ class SolverGUI(tk.Tk):
         setting = self._work_path("setting.json")
         agents = self._work_path("agents.json")
         initial_agents = self._work_path("agents-initial.json")
+        intermediate_agents = self._work_path("agents-intermediate.json")
 
         def prepare() -> CommandResult:
             workflow.wait_for_setting(setting)
@@ -1823,29 +1824,53 @@ class SolverGUI(tk.Tk):
             self._messages.put((
                 "event", "log", "初期エージェント種別を送信しました",
             ))
+            incumbent = initial_agents
+            latest = initial
+            if workflow.selection_improvement_time_available(intermediate=True):
+                intermediate = workflow.select_agents_intermediate(
+                    setting, intermediate_agents, incumbent
+                )
+                self._messages.put(("event", "agents", intermediate_agents))
+                latest = intermediate
+                if file_hash(intermediate_agents) != file_hash(incumbent):
+                    workflow.send_agents(intermediate_agents, setting)
+                    incumbent = intermediate_agents
+                    self._messages.put((
+                        "event", "log", "中間改善エージェント種別を送信しました",
+                    ))
+                else:
+                    self._messages.put((
+                        "event", "log",
+                        "中間候補は初期種別を上回らなかったため再送信しません",
+                    ))
+            else:
+                self._messages.put((
+                    "event", "log",
+                    "中間種別探索の時間がないため省略しました",
+                ))
             if not workflow.selection_improvement_time_available():
                 self._messages.put((
                     "event", "log",
-                    "種別受付終了10秒前のため改善探索を省略しました",
+                    "種別受付終了10秒前のため最終探索を省略しました",
                 ))
-                return initial
+                return latest
             improved = workflow.select_agents_improved(
-                setting, agents, initial_agents
+                setting, agents, incumbent
             )
             self._messages.put(("event", "agents", agents))
-            if file_hash(agents) != file_hash(initial_agents):
+            if file_hash(agents) != file_hash(incumbent):
                 workflow.send_agents(agents, setting)
                 self._messages.put((
-                    "event", "log", "改善エージェント種別を送信しました",
+                    "event", "log", "最終改善エージェント種別を送信しました",
                 ))
             else:
                 self._messages.put((
                     "event", "log",
-                    "初期エージェント種別を上回らなかったため再送信しません",
+                    "最終候補は提出済み種別を上回らなかったため再送信しません",
                 ))
             return improved
 
-        self._run_task("問題取得・初期種別送信・締切10秒前まで改善", prepare)
+        self._run_task("問題取得・種別3段階送信（締切10秒前まで探索）", prepare)
 
     def _fetch_setting_only(self) -> None:
         """追走端末用。担当1が確定するエージェント種別を上書きしない。"""

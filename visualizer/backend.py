@@ -1446,6 +1446,7 @@ class Workflow:
         *,
         incumbent: Path | None = None,
         reserve_network_timeout: bool = True,
+        search_ends_at: float | None = None,
     ) -> CommandResult:
         self._require_no_pending("agents")
         marker = self.work_dir / "selected-agents.json"
@@ -1463,7 +1464,12 @@ class Workflow:
             starts_at = setting_value.get("startsAt", 0)
             if type(starts_at) in (int, float) and starts_at > received_at:
                 selection_ends_at = min(selection_ends_at, float(starts_at))
-            timing = {"selectionEndsAt": selection_ends_at}
+            timing = {
+                "setting": file_hash(setting),
+                "receivedAt": received_at,
+                "selectionEndsAt": selection_ends_at,
+            }
+            atomic_write(timing_path, json.dumps(timing).encode())
         selection_ends_at = timing.get("selectionEndsAt")
         if type(selection_ends_at) not in (int, float) or selection_ends_at <= 0:
             raise WorkflowError("種別受付終了時刻の記録が不正です")
@@ -1482,7 +1488,8 @@ class Workflow:
             incumbent_digest = file_hash(incumbent)
         result = self._run(
             arguments,
-            ends_at=float(selection_ends_at),
+            ends_at=(float(search_ends_at) if search_ends_at is not None
+                     else float(selection_ends_at)),
             reserve_for_submission=True,
             reserve_network_timeout=reserve_network_timeout,
         )
@@ -1498,6 +1505,33 @@ class Workflow:
         atomic_write(marker, json.dumps(receipt).encode())
         return result
 
+    def _selection_stage_ends_at(self, *, intermediate: bool) -> float:
+        """Return the midpoint or final deadline, preserving ten seconds to submit."""
+        path = self.work_dir / "setting-received.json"
+        if not path.is_file():
+            raise WorkflowError("種別受付時間が記録されていません")
+        timing = read_json(path)
+        received_at = timing.get("receivedAt")
+        selection_ends_at = timing.get("selectionEndsAt")
+        if (type(received_at) not in (int, float) or received_at <= 0
+                or type(selection_ends_at) not in (int, float)
+                or selection_ends_at <= received_at):
+            raise WorkflowError("種別受付時間の記録が不正です")
+        reserve_seconds = IMPROVEMENT_CUTOFF_RESERVE_MS / 1000
+        final_search_ends_at = float(selection_ends_at) - reserve_seconds
+        if final_search_ends_at <= received_at:
+            raise WorkflowError("種別改善探索の時間を確保できません")
+        if intermediate:
+            search_ends_at = (
+                float(received_at) +
+                (final_search_ends_at - float(received_at)) / 2
+            )
+        else:
+            search_ends_at = final_search_ends_at
+        return min(
+            float(selection_ends_at), search_ends_at + reserve_seconds
+        )
+
     def select_agents_initial(self, setting: Path, output: Path) -> CommandResult:
         limit = self.parameters.selection_time_ms
         parameters = replace(
@@ -1510,6 +1544,20 @@ class Workflow:
         )
         return self._with_parameters(parameters).select_agents(setting, output)
 
+    def select_agents_intermediate(
+        self, setting: Path, output: Path, incumbent: Path
+    ) -> CommandResult:
+        parameters = replace(
+            self.parameters,
+            trial_candidates=max(6, self.parameters.trial_candidates),
+            send_reserve_ms=IMPROVEMENT_CUTOFF_RESERVE_MS,
+        )
+        return self._with_parameters(parameters).select_agents(
+            setting, output, incumbent=incumbent,
+            reserve_network_timeout=False,
+            search_ends_at=self._selection_stage_ends_at(intermediate=True),
+        )
+
     def select_agents_improved(
         self, setting: Path, output: Path, incumbent: Path
     ) -> CommandResult:
@@ -1521,14 +1569,19 @@ class Workflow:
         return self._with_parameters(parameters).select_agents(
             setting, output, incumbent=incumbent,
             reserve_network_timeout=False,
+            search_ends_at=self._selection_stage_ends_at(intermediate=False),
         )
 
-    def selection_improvement_time_available(self) -> bool:
-        path = self.work_dir / "setting-received.json"
-        if not path.is_file():
+    def selection_improvement_time_available(
+        self, *, intermediate: bool = False
+    ) -> bool:
+        try:
+            ends_at = self._selection_stage_ends_at(
+                intermediate=intermediate
+            )
+        except WorkflowError:
             return False
-        timing = read_json(path)
-        return self.improvement_time_available(timing.get("selectionEndsAt", 0))
+        return self.improvement_time_available(ends_at)
 
     def solve_day(
         self,
@@ -1978,13 +2031,16 @@ class AutomaticMatch:
         self.setting = workflow.work_dir / "setting.json"
         self.agents = workflow.work_dir / "agents.json"
         self.initial_agents = workflow.work_dir / "agents-initial.json"
+        self.intermediate_agents = workflow.work_dir / "agents-intermediate.json"
         self.progress = workflow.work_dir / "automatic-progress.json"
         self.next_checkpoint: Path | None = None
         self._started = False
 
     def _save(self) -> None:
-        paths = [self.setting, self.agents, self.initial_agents]
-        if self.phase in ("send_agents_initial", "select_improved",
+        paths = [self.setting, self.agents, self.initial_agents,
+                 self.intermediate_agents]
+        if self.phase in ("send_agents_initial", "select_intermediate",
+                          "send_agents_intermediate", "select_improved",
                           "send_agents_improved"):
             paths.append(self.workflow.work_dir / "selected-agents.json")
         if self.phase in ("solve_initial", "send_answer_initial",
@@ -2035,6 +2091,7 @@ class AutomaticMatch:
         phase = legacy_phases.get(saved["phase"], saved["phase"])
         if phase not in (
             "setting", "select_initial", "send_agents_initial",
+            "select_intermediate", "send_agents_intermediate",
             "select_improved", "send_agents_improved", "state",
             "solve_initial", "send_answer_initial", "solve_stagnated",
             "send_answer_stagnated", "solve_improved", "send_answer_improved",
@@ -2102,8 +2159,10 @@ class AutomaticMatch:
                 "setting": "問題情報の公開待ち・取得",
                 "select_initial": "初期エージェント種別選択",
                 "send_agents_initial": "初期エージェント種別送信",
-                "select_improved": "エージェント種別の改善探索",
-                "send_agents_improved": "改善エージェント種別送信",
+                "select_intermediate": "エージェント種別の中間改善探索",
+                "send_agents_intermediate": "中間エージェント種別送信",
+                "select_improved": "エージェント種別の最終改善探索",
+                "send_agents_improved": "最終エージェント種別送信",
                 "state": "当日マップの公開待ち・取得",
                 "solve_initial": "貪欲初期回答生成",
                 "send_answer_initial": "貪欲初期回答送信",
@@ -2130,21 +2189,48 @@ class AutomaticMatch:
                 w.check_stop()
                 self.retryable = False
                 w.send_agents(self.initial_agents, self.setting)
-                self.phase = "select_improved"
+                self.phase = "select_intermediate"
                 self.retryable = True
                 self.emit("log", "初期エージェント種別を送信しました")
+            elif phase == "select_intermediate":
+                if not w.selection_improvement_time_available(intermediate=True):
+                    self.emit("log", "中間種別探索の時間がないため省略しました")
+                    self.phase = "select_improved"
+                    continue
+                result = w.select_agents_intermediate(
+                    self.setting, self.intermediate_agents,
+                    self.initial_agents,
+                )
+                self.emit("log", result.output)
+                self.emit("agents", self.intermediate_agents)
+                if (file_hash(self.intermediate_agents) ==
+                        file_hash(self.initial_agents)):
+                    self.emit("log", "中間候補は初期種別を上回らなかったため再送信しません")
+                    self.phase = "select_improved"
+                else:
+                    self.phase = "send_agents_intermediate"
+            elif phase == "send_agents_intermediate":
+                w.check_stop()
+                self.retryable = False
+                w.send_agents(self.intermediate_agents, self.setting)
+                self.phase = "select_improved"
+                self.retryable = True
+                self.emit("log", "中間改善エージェント種別を送信しました")
             elif phase == "select_improved":
                 if not w.selection_improvement_time_available():
-                    self.emit("log", "種別受付終了10秒前のため改善探索を省略しました")
+                    self.emit("log", "種別受付終了10秒前のため最終探索を省略しました")
                     self.phase = "state"
                     continue
+                incumbent = (self.intermediate_agents
+                             if self.intermediate_agents.is_file()
+                             else self.initial_agents)
                 result = w.select_agents_improved(
-                    self.setting, self.agents, self.initial_agents
+                    self.setting, self.agents, incumbent
                 )
                 self.emit("log", result.output)
                 self.emit("agents", self.agents)
-                if file_hash(self.agents) == file_hash(self.initial_agents):
-                    self.emit("log", "初期エージェント種別を上回らなかったため再送信しません")
+                if file_hash(self.agents) == file_hash(incumbent):
+                    self.emit("log", "最終候補は提出済み種別を上回らなかったため再送信しません")
                     self.phase = "state"
                 else:
                     self.phase = "send_agents_improved"
@@ -2154,7 +2240,7 @@ class AutomaticMatch:
                 w.send_agents(self.agents, self.setting)
                 self.phase = "state"
                 self.retryable = True
-                self.emit("log", "改善エージェント種別を送信しました")
+                self.emit("log", "最終改善エージェント種別を送信しました")
             elif phase == "state":
                 self.state = w.work_dir / f"state-day{self.day}.json"
                 self._wait_fetch("state", self.state)

@@ -942,6 +942,7 @@ result
             )
             calls = []
             events = []
+            incumbents = []
 
             def fake_fetch(_url, _token, kind, path, **_kwargs):
                 value = ({"daySteps": [4], "startsAt": time.time() + 60}
@@ -954,9 +955,15 @@ result
                 output.write_text("[0,1]", encoding="utf-8")
                 return mock.Mock(output="initial selection")
 
-            def select_improved(_setting, output, _incumbent):
+            def select_improved(_setting, output, incumbent):
+                incumbents.append(read_json(incumbent))
+                output.write_text("[1,1]", encoding="utf-8")
+                return mock.Mock(output="final selection")
+
+            def select_intermediate(_setting, output, incumbent):
+                incumbents.append(read_json(incumbent))
                 output.write_text("[1,0]", encoding="utf-8")
-                return mock.Mock(output="improved selection")
+                return mock.Mock(output="intermediate selection")
 
             def send_agents(payload, _setting):
                 calls.append(("agents", read_json(payload)))
@@ -1003,6 +1010,7 @@ result
             )
             with mock.patch("backend.fetch", side_effect=fake_fetch), \
                  mock.patch.object(workflow, "select_agents_initial", side_effect=select_initial), \
+                 mock.patch.object(workflow, "select_agents_intermediate", side_effect=select_intermediate), \
                  mock.patch.object(workflow, "select_agents_improved", side_effect=select_improved), \
                  mock.patch.object(workflow, "selection_improvement_time_available", return_value=True), \
                  mock.patch.object(workflow, "send_agents", side_effect=send_agents), \
@@ -1017,8 +1025,9 @@ result
             self.assertEqual(runner.phase, "done")
             self.assertEqual(
                 [value for kind, value in calls if kind == "agents"],
-                [[0, 1], [1, 0]],
+                [[0, 1], [1, 0], [1, 1]],
             )
+            self.assertEqual(incumbents, [[0, 1], [1, 0]])
             self.assertEqual(
                 [value["totalUdon"] for kind, value in calls if kind == "answer"],
                 [1, 2, 3],

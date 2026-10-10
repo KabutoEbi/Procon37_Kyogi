@@ -2,6 +2,7 @@
 
 #include "trial.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <ostream>
