@@ -26,12 +26,14 @@ WindowsではPowerShellから次のように起動する。ソルバーの既定
 `main.exe`になり、同梱簡易サーバーもWindows版が自動選択される。
 
 ```powershell
-py -3 visualizer/app.py
+./run-visualizer-windows.ps1
 ```
 
 事前にCMakeとVisual Studio Build Tools（Desktop development with C++）または
 MinGW-w64を導入する。PowerShellでのビルドは
 `./build-windows.ps1`、テスト込みは`./build-windows.ps1 -Test`で実行できる。
+接続テストは担当選択に関係なく全日ダミー送信を自動実行する。予行演習では
+3台それぞれで担当1・2・3を選び、実探索と実送信の運用を確認する。
 
 1. 担当を選び、「mainを最適化ビルド」を手動で実行する。
 2. 全工程を任せる場合は「試合終了まで全自動」を押す。問題公開待ちから最終日の回答送信までを継続し、「停止」後も保存済みの段階から再開できる。

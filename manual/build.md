@@ -22,6 +22,7 @@ PowerShellから次を実行すると、`.build/windows/`へビルド構成を�
 ```powershell
 ./build-windows.ps1
 ./build-windows.ps1 -Test
+./run-visualizer-windows.ps1
 py -3 visualizer/app.py
 ```
 
@@ -86,7 +87,7 @@ CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの
 
 同日の現行GUI更新後は、担当プリセットを15／35／45秒へ変更し、探索終了後の伝達3値表示と口頭3値の取込を追加した。`make -j3 test-core`ではPython 57件を含む回帰テスト、`make test-gui`では実画面1件が成功した。
 
-2026-10-10の`windows`ブランチ更新では、Windows向けコマンド生成、`main.exe`既定パス、同梱Windows版簡易サーバー、CMake／PowerShellビルドを`main`の`ca641d3`まで統合した。CMakeのPython回帰にも1969履歴テストを追加し、Mac上で`make -j2 test-core test-samples`（Windows向けコマンド生成を含むPython 67件）が成功した。このMacにはCMakeがないためCMake経路は実行できておらず、Windows実機でのCMake/MSVCまたはMinGWビルドは、本番前の物理3台リハーサルで別途確認する。
+2026-10-10の`windows`ブランチ更新では、Windows向けコマンド生成、`main.exe`既定パス、同梱Windows版簡易サーバー、CMake／PowerShellビルドを`main`の`5dcc8ab`まで統合した。接続テストの全日ダミー送信と、担当別の予行演習実探索・実送信もWindows GUIへ反映した。CMakeのPython回帰にも1969履歴テストを追加し、Mac上の回帰テストとWindows向けコマンド生成テストが成功した。このMacにはCMakeがないためCMake経路とWindows実機ビルドは未実施であり、本番前の物理3台リハーサルで別途確認する。
 
 ## コンパイラ等の指定
 

@@ -206,7 +206,7 @@
 
 ### 必須準備
 
-- [x] `main`の確定コミット`ca641d3`を`windows`ブランチへ反映した。各端末で`git rev-parse --short HEAD`を記録し、Macは`main`、Windowsは`main.exe`を本番用設定で再ビルドする。
+- [x] `main`の確定コミット`5dcc8ab`を`windows`ブランチへ反映した。接続テストの全日ダミー送信と担当別予行演習も含む。各端末で`git rev-parse --short HEAD`を記録し、Macは`main`、Windowsは`main.exe`を本番用設定で再ビルドする。
 - [ ] Macで`python3 visualizer/app.py --check-runtime`、Windows 2台でGUI起動を確認する。OS更新、自動再起動、スリープ、画面ロックによる中断を本番時間中は無効化する。
 - [ ] 3台の時刻をOSの自動時刻合わせで同期する。GUI時計と実時刻のずれを確認し、時刻余裕1秒で足りない場合は本番前に調整する。
 - [ ] 各端末で別々のローカル作業フォルダを用意し、前試合の`runtime/`やチェックポイントを使い回さない。
@@ -1506,7 +1506,7 @@ Pythonテスト側には実C++ソルバーとの連携を含む。
 
 ## 直近の検証
 
-- 2026-10-10の`windows`ブランチ更新: `main`の`ca641d3`までを統合し、Windowsの`main.exe`、MinGW／Clang／MSVC本番最適化ビルド、16MBスタック、CMake／PowerShell手順を維持した。CMakeのPython回帰へ1969履歴テストを追加。Mac上で`make -j2 test-core test-samples`（Python 67件）が成功。このMacにはCMakeがないためCMake経路とWindows実機ビルドは未実施。
+- 2026-10-10の`windows`ブランチ更新: `main`の`5dcc8ab`までを統合し、接続テストの全日ダミー送信と担当別予行演習をWindows GUIへ反映した。`run-visualizer-windows.ps1`を追加し、Windowsの`main.exe`、MinGW／Clang／MSVC本番最適化ビルド、16MBスタック、CMake／PowerShell手順を維持した。Mac上で回帰テストとWindows向けコマンド生成テストが成功。このMacにはCMakeがないためCMake経路とWindows実機ビルドは未実施。
 - 2026-10-09の`brain2`最終確認: `make test-core`でC++回帰とPython 55テストが成功。`udon_alns_test`はASan/UBSanでも成功し、`make -B -j4`でCLI `main`をMakefile既定の`-O2 -Wall -Wextra -Wpedantic -Werror`により再ビルドした。
 - 2026-10-09の長時間探索調整: `make -j3 test`でC++回帰、公開3サイズ、Python 53テストが成功し、`make -j3 test-sanitize`もASan/UBSanで成功。実効時間4段階、盤面3サイズ、厳燃料、無効化時のプロファイル回帰を追加した。
 - 2026-10-09の最終確認: `make test-core`でC++回帰とPython 53テスト、`make test-gui`で実画面1テストが成功。3人運用プリセット、担当1の全自動、口頭比較表示、翌日状態待機、共有チェックポイントの最大revision取込、受理済み回答の強制再送を含む。
