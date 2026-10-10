@@ -74,13 +74,13 @@ class TeamRoleProfile:
 
 TEAM_ROLE_PROFILES = {
     "lead": TeamRoleProfile(
-        "担当1 先行ビーム（約15秒）", "担当1・短時間ビーム", 20000, 0,
+        "担当1 先行ビーム（約5秒）", "担当1・短時間ビーム", 10000, 0,
     ),
     "middle": TeamRoleProfile(
-        "担当2 収束ビーム（上限約35秒）", "担当2・収束ビーム", 40000, 0, 1, 0,
+        "担当2 収束ビーム（約15秒）", "担当2・収束ビーム", 20000, 0, 1, 0,
     ),
     "long": TeamRoleProfile(
-        "担当3 収束SA（上限約45秒）", "担当3・収束SA", 50000, 1, 0, 1,
+        "担当3 収束SA（約15秒）", "担当3・収束SA", 20000, 1, 0, 1,
     ),
 }
 TEAM_ROLE_LABELS = {
@@ -1236,9 +1236,10 @@ class SolverGUI(tk.Tk):
             )
         if hasattr(self, "build_solver_button"):
             profile = TEAM_ROLE_PROFILES.get(role)
+            match_label = self._match_profile().label.split("（", 1)[0]
             self.build_solver_button.configure(
-                text=(f"0  mainを最適化ビルド（{profile.build_label}）" if profile else
-                      "0  mainを最適化ビルド")
+                text=(f"0  mainを最適化ビルド（{match_label}・"
+                      f"{profile.build_label if profile else '通常'}）")
             )
         if hasattr(self, "spoken_import_button"):
             self.spoken_import_button.configure(
@@ -1270,6 +1271,11 @@ class SolverGUI(tk.Tk):
         )
 
     def _match_profile_changed(self, _event: object | None = None) -> None:
+        self._apply_match_profile_settings()
+        self._mode_changed()
+
+    def _apply_match_profile_settings(self) -> None:
+        """選択中の試合区分と担当に対応する実行設定を再適用する。"""
         profile = self._match_profile()
         self.parameter_vars["selection_time_ms"].set(
             str(profile.selection_time_ms)
@@ -1612,12 +1618,14 @@ class SolverGUI(tk.Tk):
 
     def _build_solver(self) -> None:
         role = self._team_role()
+        self._apply_match_profile_settings()
         self._apply_team_role_profile(role)
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
         profile = TEAM_ROLE_PROFILES.get(role)
-        label = profile.build_label if profile else "通常"
+        match_label = self._match_profile().label.split("（", 1)[0]
+        label = f"{match_label}・{profile.build_label if profile else '通常'}"
         self._run_task(f"mainの最適化ビルド（{label}）", workflow.build_solver)
 
     @staticmethod
