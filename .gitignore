@@ -5,6 +5,7 @@ PROBLEM_OVERVIEW.md
 *.json
 /main
 /.build/
+/build/
 __pycache__/
 *.py[cod]
 /runtime/
