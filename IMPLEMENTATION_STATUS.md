@@ -2,6 +2,12 @@
 
 最終更新: 2026-10-10
 
+## 2026-10-10 Windowsへのmain取り込み
+
+- `main`の`1c81302`を`windows`へマージし、第1試合の担当別探索時間、交通・補給時刻付き共同経路改善、ワークフロー右側の得点表示を反映した。macOS限定の選択欄縮小はWindowsでは無効。
+- Windowsの`main.exe`既定パス、MSVC／MinGWの最適化、16MBスタック、MinGWの静的C++ランタイムを維持した。新しい対比較ツールを`./build-windows.ps1 -Benchmark`またはCMakeの`PROCON_BUILD_BENCHMARK=ON`でビルドできる。
+- macOS上で`make -j4 test-core .build/tools/quantity_joint_benchmark`成功。C++コア回帰・Python69件（Windows向けビルドコマンド検査を含む）と検証ツールのコンパイルを確認した。Windows実機・CMake／PowerShell経路の実行確認はこの環境では未実施。
+
 ## 2026-10-10の混雑・渋滞を含む共同経路改善
 
 - 巡回車の共同経路再構築へ補給車の公式時刻表を渡し、訪問先で実際の給油時刻まで待つ候補を追加した。残在庫への挿入は交通込みの追加時間・在庫数で順位付けし、同点作業候補の総移動時間と巡回車間の末尾列交換を追加した。

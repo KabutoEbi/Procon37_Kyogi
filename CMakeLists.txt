@@ -45,6 +45,21 @@ foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
         RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_SOURCE_DIR}")
 endforeach()
 
+option(PROCON_BUILD_BENCHMARK "Build the traffic-aware joint-route benchmark" OFF)
+if(PROCON_BUILD_BENCHMARK)
+    add_executable(quantity_joint_benchmark tests/quantity_joint_benchmark.cpp)
+    target_include_directories(quantity_joint_benchmark PRIVATE inc)
+    target_link_libraries(quantity_joint_benchmark PRIVATE Threads::Threads)
+    procon_warnings(quantity_joint_benchmark)
+    procon_windows_stack(quantity_joint_benchmark)
+    set_target_properties(quantity_joint_benchmark PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+    foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_target_properties(quantity_joint_benchmark PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/tools")
+    endforeach()
+endif()
+
 option(PROCON_BUILD_TESTS "Build the C++ and Python regression tests" ON)
 if(PROCON_BUILD_TESTS)
     enable_testing()

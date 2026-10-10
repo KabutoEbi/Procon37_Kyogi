@@ -89,6 +89,19 @@ CMake版も同じC++17を使用し、Windowsでは`Threads::Threads`とMSVCの
 
 2026-10-10の`windows`ブランチ更新では、Windows向けコマンド生成、`main.exe`既定パス、同梱Windows版簡易サーバー、CMake／PowerShellビルドを`main`の`5dcc8ab`まで統合した。接続テストの全日ダミー送信と、担当別の予行演習実探索・実送信もWindows GUIへ反映した。CMakeのPython回帰にも1969履歴テストを追加し、Mac上の回帰テストとWindows向けコマンド生成テストが成功した。このMacにはCMakeがないためCMake経路とWindows実機ビルドは未実施であり、本番前の物理3台リハーサルで別途確認する。
 
+## 2026-10-10 Windowsへの第1試合・共同経路改善の反映
+
+`main`の`1c81302`を取り込み、第1試合の担当1約5秒・担当2約35秒・担当3約45秒と、16×16最終日の交通・補給時刻を使う共同経路改善を反映した。`main.exe`、MSVCの`/O2 /DNDEBUG /utf-8`、MinGWの`-O3 -DNDEBUG`・静的C++ランタイム、16MBスタックは維持する。担当設定はビジュアライザで実行時に選ぶ。macOS限定の選択欄縮小はWindowsには適用しない。系列／系列累計／総獲得数はワークフロー見出しの右側に表示する。
+
+新しい対比較ツールもWindows用にビルドできる。通常のビルドには含めず、必要時だけ次を実行する。
+
+```powershell
+./build-windows.ps1 -Benchmark
+./.build/windows/tools/quantity_joint_benchmark.exe 9 8 0 mixed
+```
+
+CMakeを直接使う場合は`-DPROCON_BUILD_BENCHMARK=ON`で有効化する。実行時間は探索時間の比較枠であり、ビルド時間ではない。Windows実機・MSVC／MinGWでの実行確認は別途必要である。
+
 ## コンパイラ等の指定
 
 ```sh
