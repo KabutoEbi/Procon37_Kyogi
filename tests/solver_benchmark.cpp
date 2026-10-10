@@ -1,4 +1,4 @@
-#include "application.hpp"
+#include "../inc/application.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
     bool quantityUpgrades = false;
     bool noCoordinatedRefinement = false;
     bool keepBeamIterations = false;
+    bool stagnationStop = false;
     int quantityBudgetPercent = -1;
     std::string variant = "improved";
     try {
@@ -47,6 +48,7 @@ int main(int argc, char** argv) {
             if (option == "--quantity-upgrades") { quantityUpgrades = true; continue; }
             if (option == "--no-coordinated-refinement") { noCoordinatedRefinement = true; continue; }
             if (option == "--keep-beam-iterations") { keepBeamIterations = true; continue; }
+            if (option == "--stagnation-stop") { stagnationStop = true; continue; }
             if (option == "--single-day") { singleDay = true; continue; }
             if (option == "--mixed-traffic") { mixedTraffic = true; continue; }
             if (option == "--fixed-work") { fixedWork = true; continue; }
@@ -302,6 +304,7 @@ int main(int argc, char** argv) {
                         beam.adaptiveLongSearch = name != "fixed-long-search";
                         beam.useDayBeam = !noDayBeam;
                         beam.stopBeamAtBrandUpperBound = !keepBeamIterations;
+                        beam.udonAlns.stopOnStagnation = stagnationStop;
                         if (quantityBudgetPercent > 0) beam.quantityBudgetPercent = quantityBudgetPercent;
                         beam.useBrandRepair = name != "no-brand-repair" && name != "baseline";
                         beam.useUdonAlns = name != "no-udon-alns" && name != "baseline";

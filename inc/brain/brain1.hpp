@@ -4088,8 +4088,11 @@ inline BeamSearchResult brain1(
         // official lexicographic score chooses the returned plan.
         const bool expandedQuantityPortfolio = longSearch.udonAlns.expandedPortfolio &&
             (finalDay || (setting.field.width >= 24 && reachedBrandBound));
-        if (expandedQuantityPortfolio && !improved.stagnationStopped &&
-            Clock::now() < deadline) {
+        // A stagnated first SA is exactly when an independent restart is most
+        // useful. The second pass uses another RNG stream and neighborhood
+        // distribution, while the incumbent and official brand-first guard
+        // prevent a restart from lowering the submitted score.
+        if (expandedQuantityPortfolio && Clock::now() < deadline) {
             auto expandedConfig = longSearch.udonAlns;
             expandedConfig.maxAttempts = std::max<std::size_t>(
                 expandedConfig.maxAttempts, 16);
