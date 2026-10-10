@@ -8,6 +8,49 @@ using namespace benzen;
 
 namespace {
 
+void checkJointRoutesWaitForTimedSupplyInTraffic() {
+    for (const auto traffic : {TrafficStatus::Busy, TrafficStatus::Jammed}) {
+        MatchSetting setting;
+        setting.field.width = 5;
+        setting.field.height = 1;
+        setting.field.cells.assign(5, {CellType::Plain, -1});
+        setting.field.cells[1].type = CellType::Road;
+        setting.field.cells[3].type = CellType::Road;
+        setting.field.spots = {{0, 2, 1, -1}, {1, 4, 1, -1}};
+        assert(setting.field.rebuildSpotIndex());
+        setting.agentStarts = {0, 2};
+        setting.daySteps = {24};
+        setting.daySeconds = {60};
+        setting.fuelLimit = 6;
+        MatchState state;
+        state.trafficByPos.assign(5, traffic);
+        state.agents = {{0, AgentKind::Patrol, 0, 0},
+                        {1, AgentKind::Supply, 2, 6}};
+        const int supplyTravel = 2 + setting.field.at(1).moveSteps(traffic);
+        const DailyPlan incumbent{{-24}, {5, 5, supplyTravel - 24}};
+        const auto before = simulateDay(setting, state, incumbent);
+        assert(before.valid && before.state.dayUdon == 0);
+        SpotRouteLnsConfig config;
+        config.trafficAwareJointRoutes = false;
+        const auto old = improveTeamSpotRoutes(setting, state, {}, incumbent,
+            config, std::chrono::steady_clock::time_point::max());
+        assert(old.finalState.dayUdon == 0);
+        config.trafficAwareJointRoutes = true;
+        const auto improved = improveTeamSpotRoutes(setting, state, {}, incumbent,
+            config, std::chrono::steady_clock::time_point::max());
+        assert(improved.finalState.dayUdon == 2);
+        assert(countBits(improved.finalState.dayBrands) == 2);
+        assert(improved.plan[1] == incumbent[1]);
+        assert(improved.plan[0].front() < 0);
+        const auto replay = simulateDay(setting, state, improved.plan);
+        assert(replay.valid && replay.state == improved.finalState);
+        // An expired deadline must return the unchanged incumbent.
+        const auto expired = improveTeamSpotRoutes(setting, state, {}, incumbent,
+            config, std::chrono::steady_clock::now());
+        assert(expired.plan == incumbent && expired.attempts == 0);
+    }
+}
+
 void checkFinalDayInsertion() {
     MatchSetting setting;
     setting.field.width = 4;
@@ -597,6 +640,7 @@ void checkRouteColumnsKeepEqualScoreRescue() {
 }  // namespace
 
 int main() {
+    checkJointRoutesWaitForTimedSupplyInTraffic();
     checkFinalDayInsertion();
     checkTerminalWaitFillsSeveralSpots();
     checkRoutePathCountsTransitPickups();

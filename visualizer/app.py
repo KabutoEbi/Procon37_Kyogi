@@ -67,6 +67,7 @@ class TeamRoleProfile:
     label: str
     build_label: str
     time_limit_ms: int
+    production_time_limit_ms: int
     udon_sa: int
     stable_beam_stop: int = 0
     sa_stagnation_stop: int = 0
@@ -74,13 +75,16 @@ class TeamRoleProfile:
 
 TEAM_ROLE_PROFILES = {
     "lead": TeamRoleProfile(
-        "担当1 先行ビーム（約5秒）", "担当1・短時間ビーム", 10000, 0,
+        "担当1 先行ビーム（約5秒）", "担当1・短時間ビーム",
+        10000, 10000, 0,
     ),
     "middle": TeamRoleProfile(
-        "担当2 収束ビーム（約15秒）", "担当2・収束ビーム", 20000, 0, 1, 0,
+        "担当2 収束ビーム（予行約15秒／第1試合約35秒）",
+        "担当2・収束ビーム", 20000, 40000, 0, 1, 0,
     ),
     "long": TeamRoleProfile(
-        "担当3 収束SA（約15秒）", "担当3・収束SA", 20000, 1, 0, 1,
+        "担当3 収束SA（予行約15秒／第1試合約45秒）",
+        "担当3・収束SA", 20000, 50000, 1, 0, 1,
     ),
 }
 TEAM_ROLE_LABELS = {
@@ -107,6 +111,13 @@ MATCH_OPERATION_PROFILES = {
         "第1試合（本番URL・実探索/実送信・各60秒）", 60000, 60000,
     ),
 }
+
+
+def team_role_time_limit_ms(role: str, match_profile_key: str) -> int:
+    """試合区分に対応する担当別の日次探索上限を返す。"""
+    profile = TEAM_ROLE_PROFILES[role]
+    return (profile.production_time_limit_ms
+            if match_profile_key == "production" else profile.time_limit_ms)
 
 
 def match_setting_issues(setting: dict[str, Any], profile_key: str) -> tuple[str, ...]:
@@ -376,7 +387,7 @@ class SolverGUI(tk.Tk):
         self.mode_var = tk.StringVar(value="manual")
         self.team_role_var = tk.StringVar(value=TEAM_ROLE_LABELS["normal"])
         self.match_profile_var = tk.StringVar(
-            value=MATCH_OPERATION_PROFILES["connection_test"].label
+            value=MATCH_OPERATION_PROFILES["production"].label
         )
         self.parameter_vars = {
             name: tk.StringVar(value=str(value))
@@ -537,7 +548,7 @@ class SolverGUI(tk.Tk):
             textvariable=self.team_role_var,
             values=tuple(TEAM_ROLE_LABELS.values()),
             state="readonly",
-            width=22,
+            width=14 if sys.platform == "darwin" else 22,
         )
         self.team_role_box.pack(side=tk.LEFT, padx=4)
         self.team_role_box.bind("<<ComboboxSelected>>", self._team_role_changed)
@@ -548,7 +559,7 @@ class SolverGUI(tk.Tk):
             textvariable=self.match_profile_var,
             values=tuple(profile.label for profile in MATCH_OPERATION_PROFILES.values()),
             state="readonly",
-            width=27,
+            width=16 if sys.platform == "darwin" else 27,
         )
         self.match_profile_box.pack(side=tk.LEFT, padx=4)
         self.match_profile_box.bind(
@@ -592,18 +603,6 @@ class SolverGUI(tk.Tk):
             anchor=tk.CENTER, font=("TkDefaultFont", 18, "bold"),
         ).pack(fill=tk.X)
 
-        score = ttk.Frame(mode, width=260, height=52, padding=(0, 0, 10, 0))
-        self.match_score_frame = score
-        score.pack(side=tk.RIGHT)
-        score.pack_propagate(False)
-        ttk.Label(
-            score, text="探索後　系列数 / 総系列数 / 総玉数", anchor=tk.CENTER,
-        ).pack(fill=tk.X)
-        ttk.Label(
-            score, textvariable=self.match_score_var,
-            anchor=tk.CENTER, font=("TkDefaultFont", 14, "bold"),
-        ).pack(fill=tk.X)
-
         content = ttk.Panedwindow(self, orient=tk.VERTICAL)
         content.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
         self.content_pane = content
@@ -631,6 +630,7 @@ class SolverGUI(tk.Tk):
         status = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel", anchor=tk.W)
         status.pack(fill=tk.X, padx=8, pady=(0, 5))
         self._build_settings_window()
+        self._apply_match_profile_settings()
         self._mode_changed()
 
     def _build_settings_window(self) -> None:
@@ -825,9 +825,21 @@ class SolverGUI(tk.Tk):
 
     def _build_workflow(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
-        ttk.Label(parent, text="ワークフロー", style="Section.TLabel").grid(
-            row=0, column=0, sticky=tk.W, pady=(0, 8)
+        heading = ttk.Frame(parent)
+        heading.grid(row=0, column=0, sticky=tk.EW, pady=(0, 8))
+        ttk.Label(heading, text="ワークフロー", style="Section.TLabel").pack(
+            side=tk.LEFT
         )
+        score = ttk.Frame(heading)
+        self.match_score_frame = score
+        score.pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Label(
+            score, text="系列 / 系列累計 / 総獲得数", anchor=tk.CENTER,
+        ).pack(fill=tk.X)
+        ttk.Label(
+            score, textvariable=self.match_score_var,
+            anchor=tk.CENTER, font=("TkDefaultFont", 14, "bold"),
+        ).pack(fill=tk.X)
 
         row = 1
         self.build_solver_button = ttk.Button(
@@ -1256,7 +1268,7 @@ class SolverGUI(tk.Tk):
         return next(
             (profile for profile in MATCH_OPERATION_PROFILES.values()
              if profile.label == selected),
-            MATCH_OPERATION_PROFILES["connection_test"],
+            MATCH_OPERATION_PROFILES["production"],
         )
 
     def _match_profile_key(self) -> str:
@@ -1264,7 +1276,7 @@ class SolverGUI(tk.Tk):
         return next(
             (key for key, profile in MATCH_OPERATION_PROFILES.items()
              if profile.label == selected),
-            "connection_test",
+            "production",
         )
 
     def _match_profile_changed(self, _event: object | None = None) -> None:
@@ -1295,6 +1307,7 @@ class SolverGUI(tk.Tk):
             send_mode = "自動送信" if role == "lead" else "手動送信"
             self._log(
                 f"3人運用: {profile.label} / {send_mode} / "
+                f"time-limit-ms={team_role_time_limit_ms(role, self._match_profile_key())} / "
                 f"udon-sa={profile.udon_sa} / "
                 f"stable-beam-stop={profile.stable_beam_stop} / "
                 f"sa-stagnation-stop={profile.sa_stagnation_stop}"
@@ -1311,7 +1324,9 @@ class SolverGUI(tk.Tk):
         if profile is None:
             return
         self.parameter_vars["auto_beam_width"].set("1")
-        self.parameter_vars["time_limit_ms"].set(str(profile.time_limit_ms))
+        self.parameter_vars["time_limit_ms"].set(str(
+            team_role_time_limit_ms(role, self._match_profile_key())
+        ))
         self.parameter_vars["udon_sa"].set(str(profile.udon_sa))
         self.parameter_vars["stable_beam_stop"].set(
             str(profile.stable_beam_stop)
@@ -2095,7 +2110,9 @@ class SolverGUI(tk.Tk):
         role = self._team_role()
         profile = TEAM_ROLE_PROFILES.get(role)
         if profile is not None:
-            self.parameter_vars["time_limit_ms"].set(str(profile.time_limit_ms))
+            self.parameter_vars["time_limit_ms"].set(str(
+                team_role_time_limit_ms(role, self._match_profile_key())
+            ))
             return
         try:
             setting = read_json(Path(self.setting_var.get()).expanduser())

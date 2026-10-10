@@ -48,6 +48,7 @@ private:
             name == "--udon-alns" || name == "--udon-sa" ||
             name == "--udon-joint-destroy" || name == "--spot-route-lns" ||
             name == "--terminal-wait-fill" ||
+            name == "--traffic-aware-joint-routes" ||
             name == "--route-columns" || name == "--adaptive-long-search" ||
             name == "--next-day-probe" || name == "--day-beam" ||
             name == "--quantity-upgrades" ||
@@ -106,6 +107,8 @@ private:
         else if (name == "--spot-route-lns") beam.useSpotRouteLns = value != 0;
         else if (name == "--terminal-wait-fill")
             beam.spotRouteLns.terminalWaitFill = value != 0;
+        else if (name == "--traffic-aware-joint-routes")
+            beam.spotRouteLns.trafficAwareJointRoutes = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
         else if (name == "--adaptive-long-search") beam.adaptiveLongSearch = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
