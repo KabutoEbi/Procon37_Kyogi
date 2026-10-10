@@ -33,7 +33,7 @@ class RecoveryTest(unittest.TestCase):
                    "state": file_hash(state), "answer": file_hash(answer), "score": file_hash(score)}
         (work / "prepared-answer.json").write_text(json.dumps(receipt))
         runner = AutomaticMatch(w, lambda *_: None)
-        runner.phase, runner.days, runner.state = "send_answer", 1, state
+        runner.phase, runner.days, runner.state = "send_answer_initial", 1, state
         return w, runner, answer, score, state, setting
 
     def test_agent_selection_deadline_uses_first_fetch_and_board_tier(self):
@@ -124,13 +124,14 @@ class RecoveryTest(unittest.TestCase):
             self.assertFalse((work / "score-day1.json").exists())
             self.assertEqual(read_json(work / "submission-day0.json")["status"], "pending")
             restored = AutomaticMatch.restore(w, lambda *_: None)
-            self.assertEqual(restored.phase, "send_answer")
+            self.assertEqual(restored.phase, "send_answer_initial")
 
             def fetch(day, path):
                 self.assertEqual(day, 0)
                 path.write_bytes(state.read_bytes())
 
             with mock.patch.object(w, "fetch_state", side_effect=fetch), \
+                 mock.patch.object(w, "improvement_time_available", return_value=False), \
                  mock.patch("backend.send", return_value=3) as post:
                 restored.run()
                 self.assertEqual(post.call_count, 1)
@@ -154,7 +155,8 @@ class RecoveryTest(unittest.TestCase):
                 with self.assertRaises(OSError):
                     runner.run()
             restored = AutomaticMatch.restore(w, lambda *_: None)
-            with mock.patch("backend.send") as post:
+            with mock.patch.object(w, "improvement_time_available", return_value=False), \
+                 mock.patch("backend.send") as post:
                 restored.run()
                 post.assert_not_called()
             self.assertEqual((work / "score-day1.json").read_bytes(), score.read_bytes())
@@ -193,6 +195,29 @@ class RecoveryTest(unittest.TestCase):
                 post.assert_called_once()
             self.assertEqual(read_json(work / "submission-day0.json")["revision"], 2)
             self.assertEqual((work / "score-day1.json").read_bytes(), score.read_bytes())
+
+    def test_restore_uses_latest_accepted_result_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            w, _, answer, score, state, setting = self.prepare(work)
+            result_state = work / "result-state.json"
+            result_state.write_text('{"stage":1}')
+            with mock.patch("backend.send", return_value=1):
+                w.send_answer(0, answer, score, state, setting)
+
+            answer.write_text("[[-2]]")
+            score.write_text('{"nextDay":1,"totalUdon":2}')
+            receipt_path = work / "prepared-answer.json"
+            receipt = read_json(receipt_path)
+            receipt.update(answer=file_hash(answer), score=file_hash(score))
+            receipt_path.write_text(json.dumps(receipt))
+            result_state.write_text('{"stage":2}')
+            with mock.patch("backend.send", return_value=2):
+                w.send_answer(0, answer, score, state, setting)
+
+            result_state.write_text('{"stage":3}')
+            w.restore_accepted_answer(0)
+            self.assertEqual(read_json(result_state), {"stage": 2})
 
     def test_unknown_result_blocks_new_search_and_future_day(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -501,7 +526,7 @@ class RecoveryTest(unittest.TestCase):
                     WorkflowError, "timeout\\(s\\).*15.*同一回答"
                 ):
                     runner.run()
-            self.assertEqual(runner.phase, "send_answer")
+            self.assertEqual(runner.phase, "send_answer_initial")
             self.assertFalse(runner.retryable)
             self.assertTrue((work / "automatic-progress.json").is_file())
             self.assertEqual(
@@ -526,6 +551,50 @@ class RecoveryTest(unittest.TestCase):
             with mock.patch("backend.send") as post:
                 w.send_agents(agents, setting)
                 post.assert_not_called()
+
+    def test_agent_kinds_replace_only_compared_initial_submission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            w = Workflow(ConnectionConfig("http://example", "secret"), ROOT / "main", work)
+            setting = work / "setting.json"
+            agents = work / "agents.json"
+            setting.write_text(json.dumps({"startsAt": time.time() + 60}))
+            agents.write_text("[0,1]")
+            initial_digest = file_hash(agents)
+            marker = work / "selected-agents.json"
+            marker.write_text(json.dumps({
+                "identity": w.identity(), "setting": file_hash(setting),
+                "agents": initial_digest, "selectionEndsAt": time.time() + 60,
+            }))
+            with mock.patch("backend.send", return_value=None):
+                w.send_agents(agents, setting)
+
+            agents.write_text("[1,0]")
+            replacement = {
+                "identity": w.identity(), "setting": file_hash(setting),
+                "agents": file_hash(agents),
+                "selectionEndsAt": read_json(
+                    work / "submission-agents.json"
+                )["receipt"]["selectionEndsAt"],
+            }
+            marker.write_text(json.dumps(replacement))
+            with mock.patch("backend.send") as post, \
+                 self.assertRaisesRegex(WorkflowError, "比較済み"):
+                w.send_agents(agents, setting)
+            post.assert_not_called()
+
+            replacement.update(
+                incumbentAgents=initial_digest,
+                improved=True,
+            )
+            marker.write_text(json.dumps(replacement))
+            with mock.patch("backend.send", return_value=None) as post:
+                w.send_agents(agents, setting)
+                post.assert_called_once()
+            self.assertEqual(
+                read_json(work / "submission-agents.json")["status"],
+                "accepted",
+            )
 
 
 if __name__ == "__main__":

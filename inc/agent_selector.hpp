@@ -47,6 +47,9 @@ struct AgentSelectorConfig {
     // 期限付き試走でも trialCandidateLimit 件は公平に比較し、
     // 基本候補の完走後に残り時間があれば未試走配置も追加する。
     bool extendTrialsToDeadline = false;
+    // 既に提出した構成。非負なら同じ試走条件で最初に評価し、
+    // 厳密に上回る候補だけへ置き換える。
+    std::int64_t incumbentSupplyMask = -1;
 };
 
 struct AgentSelectionResult {
@@ -164,6 +167,10 @@ private:
         if (cfg.timeLimitMs < 0 || cfg.deadlineUnixSeconds < 0 ||
             cfg.safetyMarginMs < 0) {
             throw std::invalid_argument("selection deadline is invalid");
+        }
+        if (cfg.incumbentSupplyMask >= 0 && cfg.trialCandidateLimit == 0) {
+            throw std::invalid_argument(
+                "incumbent agent kinds require trial candidates");
         }
     }
 
@@ -522,6 +529,19 @@ public:
         std::int32_t preferredSupply = cfg.minSupplyCount;
         bool supplyPressure = false;
         if (trialLimit > 0) {
+            if (cfg.incumbentSupplyMask >= 0) {
+                const auto incumbent = static_cast<std::uint32_t>(
+                    cfg.incumbentSupplyMask);
+                const auto found = std::find_if(
+                    cs.begin(), cs.end(), [incumbent](const Candidate& c) {
+                        return c.supplyMask == incumbent;
+                    });
+                if (found == cs.end()) {
+                    throw std::invalid_argument(
+                        "incumbent agent kinds are not a legal candidate");
+                }
+                trials.push_back(static_cast<std::size_t>(found - cs.begin()));
+            }
             supplyPressure = s.fuelLimit <= maxDaySteps;
             // 短い締切で最低台数の候補だけを評価して終わらないよう、
             // 巡回車との比率がよい中心台数から近い順に比較する。
@@ -533,8 +553,11 @@ public:
                     [count](const Candidate& c) {
                         return c.supplyCount == count;
                     });
-                if (found != cs.end())
-                    trials.push_back(static_cast<std::size_t>(found - cs.begin()));
+                if (found != cs.end()) {
+                    const auto index = static_cast<std::size_t>(found - cs.begin());
+                    if (std::find(trials.begin(), trials.end(), index) == trials.end())
+                        trials.push_back(index);
+                }
             };
             auto appendSpread = [&](std::int32_t count) {
                 if (trials.size() >= trialLimit) return;

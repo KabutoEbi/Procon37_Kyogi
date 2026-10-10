@@ -115,21 +115,27 @@ class BackendTest(unittest.TestCase):
              for key, value in MATCH_OPERATION_PROFILES.items()},
             {"connection_test": (20000, 20000),
              "rehearsal": (30000, 30000),
-             "production": (60000, 60000)},
+             "production": (60000, 60000),
+             "semifinal": (90000, 60000),
+             "final": (120000, 60000)},
         )
         self.assertEqual(
             {role: (profile.time_limit_ms, profile.production_time_limit_ms,
                     profile.udon_sa,
                     profile.stable_beam_stop, profile.sa_stagnation_stop)
              for role, profile in TEAM_ROLE_PROFILES.items()},
-            {"lead": (10000, 10000, 0, 0, 0),
+            {"lead": (30000, 60000, 0, 0, 0),
              "middle": (20000, 40000, 0, 1, 0),
              "long": (20000, 50000, 1, 0, 1)},
         )
-        self.assertEqual(team_role_time_limit_ms("lead", "production"), 10000)
+        self.assertEqual(team_role_time_limit_ms("lead", "connection_test"), 20000)
+        self.assertEqual(team_role_time_limit_ms("lead", "rehearsal"), 30000)
+        self.assertEqual(team_role_time_limit_ms("lead", "production"), 60000)
         self.assertEqual(team_role_time_limit_ms("middle", "rehearsal"), 20000)
         self.assertEqual(team_role_time_limit_ms("middle", "production"), 40000)
+        self.assertEqual(team_role_time_limit_ms("middle", "semifinal"), 40000)
         self.assertEqual(team_role_time_limit_ms("long", "production"), 50000)
+        self.assertEqual(team_role_time_limit_ms("long", "final"), 50000)
         summary = SolverResultSummary(
             day=2, stop="completed", elapsed_ms=1, expanded=2,
             daily_udon=7, daily_brands=5, total_udon=31,
@@ -176,6 +182,36 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(
             match_setting_issues(rehearsal, "rehearsal"),
             ("渋滞基準値",),
+        )
+        semifinal = {
+            "daySeconds": [60] * 7,
+            "map": {"width": 24, "height": 24},
+            "agents": list(range(5)),
+            "spots": [
+                {"brand": index % 17, "stocks": 1}
+                for index in range(24)
+            ],
+        }
+        self.assertEqual(match_setting_issues(semifinal, "semifinal"), ())
+        semifinal["daySeconds"][3] = 59
+        self.assertEqual(
+            match_setting_issues(semifinal, "semifinal"),
+            ("行動回答時間",),
+        )
+        final = {
+            "daySeconds": [60] * 6,
+            "map": {"width": 32, "height": 32},
+            "agents": list(range(7)),
+            "spots": [
+                {"brand": index % 24, "stocks": 1}
+                for index in range(32)
+            ],
+        }
+        self.assertEqual(match_setting_issues(final, "final"), ())
+        final["agents"].pop()
+        self.assertEqual(
+            match_setting_issues(final, "final"),
+            ("エージェント数",),
         )
 
     def test_spoken_checkpoint_uses_selected_target_day(self) -> None:
@@ -420,6 +456,75 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(day_time_limit_ms(setting, 2), 2147483647)
         with self.assertRaisesRegex(WorkflowError, "当日の試合時間"):
             day_time_limit_ms(setting, 3)
+
+    def test_greedy_then_full_limit_stagnation_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            setting, state = work / "setting.json", work / "state.json"
+            state.write_text(json.dumps({
+                "day": 0, "endsAt": time.time() + 60,
+            }), encoding="utf-8")
+            workflow = Workflow(
+                ConnectionConfig("http://example", "test"), ROOT / "main", work,
+            )
+            greedy = mock.Mock(output="parameters brain=0")
+            with mock.patch.object(
+                workflow, "solve_day", return_value=greedy
+            ) as solve_day:
+                result = workflow.solve_day_initial(setting, state)
+            solve_day.assert_called_once_with(
+                setting, state, None, strategy="greedy",
+            )
+            self.assertIs(result, greedy)
+
+            for udon_sa, expected_stops in ((0, (1, 0)), (1, (0, 1))):
+                workflow = Workflow(
+                    ConnectionConfig("http://example", "test"), ROOT / "main", work,
+                    SearchParameters(time_limit_ms=60000, udon_sa=udon_sa),
+                )
+                stage = mock.Mock()
+                stage.solve_day.return_value = mock.Mock(output="done")
+                with mock.patch.object(
+                    workflow, "_with_parameters", return_value=stage
+                ) as with_parameters:
+                    result = workflow.solve_day_until_stagnation(setting, state)
+                parameters = with_parameters.call_args.args[0]
+                self.assertEqual(parameters.time_limit_ms, 0)
+                self.assertEqual(parameters.send_reserve_ms, 10000)
+                self.assertEqual(
+                    (parameters.stable_beam_stop,
+                     parameters.sa_stagnation_stop),
+                    expected_stops,
+                )
+                stage.solve_day.assert_called_once_with(
+                    setting, state, None, reserve_network_timeout=False,
+                )
+                self.assertIs(result, stage.solve_day.return_value)
+
+            state.write_text('{"day":0,"endsAt":0}', encoding="utf-8")
+            local = Workflow(
+                ConnectionConfig("", ""), ROOT / "main", work,
+                SearchParameters(time_limit_ms=12345),
+            )
+            stage = mock.Mock()
+            stage.solve_day.return_value = mock.Mock(output="done")
+            with mock.patch.object(
+                local, "_with_parameters", return_value=stage
+            ) as with_parameters:
+                local.solve_day_until_stagnation(setting, state)
+            self.assertEqual(
+                with_parameters.call_args.args[0].time_limit_ms, 12345,
+            )
+
+        self.assertTrue(Workflow.solution_stagnated(mock.Mock(
+            output="stable-beam-stopped=true"
+        )))
+        self.assertTrue(Workflow.solution_stagnated(mock.Mock(
+            output="udon-sa-stagnation-stopped=true"
+        )))
+        self.assertFalse(Workflow.solution_stagnated(mock.Mock(
+            output="stable-beam-stopped=false"
+        )))
 
     def test_gui_build_uses_release_optimization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -769,7 +874,12 @@ result
 
             def fake_send(day, *_args):
                 calls.append(f"send{day}")
-                return 2, work / "answer.json", work / f"score-day{day + 1}.json"
+                checkpoint = work / f"score-day{day + 1}.json"
+                checkpoint.write_text(json.dumps({"nextDay": day + 1}))
+                (work / f"submission-day{day}.json").write_text(json.dumps({
+                    "status": "accepted", "revision": 2,
+                }))
+                return 2, work / "answer.json", checkpoint
 
             def emit(kind, value):
                 events.append((kind, value))
@@ -778,13 +888,14 @@ result
 
             runner = AutomaticMatch(workflow, emit, interval=0.2)
             with mock.patch("backend.fetch", side_effect=fake_fetch), \
-                 mock.patch.object(workflow, "select_agents", return_value=mock.Mock(output="")), \
+                 mock.patch.object(workflow, "select_agents_initial", return_value=mock.Mock(output="")), \
+                 mock.patch.object(workflow, "selection_improvement_time_available", return_value=False), \
                  mock.patch.object(workflow, "send_agents") as send_agents, \
-                 mock.patch.object(workflow, "solve_day", return_value=mock.Mock(output="")), \
+                 mock.patch.object(workflow, "solve_day_initial", return_value=mock.Mock(output="")), \
                  mock.patch.object(workflow, "send_answer", side_effect=fake_send):
                 with self.assertRaises(Paused):
                     runner.run()
-                self.assertEqual(runner.phase, "send_answer")
+                self.assertEqual(runner.phase, "send_answer_initial")
                 self.assertNotIn("send0", calls)
                 workflow.stop.clear()
                 runner.run()
@@ -805,13 +916,111 @@ result
                         self.assertEqual(events[index - 1][0], "answer")
                 send_agents.assert_called_once()
 
-            runner.phase = "send_answer"
+            runner.phase = "send_answer_initial"
             workflow.stop.clear()
             with mock.patch.object(workflow, "send_answer", side_effect=WorkflowError("network")) as send:
                 with self.assertRaises(WorkflowError):
                     runner.run()
                 send.assert_called_once()
                 self.assertFalse(runner.retryable)
+
+    def test_auto_submits_initial_then_only_improved_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            workflow = Workflow(
+                ConnectionConfig("http://example", "test"), ROOT / "main", work
+            )
+            calls = []
+            events = []
+
+            def fake_fetch(_url, _token, kind, path, **_kwargs):
+                value = ({"daySteps": [4], "startsAt": time.time() + 60}
+                         if kind == "setting"
+                         else {"day": 0, "endsAt": time.time() + 60})
+                path.write_text(json.dumps(value), encoding="utf-8")
+                return value
+
+            def select_initial(_setting, output):
+                output.write_text("[0,1]", encoding="utf-8")
+                return mock.Mock(output="initial selection")
+
+            def select_improved(_setting, output, _incumbent):
+                output.write_text("[1,0]", encoding="utf-8")
+                return mock.Mock(output="improved selection")
+
+            def send_agents(payload, _setting):
+                calls.append(("agents", read_json(payload)))
+
+            def solve_initial(*_args):
+                (work / "answer.json").write_text("[[-1]]", encoding="utf-8")
+                (work / "score-next.json").write_text(json.dumps({
+                    "nextDay": 1, "matchBrands": 1,
+                    "sumOfDailyBrandCounts": 1, "totalUdon": 1,
+                }))
+                return mock.Mock(output="initial answer")
+
+            def solve_improved(*_args):
+                (work / "answer.json").write_text("[[-3]]", encoding="utf-8")
+                (work / "score-next.json").write_text(json.dumps({
+                    "nextDay": 1, "matchBrands": 1,
+                    "sumOfDailyBrandCounts": 1, "totalUdon": 3,
+                }))
+                return mock.Mock(output="final answer")
+
+            def solve_stagnated(*_args):
+                (work / "answer.json").write_text("[[-2]]", encoding="utf-8")
+                (work / "score-next.json").write_text(json.dumps({
+                    "nextDay": 1, "matchBrands": 1,
+                    "sumOfDailyBrandCounts": 1, "totalUdon": 2,
+                }))
+                return mock.Mock(
+                    output="stable-beam-stopped=true\nstagnated answer"
+                )
+
+            def send_answer(day, _answer, score, *_args):
+                revision = 1 + sum(call[0] == "answer" for call in calls)
+                calls.append(("answer", read_json(score)))
+                checkpoint = work / f"score-day{day + 1}.json"
+                checkpoint.write_bytes(score.read_bytes())
+                (work / f"submission-day{day}.json").write_text(json.dumps({
+                    "status": "accepted", "revision": revision,
+                }))
+                return revision, work / f"answer-day{day}.json", checkpoint
+
+            runner = AutomaticMatch(
+                workflow, lambda kind, value: events.append((kind, value)),
+                interval=0.2,
+            )
+            with mock.patch("backend.fetch", side_effect=fake_fetch), \
+                 mock.patch.object(workflow, "select_agents_initial", side_effect=select_initial), \
+                 mock.patch.object(workflow, "select_agents_improved", side_effect=select_improved), \
+                 mock.patch.object(workflow, "selection_improvement_time_available", return_value=True), \
+                 mock.patch.object(workflow, "send_agents", side_effect=send_agents), \
+                 mock.patch.object(workflow, "solve_day_initial", side_effect=solve_initial), \
+                 mock.patch.object(workflow, "solve_day_until_stagnation", side_effect=solve_stagnated), \
+                 mock.patch.object(workflow, "solve_day_improved", side_effect=solve_improved), \
+                 mock.patch.object(workflow, "improvement_time_available", return_value=True), \
+                 mock.patch.object(workflow, "candidate_answer_improves", return_value=True), \
+                 mock.patch.object(workflow, "send_answer", side_effect=send_answer):
+                runner.run()
+
+            self.assertEqual(runner.phase, "done")
+            self.assertEqual(
+                [value for kind, value in calls if kind == "agents"],
+                [[0, 1], [1, 0]],
+            )
+            self.assertEqual(
+                [value["totalUdon"] for kind, value in calls if kind == "answer"],
+                [1, 2, 3],
+            )
+            self.assertTrue(any(
+                kind == "log" and "停滞時回答を送信" in value
+                for kind, value in events
+            ))
+            self.assertTrue(any(
+                kind == "log" and "最終改善回答を送信" in value
+                for kind, value in events
+            ))
 
     def test_wrong_score_and_changed_answer_are_rejected_before_post(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1079,15 +1288,25 @@ result
                 runner.run()
             self.assertEqual(current_day, 4)
             self.assertEqual(read_json(work / "score-day4.json")["nextDay"], 4)
-            self.assertEqual(sum(method == "POST" for method, _ in requests), 5)
+            agent_posts = sum(
+                method == "POST" and url.endswith("/agent")
+                for method, url in requests
+            )
+            answer_posts = sum(
+                method == "POST" and not url.endswith("/agent")
+                for method, url in requests
+            )
+            self.assertIn(agent_posts, (1, 2))
+            self.assertEqual(answer_posts, 4)
             self.assertEqual(sum(kind == "state" for kind, _ in events), 4)
             self.assertEqual(sum(kind == "solved" for kind, _ in events), 4)
             logs = "\n".join(value for kind, value in events if kind == "log")
             self.assertIn(
-                "beam-width=16 joint-beam-width=64 threads=1 "
-                "time-limit-ms=12400 safety-margin-ms=12200",
+                "parameters brain=0 beam-width=16 joint-beam-width=64 threads=1 "
+                "time-limit-ms=5200 safety-margin-ms=5000",
                 logs,
             )
+            self.assertEqual(logs.count("貪欲初期回答を送信しました"), 4)
             current_day = 2
             requests.clear()
             resumed = Workflow(w.connection, w.solver, work / "resumed", w.parameters)

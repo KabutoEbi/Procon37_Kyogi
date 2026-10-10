@@ -19,6 +19,8 @@ int main(int argc, char** argv) {
     bool compareBrandRepair = false, compareUdonAlns = false, compareUdonSa = false;
     bool compareSpotRouteLns = false;
     bool compareRouteColumns = false;
+    bool comparePathPortfolio = false;
+    bool compareBrandAwareRescue = false;
     bool compareStrandedRescue = false;
     bool compareTightFutureFuel = false;
     bool compareAdaptiveLongSearch = false;
@@ -74,6 +76,14 @@ int main(int argc, char** argv) {
             if (option == "--compare-udon-sa") { compareUdonSa = true; continue; }
             if (option == "--compare-spot-route-lns") { compareSpotRouteLns = true; continue; }
             if (option == "--compare-route-columns") { compareRouteColumns = true; continue; }
+            if (option == "--compare-path-portfolio") {
+                comparePathPortfolio = true;
+                continue;
+            }
+            if (option == "--compare-brand-aware-rescue") {
+                compareBrandAwareRescue = true;
+                continue;
+            }
             if (option == "--compare-adaptive-long-search") {
                 compareAdaptiveLongSearch = true;
                 continue;
@@ -137,6 +147,8 @@ int main(int argc, char** argv) {
                 static_cast<int>(compareUdonSa) +
                 static_cast<int>(compareSpotRouteLns) +
                 static_cast<int>(compareRouteColumns) +
+                static_cast<int>(comparePathPortfolio) +
+                static_cast<int>(compareBrandAwareRescue) +
                 static_cast<int>(compareStrandedRescue) +
                 static_cast<int>(compareTightFutureFuel) +
                 static_cast<int>(compareAdaptiveLongSearch) +
@@ -167,6 +179,18 @@ int main(int argc, char** argv) {
         }
         if (compareRouteColumns) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
+            variant = "improved";
+        }
+        if (comparePathPortfolio) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "improved";
+        }
+        if (compareBrandAwareRescue) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
             variant = "improved";
         }
         if (compareStrandedRescue) {
@@ -242,11 +266,13 @@ int main(int argc, char** argv) {
              (compareUdonSa ? "no-udon-sa" :
              (compareSpotRouteLns ? "no-spot-route-lns" :
               (compareRouteColumns ? "no-route-columns" :
+               (comparePathPortfolio ? "no-path-portfolio" :
+                (compareBrandAwareRescue ? "no-brand-aware-rescue" :
                (compareStrandedRescue ? "no-stranded-rescue" :
                 (compareTightFutureFuel ? "tight-future-fuel-20" :
                  (compareAdaptiveLongSearch ? "fixed-long-search" :
-                  "baseline")))))));
-        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "detour-aware-sa", "no-detour-aware-sa", "differential-insertion", "full-route-insertion", "reachability-rarity", "no-reachability-rarity", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-terminal-wait-fill", "small-board-quantity-first", "no-small-board-quantity-first", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
+                  "baseline")))))))));
+        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "detour-aware-sa", "no-detour-aware-sa", "differential-insertion", "full-route-insertion", "reachability-rarity", "no-reachability-rarity", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-path-portfolio", "no-brand-aware-rescue", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-terminal-wait-fill", "small-board-quantity-first", "no-small-board-quantity-first", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
         if (variant != "warm-start-portfolio" && variant != "small-board-joint-refinement" &&
             std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
@@ -346,9 +372,16 @@ int main(int argc, char** argv) {
                             name != "no-quantity-upgrades" &&
                             name != "no-spot-route-lns";
                         beam.routeColumns.enabled = name != "no-route-columns";
+                        beam.routeColumns.pathPortfolio =
+                            comparePathPortfolio &&
+                            name != "no-path-portfolio";
+                        beam.routeColumns.brandAwareRescue =
+                            name != "no-brand-aware-rescue";
                         if (name == "no-stranded-rescue")
                             beam.routeColumns.maxStrandedRescueSchedules = 0;
-                        if (compareRouteColumns) beam.routeColumns.minimumBudgetMs = 0;
+                        if (compareRouteColumns || comparePathPortfolio ||
+                            compareBrandAwareRescue)
+                            beam.routeColumns.minimumBudgetMs = 0;
                         beam.prioritizeHardNextDayTargets =
                             name != "baseline" && name != "no-hard-nextday";
                         beam.assignmentCacheLimit = name == "baseline" || name == "no-cache" ? 0 : 4096;

@@ -2,6 +2,7 @@
 #include "inc/solver_options.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -37,6 +38,9 @@ void printMainUsage(const char* program) {
               << " select match-setting.json [agents.json]\n"
               << "       " << program
               << " solve match-setting.json match-state.json"
+                 " [score-checkpoint.json]\n"
+              << "       " << program
+              << " greedy match-setting.json match-state.json"
                  " [score-checkpoint.json]\n"
               << "       " << program
               << " generate [random-setting.json] [options]\n";
@@ -86,7 +90,8 @@ bool loadScore(const char* path, const MatchSetting& setting,
     return true;
 }
 
-int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options) {
+int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options,
+              bool greedyMode = false) {
     const auto setting = argc > firstArg
         ? readMatchSettingJson(argv[firstArg])
         : create(CreateConfig{}, "problem.json").setting;
@@ -126,7 +131,7 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
     }
     if (!reportWrite(writeAgentKindsJson(kinds, kAgentsPath), kAgentsPath)) return 1;
 
-    std::cout << "parameters brain=2"
+    std::cout << "parameters brain=" << (greedyMode ? 0 : 2)
               << " beam-width=" << config.beamWidth
               << " joint-beam-width=" << config.jointBeamWidth
               << " threads=" << config.threadCount
@@ -134,6 +139,10 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " safety-margin-ms=" << config.safetyMarginMs
               << " auto-beam-width=" << (config.autoSizedBeam ? 1 : 0)
               << " route-columns=" << (config.routeColumns.enabled ? 1 : 0)
+              << " route-path-portfolio="
+              << (config.routeColumns.pathPortfolio ? 1 : 0)
+              << " brand-aware-rescue="
+              << (config.routeColumns.brandAwareRescue ? 1 : 0)
               << " terminal-wait-fill="
               << (config.spotRouteLns.terminalWaitFill ? 1 : 0)
               << " traffic-aware-joint-routes="
@@ -156,7 +165,23 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " day-beam-max-udon-loss=" << config.dayBeamMaxUdonLoss
               << '\n';
 
-    const auto result = solveDay(setting, state, score, config);
+    const auto started = std::chrono::steady_clock::now();
+    auto result = BeamSearchResult{};
+    if (greedyMode) {
+        result.plan = brain0Greedy(setting, state, score);
+        const auto replay = simulateDay(setting, state, result.plan, score);
+        if (replay.valid) {
+            result.success = true;
+            result.stopReason = SearchStopReason::Completed;
+            result.finalState = replay.state;
+            result.matchBrandUpperBound = countBits(replay.state.score.matchBrands);
+            result.dailyBrandUpperBound = countBits(replay.state.dayBrands);
+        }
+    } else {
+        result = solveDay(setting, state, score, config);
+    }
+    result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
     if (!result.success) {
         std::cerr << "failed to construct even a wait plan\n";
         return 1;
@@ -211,7 +236,8 @@ int main(int argc, char* argv[]) {
         argv = options.positional.data();
         const std::string_view command = argc >= 2 ? argv[1] : "";
         if (command == "select") return runSelection(argc, argv, options);
-        const bool solveMode = command == "solve";
+        const bool solveMode = command == "solve" || command == "greedy";
+        const bool greedyMode = command == "greedy";
 
         const int firstArg = solveMode ? 2 : 1;
         if ((solveMode && (argc < 4 || argc > 5)) ||
@@ -220,7 +246,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        return runSolver(argc, argv, firstArg, options);
+        return runSolver(argc, argv, firstArg, options, greedyMode);
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
         return 1;

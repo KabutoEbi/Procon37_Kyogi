@@ -543,6 +543,17 @@ void testAgentSelector() {
            first.supplyCount);
     assert(std::count(first.kinds.begin(), first.kinds.end(), AgentKind::Patrol) >= 1);
 
+    AgentSelectorConfig incumbent = cfg;
+    incumbent.trialCandidateLimit = 1;
+    incumbent.incumbentSupplyMask = 0;
+    for (std::size_t index = 0; index < first.kinds.size(); ++index) {
+        if (first.kinds[index] == AgentKind::Supply)
+            incumbent.incumbentSupplyMask |= std::int64_t{1} << index;
+    }
+    const auto retained = selectAgentKinds(s, incumbent);
+    assert(retained.success);
+    assert(retained.kinds == first.kinds);
+
     cfg.minSupplyCount = 1;
     cfg.maxSupplyCount = 1;
     cfg.trialCandidateLimit = 0;

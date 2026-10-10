@@ -74,15 +74,15 @@ class TeamRoleProfile:
 
 TEAM_ROLE_PROFILES = {
     "lead": TeamRoleProfile(
-        "担当1 先行ビーム（約5秒）", "担当1・短時間ビーム",
-        10000, 10000, 0,
+        "担当1 停滞検出ビーム（締切10秒前まで）", "担当1・停滞検出ビーム",
+        30000, 60000, 0,
     ),
     "middle": TeamRoleProfile(
-        "担当2 収束ビーム（予行約15秒／第1試合約35秒）",
+        "担当2 収束ビーム（予行約15秒／本番約35秒）",
         "担当2・収束ビーム", 20000, 40000, 0, 1, 0,
     ),
     "long": TeamRoleProfile(
-        "担当3 収束SA（予行約15秒／第1試合約45秒）",
+        "担当3 収束SA（予行約15秒／本番約45秒）",
         "担当3・収束SA", 20000, 50000, 1, 0, 1,
     ),
 }
@@ -109,14 +109,23 @@ MATCH_OPERATION_PROFILES = {
     "production": MatchOperationProfile(
         "第1試合（本番URL・実探索/実送信・各60秒）", 60000, 60000,
     ),
+    "semifinal": MatchOperationProfile(
+        "準決勝（24×24・選択90秒／回答60秒）", 90000, 60000,
+    ),
+    "final": MatchOperationProfile(
+        "決勝（32×32・選択120秒／回答60秒）", 120000, 60000,
+    ),
 }
 
 
 def team_role_time_limit_ms(role: str, match_profile_key: str) -> int:
     """試合区分に対応する担当別の日次探索上限を返す。"""
     profile = TEAM_ROLE_PROFILES[role]
+    if role == "lead":
+        return MATCH_OPERATION_PROFILES[match_profile_key].fallback_day_time_ms
     return (profile.production_time_limit_ms
-            if match_profile_key == "production" else profile.time_limit_ms)
+            if match_profile_key in {"production", "semifinal", "final"}
+            else profile.time_limit_ms)
 
 
 def match_setting_issues(setting: dict[str, Any], profile_key: str) -> tuple[str, ...]:
@@ -128,6 +137,27 @@ def match_setting_issues(setting: dict[str, Any], profile_key: str) -> tuple[str
                 else ("行動回答時間または日数",))
     map_value = setting.get("map")
     spots = setting.get("spots")
+    if profile_key in {"semifinal", "final"}:
+        width, agent_count, spot_count, brand_min, brand_max = (
+            (24, 5, 24, 14, 20) if profile_key == "semifinal"
+            else (32, 7, 32, 20, 28)
+        )
+        brand_count = (len({spot.get("brand") for spot in spots
+                            if isinstance(spot, dict)})
+                       if isinstance(spots, list) else -1)
+        expected = (
+            (isinstance(day_seconds, list) and bool(day_seconds)
+             and all(type(seconds) is int and seconds == 60
+                     for seconds in day_seconds),
+             "行動回答時間"),
+            (isinstance(map_value, dict) and map_value.get("width") == width
+             and map_value.get("height") == width, "マップサイズ"),
+            (isinstance(setting.get("agents"), list)
+             and len(setting["agents"]) == agent_count, "エージェント数"),
+            (isinstance(spots, list) and len(spots) == spot_count, "スポット数"),
+            (brand_min <= brand_count <= brand_max, "系列数"),
+        )
+        return tuple(label for valid, label in expected if not valid)
     expected_day_seconds = [60] * 5 if profile_key == "production" else [30] * 5
     expected = (
         (day_seconds == expected_day_seconds, "行動回答時間または日数"),
@@ -1293,8 +1323,8 @@ class SolverGUI(tk.Tk):
         )
         self._sync_day_time_limit()
         self._log(
-            f"試合区分: {profile.label} / 接続テスト・予行演習・第1試合は"
-            f"すべて.envの同一URLを使用 / ダミーは接続テストのみ"
+            f"試合区分: {profile.label} / すべて.envの同一URLを使用 / "
+            f"ダミーは接続テストのみ"
         )
 
     def _team_role_changed(self, _event: object | None = None) -> None:
@@ -1621,7 +1651,7 @@ class SolverGUI(tk.Tk):
             self.token_var.set(config.token)
             status = "TOKEN読込済み" if config.token else "TOKEN未設定"
             self.status_var.set(
-                f".env再読込: {status}（接続テスト・予行演習・第1試合で共通）"
+                f".env再読込: {status}（全試合区分で共通）"
             )
         except (WorkflowError, OSError) as error:
             if show_dialog:
@@ -1766,16 +1796,40 @@ class SolverGUI(tk.Tk):
             return
         setting = self._work_path("setting.json")
         agents = self._work_path("agents.json")
+        initial_agents = self._work_path("agents-initial.json")
 
         def prepare() -> CommandResult:
             workflow.wait_for_setting(setting)
             self._messages.put(("event", "setting", setting))
-            result = workflow.select_agents(setting, agents)
+            initial = workflow.select_agents_initial(setting, initial_agents)
+            self._messages.put(("event", "agents", initial_agents))
+            workflow.send_agents(initial_agents, setting)
+            self._messages.put((
+                "event", "log", "初期エージェント種別を送信しました",
+            ))
+            if not workflow.selection_improvement_time_available():
+                self._messages.put((
+                    "event", "log",
+                    "種別受付終了10秒前のため改善探索を省略しました",
+                ))
+                return initial
+            improved = workflow.select_agents_improved(
+                setting, agents, initial_agents
+            )
             self._messages.put(("event", "agents", agents))
-            workflow.send_agents(agents, setting)
-            return result
+            if file_hash(agents) != file_hash(initial_agents):
+                workflow.send_agents(agents, setting)
+                self._messages.put((
+                    "event", "log", "改善エージェント種別を送信しました",
+                ))
+            else:
+                self._messages.put((
+                    "event", "log",
+                    "初期エージェント種別を上回らなかったため再送信しません",
+                ))
+            return improved
 
-        self._run_task("問題公開待ち・設定取得・種別選択・送信", prepare)
+        self._run_task("問題取得・初期種別送信・締切10秒前まで改善", prepare)
 
     def _fetch_setting_only(self) -> None:
         """追走端末用。担当1が確定するエージェント種別を上書きしない。"""
@@ -2175,10 +2229,86 @@ class SolverGUI(tk.Tk):
                 self._messages.put(("event", "day_state",
                                     (context, state, checkpoint, file_hash(state))))
             self._messages.put(("event", "solve_start", day))
-            return workflow.solve_day(
-                setting, state, checkpoint,
-                reserve_network_timeout=reserve_network_timeout,
+            if not auto_send:
+                return workflow.solve_day(
+                    setting, state, checkpoint,
+                    reserve_network_timeout=reserve_network_timeout,
+                )
+            initial = workflow.solve_day_initial(setting, state, checkpoint)
+            self._messages.put(("event", "log", initial.output))
+            revision, _answer, accepted_checkpoint = workflow.send_answer(
+                day, workflow.work_dir / "answer.json",
+                workflow.work_dir / "score-next.json", state, setting,
             )
+            self._messages.put((
+                "event", "log",
+                f"貪欲初期回答を送信しました (revision={revision})",
+            ))
+            result = initial
+            daily = read_json(state)
+            if workflow.improvement_time_available(daily.get("endsAt", 0)):
+                stagnated = workflow.solve_day_until_stagnation(
+                    setting, state, checkpoint
+                )
+                self._messages.put(("event", "log", stagnated.output))
+                self._messages.put((
+                    "event", "log",
+                    ("解の変動停止を検出しました"
+                     if workflow.solution_stagnated(stagnated)
+                     else "回答締切10秒前まで探索しました"),
+                ))
+                score = workflow.work_dir / "score-next.json"
+                if workflow.candidate_answer_improves(day, score):
+                    revision, _answer, accepted_checkpoint = workflow.send_answer(
+                        day, workflow.work_dir / "answer.json", score,
+                        state, setting,
+                    )
+                    result = stagnated
+                    self._messages.put((
+                        "event", "log",
+                        f"停滞時回答を送信しました (revision={revision})",
+                    ))
+                else:
+                    workflow.restore_accepted_answer(day)
+                    self._messages.put((
+                        "event", "log",
+                        "貪欲初期回答を上回らなかったため停滞時は再送信しません",
+                    ))
+            else:
+                self._messages.put((
+                    "event", "log",
+                    "回答締切10秒前のため停滞探索を省略しました",
+                ))
+            if workflow.improvement_time_available(daily.get("endsAt", 0)):
+                improved = workflow.solve_day_improved(
+                    setting, state, checkpoint
+                )
+                score = workflow.work_dir / "score-next.json"
+                if workflow.candidate_answer_improves(day, score):
+                    revision, _answer, accepted_checkpoint = workflow.send_answer(
+                        day, workflow.work_dir / "answer.json", score,
+                        state, setting,
+                    )
+                    result = improved
+                    self._messages.put((
+                        "event", "log",
+                        f"最終改善回答を送信しました (revision={revision})",
+                    ))
+                else:
+                    workflow.restore_accepted_answer(day)
+                    self._messages.put((
+                        "event", "log",
+                        "提出済みベストを上回らなかったため最終再送信はしません",
+                    ))
+            else:
+                self._messages.put((
+                    "event", "log",
+                    "回答締切10秒前のため最終改善探索を省略しました",
+                ))
+            self._messages.put((
+                "event", "accepted", (revision, accepted_checkpoint, day + 1),
+            ))
+            return result
 
         def completed(result: CommandResult) -> None:
             self.state_var.set(str(state))
@@ -2193,15 +2323,7 @@ class SolverGUI(tk.Tk):
             self._show_search_result(result)
             self._show_spoken_candidate(self._work_path("score-next.json"))
             self._show_json(self._work_path("answer.json"))
-            if auto_send:
-                self.after_idle(
-                    lambda: self._submit_answer(
-                        workflow, day, state, setting, confirm=False,
-                        after_accepted=lambda: self._start_next_day_prefetch(day),
-                    )
-                )
-            else:
-                self._start_next_day_prefetch(day)
+            self._start_next_day_prefetch(day)
 
         self._run_task(
             f"day={day + 1} " + ("探索" if cached else "状態公開待ち・取得・探索"),

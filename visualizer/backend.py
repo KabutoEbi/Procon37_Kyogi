@@ -25,6 +25,8 @@ from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TIMEOUT_SECONDS = 10.0
+INITIAL_SUBMISSION_LIMIT_MS = 10000
+IMPROVEMENT_CUTOFF_RESERVE_MS = 10000
 CHECKPOINT_CODE_PREFIX = "P37C1:"
 SERVER_CLIENT_DIR = PROJECT_ROOT / "server_client"
 if str(SERVER_CLIENT_DIR) not in sys.path:
@@ -772,6 +774,20 @@ class Workflow:
         # 再送と次日の探索が同じ answer/score ファイルを同時に扱わないようにする。
         self.artifact_lock = threading.RLock()
 
+    def _with_parameters(self, parameters: SearchParameters) -> Workflow:
+        """同じ接続・停止状態・保存先を使う探索段階を作る。"""
+        return Workflow(
+            self.connection, self.solver, self.work_dir, parameters,
+            self.stop, self.shared_dir,
+        )
+
+    @staticmethod
+    def improvement_time_available(ends_at: float) -> bool:
+        return bool(
+            type(ends_at) in (int, float) and ends_at > 0
+            and time.time() < ends_at - IMPROVEMENT_CUTOFF_RESERVE_MS / 1000
+        )
+
     def check_stop(self) -> None:
         if self.stop.is_set():
             raise Paused("停止しました。自動実行は同じ段階から再開できます")
@@ -983,7 +999,7 @@ class Workflow:
         self.check_stop()
         self.parameters.arguments()  # GUI以外から指定した値も検査する。
         reserve = self.parameters.send_reserve_ms
-        if reserve_for_submission or (ends_at and reserve_network_timeout):
+        if ends_at and reserve_network_timeout:
             reserve = max(
                 reserve,
                 math.ceil(self.connection.timeout * 1000) +
@@ -1423,7 +1439,14 @@ class Workflow:
                 raise WorkflowError("stateの公開待ちがタイムアウトしました")
             self.stop.wait(interval)
 
-    def select_agents(self, setting: Path, output: Path) -> CommandResult:
+    def select_agents(
+        self,
+        setting: Path,
+        output: Path,
+        *,
+        incumbent: Path | None = None,
+        reserve_network_timeout: bool = True,
+    ) -> CommandResult:
         self._require_no_pending("agents")
         marker = self.work_dir / "selected-agents.json"
         marker.unlink(missing_ok=True)
@@ -1444,16 +1467,68 @@ class Workflow:
         selection_ends_at = timing.get("selectionEndsAt")
         if type(selection_ends_at) not in (int, float) or selection_ends_at <= 0:
             raise WorkflowError("種別受付終了時刻の記録が不正です")
+        arguments = ["select", str(setting.resolve()), str(output.resolve())]
+        incumbent_digest = None
+        if incumbent is not None:
+            kinds = read_json(incumbent)
+            setting_value = read_json(setting)
+            expected = len(setting_value.get("agents", []))
+            if (not isinstance(kinds, list) or len(kinds) != expected
+                    or any(type(kind) is not int or kind not in (0, 1)
+                           for kind in kinds)):
+                raise WorkflowError("初期提出のエージェント種別が不正です")
+            mask = sum((kind == 1) << index for index, kind in enumerate(kinds))
+            arguments.extend(["--incumbent-agent-mask", str(mask)])
+            incumbent_digest = file_hash(incumbent)
         result = self._run(
-            ["select", str(setting.resolve()), str(output.resolve())],
+            arguments,
             ends_at=float(selection_ends_at),
             reserve_for_submission=True,
+            reserve_network_timeout=reserve_network_timeout,
         )
-        atomic_write(marker, json.dumps({
+        receipt = {
             "setting": file_hash(setting), "agents": file_hash(output),
             "identity": self.identity(), "selectionEndsAt": selection_ends_at,
-        }).encode())
+        }
+        if incumbent_digest is not None:
+            receipt.update(
+                incumbentAgents=incumbent_digest,
+                improved=receipt["agents"] != incumbent_digest,
+            )
+        atomic_write(marker, json.dumps(receipt).encode())
         return result
+
+    def select_agents_initial(self, setting: Path, output: Path) -> CommandResult:
+        limit = self.parameters.selection_time_ms
+        parameters = replace(
+            self.parameters,
+            trial_candidates=0,
+            selection_time_ms=min(
+                limit or INITIAL_SUBMISSION_LIMIT_MS,
+                INITIAL_SUBMISSION_LIMIT_MS,
+            ),
+        )
+        return self._with_parameters(parameters).select_agents(setting, output)
+
+    def select_agents_improved(
+        self, setting: Path, output: Path, incumbent: Path
+    ) -> CommandResult:
+        parameters = replace(
+            self.parameters,
+            trial_candidates=max(6, self.parameters.trial_candidates),
+            send_reserve_ms=IMPROVEMENT_CUTOFF_RESERVE_MS,
+        )
+        return self._with_parameters(parameters).select_agents(
+            setting, output, incumbent=incumbent,
+            reserve_network_timeout=False,
+        )
+
+    def selection_improvement_time_available(self) -> bool:
+        path = self.work_dir / "setting-received.json"
+        if not path.is_file():
+            return False
+        timing = read_json(path)
+        return self.improvement_time_available(timing.get("selectionEndsAt", 0))
 
     def solve_day(
         self,
@@ -1462,6 +1537,7 @@ class Workflow:
         checkpoint: Path | None = None,
         *,
         reserve_network_timeout: bool = True,
+        strategy: str = "solve",
     ) -> CommandResult:
         daily = read_json(state)
         day = daily["day"]
@@ -1476,7 +1552,9 @@ class Workflow:
             raise WorkflowError("day 2以降は得点チェックポイントが必要です")
         if checkpoint is not None and read_json(checkpoint).get("nextDay") != day:
             raise WorkflowError("チェックポイントの日番号が当日状態と一致しません")
-        arguments = ["solve", str(setting.resolve()), str(state.resolve())]
+        if strategy not in ("solve", "greedy"):
+            raise WorkflowError(f"未対応の探索方式です: {strategy}")
+        arguments = [strategy, str(setting.resolve()), str(state.resolve())]
         if checkpoint is not None:
             arguments.append(str(checkpoint.resolve()))
         result = self._run(
@@ -1497,6 +1575,67 @@ class Workflow:
         atomic_write(self.work_dir / "prepared-answer.json", json.dumps(receipt).encode())
         return result
 
+    def solve_day_initial(
+        self, setting: Path, state: Path, checkpoint: Path | None = None
+    ) -> CommandResult:
+        """即時計算できる貪欲解を初回提出用に生成する。"""
+        result = self.solve_day(
+            setting, state, checkpoint, strategy="greedy",
+        )
+        result_state = self.work_dir / "result-state.json"
+        if result_state.is_file():
+            atomic_write(
+                self.work_dir / "result-state-initial.json",
+                result_state.read_bytes(),
+            )
+        return result
+
+    def solve_day_until_stagnation(
+        self, setting: Path, state: Path, checkpoint: Path | None = None
+    ) -> CommandResult:
+        # 初回回答も固定の短時間枠ではなく、公式締切10秒前までを上限にする。
+        # 使用中の玉数探索方式に対応する停滞判定で早期終了し、その時点の
+        # 最良解を一度送信する。停滞しない場合も締切前には必ず返す。
+        daily = read_json(state)
+        ends_at = daily.get("endsAt") if isinstance(daily, dict) else None
+        has_official_deadline = (
+            type(ends_at) in (int, float) and ends_at > 0
+        )
+        parameters = replace(
+            self.parameters,
+            # 0は_runで当日のdaySecondsへ展開される。実サーバーではGUIの
+            # 短時間プリセットより公式回答枠を優先する。
+            time_limit_ms=(0 if has_official_deadline
+                           else self.parameters.time_limit_ms),
+            stable_beam_stop=0 if self.parameters.udon_sa else 1,
+            sa_stagnation_stop=1 if self.parameters.udon_sa else 0,
+            send_reserve_ms=IMPROVEMENT_CUTOFF_RESERVE_MS,
+        )
+        result = self._with_parameters(parameters).solve_day(
+            setting, state, checkpoint, reserve_network_timeout=False,
+        )
+        return result
+
+    @staticmethod
+    def solution_stagnated(result: CommandResult) -> bool:
+        output = result.output
+        return (
+            "stable-beam-stopped=true" in output
+            or "udon-sa-stagnation-stopped=true" in output
+        )
+
+    def solve_day_improved(
+        self, setting: Path, state: Path, checkpoint: Path | None = None
+    ) -> CommandResult:
+        parameters = replace(
+            self.parameters,
+            send_reserve_ms=IMPROVEMENT_CUTOFF_RESERVE_MS,
+        )
+        return self._with_parameters(parameters).solve_day(
+            setting, state, checkpoint,
+            reserve_network_timeout=False,
+        )
+
     def identity(self) -> str:
         return hashlib.sha256(
             (self.connection.url.rstrip("/") + "\n" + self.connection.token).encode()
@@ -1510,8 +1649,14 @@ class Workflow:
         if path.exists() and read_json(path).get("status") == "pending":
             raise WorkflowError("送信結果不明の候補を保護しています。停止位置から再開してください")
 
-    def _submission(self, name: str, receipt: dict, payload: Path,
-                    score: Path | None = None) -> tuple[Path, dict]:
+    def _submission(
+        self,
+        name: str,
+        receipt: dict,
+        payload: Path,
+        score: Path | None = None,
+        replacement_context: tuple[str, ...] = (),
+    ) -> tuple[Path, dict]:
         """送信前に不変の候補を保存。応答不明の別回答への置換は禁止。"""
         path = self.work_dir / f"submission-{name}.json"
         suffix = ""
@@ -1521,13 +1666,22 @@ class Workflow:
                 return path, saved
             previous = saved["receipt"]
             # 受理済み回答だけを同じ日の新候補で更新する。結果不明や別試合は保護。
-            context_keys = ("day", "endsAt", "identity", "setting", "state")
-            if (score is None or saved.get("status") != "accepted"
-                    or any(previous.get(key) != receipt.get(key) for key in context_keys)):
+            context_keys = replacement_context or (
+                "day", "endsAt", "identity", "setting", "state"
+            )
+            if (saved.get("status") != "accepted"
+                    or (score is None and not replacement_context)
+                    or any(previous.get(key) != receipt.get(key)
+                           for key in context_keys)):
                 raise WorkflowError("別の送信記録があります。復旧では同じ候補だけを使用してください。別試合は新しい作業フォルダを使用してください")
             digest = hashlib.sha256(json.dumps(receipt, sort_keys=True).encode()).hexdigest()
             suffix = "-" + digest
-            history = self.work_dir / f"submission-{name}-accepted-{saved['revision']}.json"
+            history_key = saved.get("revision")
+            if type(history_key) is not int:
+                history_key = hashlib.sha256(
+                    json.dumps(previous, sort_keys=True).encode()
+                ).hexdigest()[:12]
+            history = self.work_dir / f"submission-{name}-accepted-{history_key}.json"
             atomic_write(history, json.dumps(saved).encode())
         # 新候補は別ファイルへ保存し、最後に記録を切り替える。
         # 保存途中で停止しても以前の受理記録と候補の整合性を保つ。
@@ -1612,7 +1766,21 @@ class Workflow:
                 or (setting is not None and receipt.get("setting") != file_hash(setting))):
             raise WorkflowError("設定・接続先・種別が選択時と一致しません。種別選択を再実行してください")
         self.check_stop()
-        journal, saved = self._submission("agents", receipt, payload)
+        current = self.work_dir / "submission-agents.json"
+        if current.is_file():
+            accepted = read_json(current)
+            previous = accepted.get("receipt", {})
+            if (accepted.get("status") == "accepted"
+                    and previous != receipt
+                    and (receipt.get("incumbentAgents") != previous.get("agents")
+                         or receipt.get("improved") is not True)):
+                raise WorkflowError(
+                    "初期提出を上回る比較済み構成ではないため再送信しません"
+                )
+        journal, saved = self._submission(
+            "agents", receipt, payload,
+            replacement_context=("identity", "setting", "selectionEndsAt"),
+        )
         if saved["status"] == "accepted":
             return
         deadline = self._submission_deadline(receipt.get("selectionEndsAt", 0))
@@ -1634,6 +1802,47 @@ class Workflow:
             raise WorkflowError(str(error)) from error
         saved.update(status="accepted", acceptedAt=time.time())
         atomic_write(journal, json.dumps(saved).encode())
+
+    def candidate_answer_improves(self, day: int, candidate_score: Path) -> bool:
+        existing_path = self.work_dir / f"submission-day{day}.json"
+        if not existing_path.is_file():
+            return True
+        existing = read_json(existing_path)
+        if existing.get("status") != "accepted":
+            raise WorkflowError("送信結果不明の候補があるため改善比較できません")
+        suffix = existing.get("snapshotSuffix", "")
+        previous_score = self.work_dir / f"submitted-day{day}{suffix}-score.json"
+        if not previous_score.is_file():
+            raise WorkflowError("受理済み回答の得点記録がありません")
+        return (
+            official_score_tuple(read_json(candidate_score))
+            > official_score_tuple(read_json(previous_score))
+        )
+
+    def restore_accepted_answer(self, day: int) -> None:
+        """改善しなかった探索生成物を、受理済み初期回答へ戻す。"""
+        journal = read_json(self.work_dir / f"submission-day{day}.json")
+        if journal.get("status") != "accepted":
+            raise WorkflowError("受理済み初期回答を復元できません")
+        suffix = journal.get("snapshotSuffix", "")
+        answer = self.work_dir / f"submitted-day{day}{suffix}.json"
+        score = self.work_dir / f"submitted-day{day}{suffix}-score.json"
+        if not answer.is_file() or not score.is_file():
+            raise WorkflowError("受理済み初期回答の保存ファイルがありません")
+        atomic_write(self.work_dir / "answer.json", answer.read_bytes())
+        atomic_write(self.work_dir / "score-next.json", score.read_bytes())
+        atomic_write(
+            self.work_dir / "prepared-answer.json",
+            json.dumps(journal["receipt"]).encode(),
+        )
+        accepted_state = self.work_dir / f"submitted-day{day}{suffix}-state.json"
+        initial_state = self.work_dir / "result-state-initial.json"
+        state_snapshot = (accepted_state if accepted_state.is_file()
+                          else initial_state)
+        if state_snapshot.is_file():
+            atomic_write(
+                self.work_dir / "result-state.json", state_snapshot.read_bytes()
+            )
 
     def send_answer(
         self,
@@ -1690,6 +1899,15 @@ class Workflow:
         checkpoint = self.work_dir / f"score-day{day + 1}.json"
         was_accepted = saved["status"] == "accepted"
         if was_accepted and not force:
+            result_state = self.work_dir / "result-state.json"
+            accepted_state = (
+                self.work_dir / f"submitted-day{day}{suffix}-state.json"
+            )
+            if result_state.is_file() and not accepted_state.is_file():
+                atomic_write(
+                    accepted_state,
+                    result_state.read_bytes(),
+                )
             atomic_write(checkpoint, frozen_score.read_bytes())
             if setting is not None:
                 self.publish_checkpoint(checkpoint, setting, saved["revision"])
@@ -1722,6 +1940,12 @@ class Workflow:
             raise WorkflowError("回答送信でrevisionが返りませんでした")
         saved.update(status="accepted", revision=revision, acceptedAt=time.time())
         atomic_write(journal, json.dumps(saved).encode())
+        result_state = self.work_dir / "result-state.json"
+        if result_state.is_file():
+            atomic_write(
+                self.work_dir / f"submitted-day{day}{suffix}-state.json",
+                result_state.read_bytes(),
+            )
         atomic_write(checkpoint, frozen_score.read_bytes())
         if setting is not None:
             self.publish_checkpoint(checkpoint, setting, revision)
@@ -1753,25 +1977,36 @@ class AutomaticMatch:
         self.retryable = True
         self.setting = workflow.work_dir / "setting.json"
         self.agents = workflow.work_dir / "agents.json"
+        self.initial_agents = workflow.work_dir / "agents-initial.json"
         self.progress = workflow.work_dir / "automatic-progress.json"
+        self.next_checkpoint: Path | None = None
         self._started = False
 
     def _save(self) -> None:
-        paths = [self.setting, self.agents]
-        if self.phase == "send_agents":
+        paths = [self.setting, self.agents, self.initial_agents]
+        if self.phase in ("send_agents_initial", "select_improved",
+                          "send_agents_improved"):
             paths.append(self.workflow.work_dir / "selected-agents.json")
-        if self.phase in ("solve", "send_answer"):
+        if self.phase in ("solve_initial", "send_answer_initial",
+                          "solve_stagnated", "send_answer_stagnated",
+                          "solve_improved", "send_answer_improved"):
             paths.append(self.workflow.work_dir / f"state-day{self.day}.json")
-        if self.phase == "send_answer":
+        if self.phase in ("send_answer_initial", "send_answer_stagnated",
+                          "send_answer_improved"):
             paths.extend(self.workflow.work_dir / name for name in
                          ("answer.json", "score-next.json", "prepared-answer.json"))
         if self.checkpoint is not None:
             paths.append(self.checkpoint)
+        if self.next_checkpoint is not None:
+            paths.append(self.next_checkpoint)
         saved = {
             "version": 1, "identity": self.workflow.identity(),
             "phase": self.phase, "day": self.day,
             "resume_day": self.resume_day, "days": getattr(self, "days", None),
             "checkpoint": str(self.checkpoint) if self.checkpoint else None,
+            "next_checkpoint": (
+                str(self.next_checkpoint) if self.next_checkpoint else None
+            ),
             "files": {str(path.resolve()): file_hash(path) for path in paths if path.is_file()},
         }
         atomic_write(self.progress, json.dumps(saved).encode())
@@ -1791,15 +2026,30 @@ class AutomaticMatch:
             path = Path(name)
             if not path.is_file() or file_hash(path) != digest:
                 raise WorkflowError(f"復旧用ファイルが変更・削除されています: {path.name}")
-        if saved["phase"] not in ("setting", "select", "send_agents", "state", "solve", "send_answer", "done"):
+        legacy_phases = {
+            "select": "select_initial",
+            "send_agents": "send_agents_initial",
+            "solve": "solve_initial",
+            "send_answer": "send_answer_initial",
+        }
+        phase = legacy_phases.get(saved["phase"], saved["phase"])
+        if phase not in (
+            "setting", "select_initial", "send_agents_initial",
+            "select_improved", "send_agents_improved", "state",
+            "solve_initial", "send_answer_initial", "solve_stagnated",
+            "send_answer_stagnated", "solve_improved", "send_answer_improved",
+            "done",
+        ):
             raise WorkflowError("復旧記録の段階が不正です")
         if saved["phase"] != "setting" and (
                 type(saved["days"]) is not int or saved["days"] <= 0
                 or saved["day"] > saved["days"]):
             raise WorkflowError("復旧記録の日数が不正です")
-        runner.phase, runner.day = saved["phase"], saved["day"]
+        runner.phase, runner.day = phase, saved["day"]
         runner.days, runner.resume_day = saved["days"], saved["resume_day"]
         runner.checkpoint = Path(saved["checkpoint"]) if saved["checkpoint"] else None
+        next_checkpoint = saved.get("next_checkpoint")
+        runner.next_checkpoint = Path(next_checkpoint) if next_checkpoint else None
         runner.state = workflow.work_dir / f"state-day{runner.day}.json"
         runner._started = True
         return runner
@@ -1848,9 +2098,20 @@ class AutomaticMatch:
             self._save()
             w.check_stop()
             phase = self.phase
-            labels = {"setting": "問題情報の公開待ち・取得", "select": "エージェント種別選択",
-                      "send_agents": "種別送信", "state": "当日マップの公開待ち・取得",
-                      "solve": "探索", "send_answer": "回答送信"}
+            labels = {
+                "setting": "問題情報の公開待ち・取得",
+                "select_initial": "初期エージェント種別選択",
+                "send_agents_initial": "初期エージェント種別送信",
+                "select_improved": "エージェント種別の改善探索",
+                "send_agents_improved": "改善エージェント種別送信",
+                "state": "当日マップの公開待ち・取得",
+                "solve_initial": "貪欲初期回答生成",
+                "send_answer_initial": "貪欲初期回答送信",
+                "solve_stagnated": "停滞まで探索",
+                "send_answer_stagnated": "停滞時回答送信",
+                "solve_improved": "締切前の最終改善探索",
+                "send_answer_improved": "最終改善回答送信",
+            }
             self.emit("phase", f"自動: {labels[phase]} / day={self.day + 1}")
             if phase == "setting":
                 self._wait_fetch("setting", self.setting)
@@ -1858,19 +2119,42 @@ class AutomaticMatch:
                 if not days or not 0 <= self.day < len(days):
                     raise WorkflowError("試合日数または開始dayが不正です")
                 self.days = len(days)
-                self.phase = "state" if self.resume_day else "select"
+                self.phase = "state" if self.resume_day else "select_initial"
                 self.emit("setting", self.setting)
-            elif phase == "select":
-                self.emit("log", w.select_agents(self.setting, self.agents).output)
-                self.phase = "send_agents"
+            elif phase == "select_initial":
+                result = w.select_agents_initial(self.setting, self.initial_agents)
+                self.emit("log", result.output)
+                self.phase = "send_agents_initial"
+                self.emit("agents", self.initial_agents)
+            elif phase == "send_agents_initial":
+                w.check_stop()
+                self.retryable = False
+                w.send_agents(self.initial_agents, self.setting)
+                self.phase = "select_improved"
+                self.retryable = True
+                self.emit("log", "初期エージェント種別を送信しました")
+            elif phase == "select_improved":
+                if not w.selection_improvement_time_available():
+                    self.emit("log", "種別受付終了10秒前のため改善探索を省略しました")
+                    self.phase = "state"
+                    continue
+                result = w.select_agents_improved(
+                    self.setting, self.agents, self.initial_agents
+                )
+                self.emit("log", result.output)
                 self.emit("agents", self.agents)
-            elif phase == "send_agents":
+                if file_hash(self.agents) == file_hash(self.initial_agents):
+                    self.emit("log", "初期エージェント種別を上回らなかったため再送信しません")
+                    self.phase = "state"
+                else:
+                    self.phase = "send_agents_improved"
+            elif phase == "send_agents_improved":
                 w.check_stop()
                 self.retryable = False
                 w.send_agents(self.agents, self.setting)
                 self.phase = "state"
                 self.retryable = True
-                self.emit("log", "エージェント種別を送信しました")
+                self.emit("log", "改善エージェント種別を送信しました")
             elif phase == "state":
                 self.state = w.work_dir / f"state-day{self.day}.json"
                 self._wait_fetch("state", self.state)
@@ -1883,29 +2167,116 @@ class AutomaticMatch:
                         "log",
                         f"共有チェックポイントを取得: revision={revision} {source}",
                     )
-                self.phase = "solve"
+                self.phase = "solve_initial"
                 self.emit("state", self.state)
-            elif phase == "solve":
+            elif phase == "solve_initial":
                 self.emit("solve_start", self.day)
                 with w.artifact_lock:
-                    result = w.solve_day(self.setting, self.state, self.checkpoint)
+                    result = w.solve_day_initial(
+                        self.setting, self.state, self.checkpoint
+                    )
                 self.emit("log", result.output)
                 self.emit("solved", result)
-                self.phase = "send_answer"
+                self.phase = "send_answer_initial"
                 self.emit("answer", w.work_dir / "answer.json")
                 # 回答経路は当日開始位置から描いた後、状態表だけでなく
                 # マップ上の車両・スポット在庫も探索後状態へ更新する。
                 self.emit("result_state", w.work_dir / "result-state.json")
-            elif phase == "send_answer":
+            elif phase == "send_answer_initial":
                 w.check_stop()
                 self.retryable = False
                 with w.artifact_lock:
-                    revision, _, self.checkpoint = w.send_answer(
+                    revision, _, self.next_checkpoint = w.send_answer(
                         self.day, w.work_dir / "answer.json", w.work_dir / "score-next.json",
                         self.state, self.setting,
                     )
-                self.day += 1
-                self.phase = "done" if self.day == self.days else "state"
                 self.retryable = True
-                self.emit("accepted", (revision, self.checkpoint, self.day))
+                self.phase = "solve_stagnated"
+                self.emit("log", f"貪欲初期回答を送信しました (revision={revision})")
+            elif phase == "solve_stagnated":
+                daily = read_json(self.state)
+                if not w.improvement_time_available(daily.get("endsAt", 0)):
+                    self.emit("log", "回答締切10秒前のため停滞探索を省略しました")
+                    self._finish_day()
+                    continue
+                self.emit("solve_start", self.day)
+                with w.artifact_lock:
+                    result = w.solve_day_until_stagnation(
+                        self.setting, self.state, self.checkpoint
+                    )
+                self.emit("log", result.output)
+                self.emit(
+                    "log",
+                    ("解の変動停止を検出しました"
+                     if w.solution_stagnated(result)
+                     else "回答締切10秒前まで探索しました"),
+                )
+                self.emit("solved", result)
+                self.phase = "send_answer_stagnated"
+                self.emit("answer", w.work_dir / "answer.json")
+                self.emit("result_state", w.work_dir / "result-state.json")
+            elif phase == "send_answer_stagnated":
+                w.check_stop()
+                score = w.work_dir / "score-next.json"
+                if w.candidate_answer_improves(self.day, score):
+                    self.retryable = False
+                    with w.artifact_lock:
+                        revision, _, self.next_checkpoint = w.send_answer(
+                            self.day, w.work_dir / "answer.json", score,
+                            self.state, self.setting,
+                        )
+                    self.retryable = True
+                    self.emit("log", f"停滞時回答を送信しました (revision={revision})")
+                else:
+                    self.emit("log", "貪欲初期回答を上回らなかったため停滞時は再送信しません")
+                    w.restore_accepted_answer(self.day)
+                self.phase = "solve_improved"
+            elif phase == "solve_improved":
+                daily = read_json(self.state)
+                if not w.improvement_time_available(daily.get("endsAt", 0)):
+                    self.emit("log", "回答締切10秒前のため改善探索を省略しました")
+                    self._finish_day()
+                    continue
+                self.emit("solve_start", self.day)
+                with w.artifact_lock:
+                    result = w.solve_day_improved(
+                        self.setting, self.state, self.checkpoint
+                    )
+                self.emit("log", result.output)
+                self.emit("solved", result)
+                self.phase = "send_answer_improved"
+                self.emit("answer", w.work_dir / "answer.json")
+                self.emit("result_state", w.work_dir / "result-state.json")
+            elif phase == "send_answer_improved":
+                w.check_stop()
+                score = w.work_dir / "score-next.json"
+                if w.candidate_answer_improves(self.day, score):
+                    self.retryable = False
+                    with w.artifact_lock:
+                        revision, _, self.next_checkpoint = w.send_answer(
+                            self.day, w.work_dir / "answer.json", score,
+                            self.state, self.setting,
+                        )
+                    self.retryable = True
+                    self.emit("log", f"最終改善回答を送信しました (revision={revision})")
+                else:
+                    self.emit("log", "提出済みベストを上回らなかったため最終再送信はしません")
+                    w.restore_accepted_answer(self.day)
+                self._finish_day()
         self.emit("phase", "全日程の送信が完了しました")
+
+    def _finish_day(self) -> None:
+        submission = read_json(
+            self.workflow.work_dir / f"submission-day{self.day}.json"
+        )
+        revision = submission.get("revision")
+        if submission.get("status") != "accepted" or type(revision) is not int:
+            raise WorkflowError("当日の受理済み回答を確定できません")
+        checkpoint = self.workflow.work_dir / f"score-day{self.day + 1}.json"
+        if not checkpoint.is_file():
+            raise WorkflowError("当日の得点チェックポイントがありません")
+        self.next_checkpoint = checkpoint
+        self.checkpoint = checkpoint
+        self.day += 1
+        self.phase = "done" if self.day == self.days else "state"
+        self.emit("accepted", (revision, checkpoint, self.day))
