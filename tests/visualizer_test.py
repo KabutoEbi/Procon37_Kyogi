@@ -112,7 +112,7 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(
             {key: (value.selection_time_ms, value.fallback_day_time_ms)
              for key, value in MATCH_OPERATION_PROFILES.items()},
-            {"connection_test": (10000, 10000),
+            {"connection_test": (20000, 20000),
              "rehearsal": (30000, 30000),
              "production": (60000, 60000)},
         )
@@ -146,6 +146,14 @@ class BackendTest(unittest.TestCase):
             "busyThreshold": 1,
             "jammedThreshold": 2,
         }
+        self.assertEqual(
+            match_setting_issues({"daySeconds": [20] * 4}, "connection_test"),
+            (),
+        )
+        self.assertEqual(
+            match_setting_issues({"daySeconds": [20] * 5}, "connection_test"),
+            ("行動回答時間または日数",),
+        )
         self.assertEqual(match_setting_issues(rehearsal, "rehearsal"), ())
         first_match = json.loads(json.dumps(rehearsal))
         first_match["daySeconds"] = [60] * 5
@@ -694,31 +702,50 @@ result
             )
             responses = [
                 ({"map": {}, "agents": [10, 20, 30, 40],
-                  "daySteps": [3, 4]}, b"{}", 200),
+                  "daySteps": [3, 4, 5, 6],
+                  "daySeconds": [20] * 4}, b"{}", 200),
                 (None, b"", 200),
                 ({"day": 0}, b"{}", 200),
                 ({"revision": 7}, b"{}", 200),
                 ({"day": 1}, b"{}", 200),
                 ({"revision": 8}, b"{}", 200),
+                ({"day": 2}, b"{}", 200),
+                ({"revision": 9}, b"{}", 200),
+                ({"day": 3}, b"{}", 200),
+                ({"revision": 10}, b"{}", 200),
             ]
             with mock.patch("backend.request_json", side_effect=responses) as request:
                 result = workflow.run_dummy_connection_test()
-            self.assertIn("全2日ダミー回答受理", result)
-            self.assertIn("revision=7,8", result)
-            self.assertEqual(request.call_count, 6)
+            self.assertIn("全4日ダミー回答受理", result)
+            self.assertIn("revision=7,8,9,10", result)
+            self.assertEqual(request.call_count, 10)
             self.assertEqual(request.call_args_list[0].args[2], "/setting")
             self.assertEqual(request.call_args_list[1].args[2], "/agent")
             self.assertEqual(request.call_args_list[1].kwargs["method"], "POST")
             self.assertEqual(request.call_args_list[1].kwargs["payload"], [0, 1, 0, 1])
             self.assertEqual(request.call_args_list[3].kwargs["payload"], [[-3]] * 4)
             self.assertEqual(request.call_args_list[5].kwargs["payload"], [[-4]] * 4)
+            self.assertEqual(request.call_args_list[7].kwargs["payload"], [[-5]] * 4)
+            self.assertEqual(request.call_args_list[9].kwargs["payload"], [[-6]] * 4)
             self.assertEqual(list(Path(directory).iterdir()), [])
 
             with mock.patch(
                 "backend.request_json", side_effect=ApiError(403, "not ready")
             ):
                 with self.assertRaisesRegex(WorkflowError, "ダミーデータ送信失敗"):
-                    workflow.run_dummy_connection_test()
+                    workflow.run_dummy_connection_test(setting_wait_seconds=0)
+
+            before_public = [
+                ApiError(403, "not ready"),
+                ({"agents": [1], "daySteps": [1] * 4,
+                  "daySeconds": [19] * 4}, b"{}", 200),
+            ]
+            with mock.patch("backend.request_json", side_effect=before_public) as request, \
+                    mock.patch("backend.time.sleep") as sleep:
+                with self.assertRaisesRegex(WorkflowError, "20秒"):
+                    workflow.run_dummy_connection_test(setting_wait_seconds=1)
+                self.assertEqual(request.call_count, 2)
+                sleep.assert_called_once_with(0.2)
 
     def test_auto_wait_pause_resume_and_post_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
