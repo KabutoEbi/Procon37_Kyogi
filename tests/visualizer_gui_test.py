@@ -16,7 +16,7 @@ from runtime import ensure_runtime
 if __name__ == "__main__":
     ensure_runtime()
 
-from app import SolverGUI, TEAM_ROLE_LABELS
+from app import MATCH_OPERATION_PROFILES, SolverGUI, TEAM_ROLE_LABELS
 from backend import (
     ConnectionConfig,
     CommandResult,
@@ -44,7 +44,7 @@ class GUITest(unittest.TestCase):
             self.assertTrue(gui.automatic_match_button.winfo_ismapped())
             gui.team_role_var.set(TEAM_ROLE_LABELS["lead"])
             gui._team_role_changed()
-            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "20000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "10000")
             self.assertEqual(gui.parameter_vars["udon_sa"].get(), "0")
             self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "0")
             self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "0")
@@ -58,9 +58,20 @@ class GUITest(unittest.TestCase):
             self.assertEqual(str(gui.automatic_match_button["state"]), "normal")
             self.assertIn("担当1", gui.automatic_match_button.cget("text"))
             self.assertTrue(gui.prepare_button.cget("text").startswith("1b"))
+            self.assertIn("接続テスト", gui.build_solver_button.cget("text"))
+            gui.match_profile_var.set(MATCH_OPERATION_PROFILES["rehearsal"].label)
+            gui._match_profile_changed()
+            self.assertIn("予行演習", gui.build_solver_button.cget("text"))
+            self.assertEqual(gui.parameter_vars["selection_time_ms"].get(), "30000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "10000")
+            gui.match_profile_var.set(MATCH_OPERATION_PROFILES["production"].label)
+            gui._match_profile_changed()
+            self.assertIn("本番", gui.build_solver_button.cget("text"))
+            self.assertEqual(gui.parameter_vars["selection_time_ms"].get(), "20000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "10000")
             gui.team_role_var.set(TEAM_ROLE_LABELS["middle"])
             gui._team_role_changed()
-            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "40000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "20000")
             self.assertEqual(gui.parameter_vars["udon_sa"].get(), "0")
             self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "1")
             self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "0")
@@ -69,7 +80,7 @@ class GUITest(unittest.TestCase):
             self.assertTrue(gui.prepare_button.cget("text").startswith("1a"))
             gui.team_role_var.set(TEAM_ROLE_LABELS["long"])
             gui._team_role_changed()
-            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "50000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "20000")
             self.assertEqual(gui.parameter_vars["udon_sa"].get(), "1")
             self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "0")
             self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "1")

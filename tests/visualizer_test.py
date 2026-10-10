@@ -120,9 +120,9 @@ class BackendTest(unittest.TestCase):
             {role: (profile.time_limit_ms, profile.udon_sa,
                     profile.stable_beam_stop, profile.sa_stagnation_stop)
              for role, profile in TEAM_ROLE_PROFILES.items()},
-            {"lead": (20000, 0, 0, 0),
-             "middle": (40000, 0, 1, 0),
-             "long": (50000, 1, 0, 1)},
+            {"lead": (10000, 0, 0, 0),
+             "middle": (20000, 0, 1, 0),
+             "long": (20000, 1, 0, 1)},
         )
         summary = SolverResultSummary(
             day=2, stop="completed", elapsed_ms=1, expanded=2,
