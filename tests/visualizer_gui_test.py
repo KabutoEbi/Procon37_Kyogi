@@ -253,11 +253,22 @@ result
 
                 gui.work_var.set(directory)
                 gui.token_var.set("entered-token")
-                with mock.patch("backend.request_json", return_value=({"map": {}}, b"{}", 200)) as probe:
+                probe_responses = [
+                    ({"map": {}, "agents": [1, 2, 3, 4],
+                      "daySteps": [1]}, b"{}", 200),
+                    (None, b"", 200),
+                    ({"day": 0}, b"{}", 200),
+                    ({"revision": 0}, b"{}", 200),
+                ]
+                with mock.patch("app.messagebox.askyesno", return_value=True), \
+                     mock.patch("backend.request_json", side_effect=probe_responses) as probe:
                     self.assertEqual(probe.call_count, 0)
                     gui._check_connection()
                     drain()
+                    self.assertEqual(probe.call_count, 4)
                     self.assertEqual(probe.call_args.args[1], "entered-token")
+                    self.assertEqual(probe.call_args.args[2], "/")
+                    self.assertEqual(probe.call_args.kwargs["payload"], [[-1]] * 4)
 
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver), \
