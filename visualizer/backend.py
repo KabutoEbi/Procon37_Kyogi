@@ -1166,22 +1166,41 @@ class Workflow:
             raise WorkflowError("接続先は試合設定を返しませんでした")
         return "通信確認成功 (GET /setting: HTTP 200)"
 
-    def run_dummy_connection_test(self, *, interval: float = 0.2) -> str:
-        """実サーバーへダミー種別と全日分の待機回答を送る。"""
+    def run_dummy_connection_test(
+        self, *, interval: float = 0.2, setting_wait_seconds: float = 25.0,
+    ) -> str:
+        """実サーバーから問題を取得し、送信だけをダミーにする。"""
         self.connection.validate()
         if not math.isfinite(interval) or interval < 0.2:
             raise WorkflowError("取得間隔は0.2秒以上にしてください")
+        if not math.isfinite(setting_wait_seconds) or setting_wait_seconds < 0:
+            raise WorkflowError("問題取得待ち時間は0以上にしてください")
         try:
-            setting, _, status = request_json(
-                self.connection.url, self.connection.token, "/setting",
-                timeout=self.connection.timeout,
-            )
+            setting_deadline = time.monotonic() + setting_wait_seconds
+            while True:
+                self.check_stop()
+                try:
+                    setting, _, status = request_json(
+                        self.connection.url, self.connection.token, "/setting",
+                        timeout=self.connection.timeout,
+                    )
+                    break
+                except ApiError as error:
+                    if (error.status != 403
+                            or time.monotonic() >= setting_deadline):
+                        raise
+                    time.sleep(interval)
             agents = setting.get("agents") if isinstance(setting, dict) else None
             day_steps = setting.get("daySteps") if isinstance(setting, dict) else None
+            day_seconds = setting.get("daySeconds") if isinstance(setting, dict) else None
             if (status != 200 or not isinstance(agents, list) or not agents
-                    or not isinstance(day_steps, list) or not day_steps
+                    or not isinstance(day_steps, list) or len(day_steps) != 4
+                    or day_seconds != [20] * 4
                     or any(type(steps) is not int or steps <= 0 for steps in day_steps)):
-                raise WorkflowError("接続テスト用のエージェント数・日別ステップ数を取得できません")
+                raise WorkflowError(
+                    "接続テスト用のエージェント数、4日分のステップ数、"
+                    "20秒の行動回答時間を取得できません"
+                )
             dummy = [index % 2 for index in range(len(agents))]
             _value, _raw, post_status = request_json(
                 self.connection.url, self.connection.token, "/agent",

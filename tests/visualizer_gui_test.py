@@ -266,17 +266,24 @@ result
                 gui.token_var.set("entered-token")
                 probe_responses = [
                     ({"map": {}, "agents": [1, 2, 3, 4],
-                      "daySteps": [1]}, b"{}", 200),
+                      "daySteps": [1, 1, 1, 1],
+                      "daySeconds": [20, 20, 20, 20]}, b"{}", 200),
                     (None, b"", 200),
                     ({"day": 0}, b"{}", 200),
                     ({"revision": 0}, b"{}", 200),
+                    ({"day": 1}, b"{}", 200),
+                    ({"revision": 1}, b"{}", 200),
+                    ({"day": 2}, b"{}", 200),
+                    ({"revision": 2}, b"{}", 200),
+                    ({"day": 3}, b"{}", 200),
+                    ({"revision": 3}, b"{}", 200),
                 ]
                 with mock.patch("app.messagebox.askyesno", return_value=True), \
                      mock.patch("backend.request_json", side_effect=probe_responses) as probe:
                     self.assertEqual(probe.call_count, 0)
                     gui._check_connection()
                     drain()
-                    self.assertEqual(probe.call_count, 4)
+                    self.assertEqual(probe.call_count, 10)
                     self.assertEqual(probe.call_args.args[1], "entered-token")
                     self.assertEqual(probe.call_args.args[2], "/")
                     self.assertEqual(probe.call_args.kwargs["payload"], [[-1]] * 4)

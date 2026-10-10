@@ -98,7 +98,7 @@ class MatchOperationProfile:
 
 MATCH_OPERATION_PROFILES = {
     "connection_test": MatchOperationProfile(
-        "接続テスト（本番URL・全日ダミー）", 10000, 10000,
+        "接続テスト（本番URL・送信のみダミー・各20秒）", 20000, 20000,
     ),
     "rehearsal": MatchOperationProfile(
         "予行演習（本番URL・実探索/実送信・各30秒）", 30000, 30000,
@@ -114,7 +114,8 @@ def match_setting_issues(setting: dict[str, Any], profile_key: str) -> tuple[str
     issues: list[str] = []
     day_seconds = setting.get("daySeconds")
     if profile_key == "connection_test":
-        return ()
+        return (() if day_seconds == [20] * 4
+                else ("行動回答時間または日数",))
     map_value = setting.get("map")
     spots = setting.get("spots")
     expected_day_seconds = [60] * 5 if profile_key == "production" else [30] * 5
@@ -1724,6 +1725,9 @@ class SolverGUI(tk.Tk):
         if not messagebox.askyesno(
             "接続テスト（全日ダミー送信）",
             f"{workflow.connection.url}\n\n"
+            "問題・各日の状態は実サーバーから取得し、送信だけをダミーにします。\n"
+            "試合前10秒、選択カウントダウン10秒、タイプ回答20秒、"
+            "行動回答20秒×4日を確認します。\n"
             "ダミー種別を送信し、各日の公開を待って全ステップ待機を送信します。\n"
             "接続テスト用試合の全日程が送信対象です。\n"
             "主催者が指定した接続テスト時間中だけ実行してください。",
