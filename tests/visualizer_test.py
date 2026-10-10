@@ -114,7 +114,7 @@ class BackendTest(unittest.TestCase):
              for key, value in MATCH_OPERATION_PROFILES.items()},
             {"connection_test": (10000, 10000),
              "rehearsal": (30000, 30000),
-             "production": (20000, 20000)},
+             "production": (60000, 60000)},
         )
         self.assertEqual(
             {role: (profile.time_limit_ms, profile.udon_sa,
@@ -147,9 +147,16 @@ class BackendTest(unittest.TestCase):
             "jammedThreshold": 2,
         }
         self.assertEqual(match_setting_issues(rehearsal, "rehearsal"), ())
+        first_match = json.loads(json.dumps(rehearsal))
+        first_match["daySeconds"] = [60] * 5
         self.assertEqual(
-            match_setting_issues({"daySeconds": [20] * 4}, "production"),
+            match_setting_issues(first_match, "production"),
             (),
+        )
+        first_match["map"]["width"] = 24
+        self.assertEqual(
+            match_setting_issues(first_match, "production"),
+            ("マップサイズ",),
         )
         rehearsal["jammedThreshold"] = 3
         self.assertEqual(
