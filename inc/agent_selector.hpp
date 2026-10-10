@@ -84,9 +84,12 @@ private:
     static std::int32_t maximumSupplyCount(
         std::size_t agentCount,
         const AgentSelectorConfig& cfg) noexcept {
-        return cfg.maxSupplyCount < 0
-                   ? static_cast<std::int32_t>(agentCount / 2)
-                   : cfg.maxSupplyCount;
+        if (cfg.maxSupplyCount >= 0) return cfg.maxSupplyCount;
+        // 決勝の7台構成では5巡回+2補給を中心とする。系列数勝負で
+        // 4巡回+3補給を浅い試走が選ぶと、上限28系列の並行回収能力が
+        // 落ちるため、明示指定がない本番選択では補給2台を上限にする。
+        if (agentCount == 7) return 2;
+        return static_cast<std::int32_t>(agentCount / 2);
     }
 
     // 従来の公開試合から得た安全側の中心（3/4/5巡回）は下げない。
@@ -547,6 +550,8 @@ public:
             // 巡回車との比率がよい中心台数から近い順に比較する。
             const auto countOrder = supplyCountOrder(s, cfg, maxSupply);
             preferredSupply = countOrder.front();
+            const bool seriesPressure = n == 7 &&
+                s.field.brands.size() * 4 >= s.field.spots.size() * 3;
             auto appendBest = [&](std::int32_t count) {
                 if (trials.size() >= trialLimit) return;
                 const auto found = std::find_if(cs.begin(), cs.end(),
@@ -575,6 +580,23 @@ public:
                     if (count == preferredSupply) preferredSpread = spread;
                 }
             };
+
+            // 系列密度が高い決勝では、同じ補給台数でも開始位置による
+            // 日別系列差が大きい。中心の5巡回+2補給を位置違いまで先に
+            // 比較する。一方で6巡回+1補給が系列上限へ届く盤面もあるため、
+            // その最良候補を2番目に残してから2補給の位置違いを広げる。
+            if (seriesPressure) {
+                appendBest(preferredSupply);
+                appendBest(std::max(
+                    cfg.minSupplyCount, preferredSupply - 1));
+                appendSpread(preferredSupply);
+                for (std::size_t i = 0;
+                     i < cs.size() && trials.size() < trialLimit; ++i) {
+                    if (cs[i].supplyCount == preferredSupply &&
+                        std::find(trials.begin(), trials.end(), i) == trials.end())
+                        trials.push_back(i);
+                }
+            }
 
             // まず各台数の最良候補を比較し、実時間打切りで特定台数の
             // 位置違いだけに評価が偏らないようにする。

@@ -184,19 +184,29 @@ class BackendTest(unittest.TestCase):
             ("渋滞基準値",),
         )
         semifinal = {
-            "daySeconds": [60] * 7,
+            "daySeconds": [60] * 6,
+            "daySteps": [48, 56, 68, 68, 56, 72],
             "map": {"width": 24, "height": 24},
             "agents": list(range(5)),
             "spots": [
-                {"brand": index % 17, "stocks": 1}
+                {"brand": index % 18, "stocks": 3 if index < 12 else 2}
                 for index in range(24)
             ],
+            "fuelLimits": 80,
+            "busyThreshold": 1,
+            "jammedThreshold": 2,
         }
         self.assertEqual(match_setting_issues(semifinal, "semifinal"), ())
         semifinal["daySeconds"][3] = 59
         self.assertEqual(
             match_setting_issues(semifinal, "semifinal"),
-            ("行動回答時間",),
+            ("行動回答時間または日数",),
+        )
+        semifinal["daySeconds"][3] = 60
+        semifinal["fuelLimits"] = 79
+        self.assertEqual(
+            match_setting_issues(semifinal, "semifinal"),
+            ("燃料積載量上限",),
         )
         final = {
             "daySeconds": [60] * 6,

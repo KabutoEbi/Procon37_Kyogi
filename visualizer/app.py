@@ -110,7 +110,7 @@ MATCH_OPERATION_PROFILES = {
         "第1試合（本番URL・実探索/実送信・各60秒）", 60000, 60000,
     ),
     "semifinal": MatchOperationProfile(
-        "準決勝（24×24・選択90秒／回答60秒）", 90000, 60000,
+        "準決勝（24×24・6日・18系列・選択90秒／回答60秒）", 90000, 60000,
     ),
     "final": MatchOperationProfile(
         "決勝（32×32・選択120秒／回答60秒）", 120000, 60000,
@@ -139,17 +139,33 @@ def match_setting_issues(setting: dict[str, Any], profile_key: str) -> tuple[str
     spots = setting.get("spots")
     if profile_key in {"semifinal", "final"}:
         width, agent_count, spot_count, brand_min, brand_max = (
-            (24, 5, 24, 14, 20) if profile_key == "semifinal"
+            (24, 5, 24, 18, 18) if profile_key == "semifinal"
             else (32, 7, 32, 20, 28)
         )
         brand_count = (len({spot.get("brand") for spot in spots
                             if isinstance(spot, dict)})
                        if isinstance(spots, list) else -1)
+        semifinal_expected = (
+            (day_seconds == [60] * 6, "行動回答時間または日数"),
+            (setting.get("daySteps") == [48, 56, 68, 68, 56, 72],
+             "日別ステップ数"),
+            (isinstance(spots, list)
+             and sum(spot.get("stocks", 0) for spot in spots
+                     if isinstance(spot, dict)) == 60,
+             "最大在庫数合計"),
+            (setting.get("fuelLimits") == 80, "燃料積載量上限"),
+            (setting.get("busyThreshold") == 1, "混雑基準値"),
+            (setting.get("jammedThreshold") == 2, "渋滞基準値"),
+        )
+        profile_expected = (semifinal_expected
+            if profile_key == "semifinal" else (
+                (isinstance(day_seconds, list) and bool(day_seconds)
+                 and all(type(seconds) is int and seconds == 60
+                         for seconds in day_seconds),
+                 "行動回答時間"),
+            ))
         expected = (
-            (isinstance(day_seconds, list) and bool(day_seconds)
-             and all(type(seconds) is int and seconds == 60
-                     for seconds in day_seconds),
-             "行動回答時間"),
+            *profile_expected,
             (isinstance(map_value, dict) and map_value.get("width") == width
              and map_value.get("height") == width, "マップサイズ"),
             (isinstance(setting.get("agents"), list)

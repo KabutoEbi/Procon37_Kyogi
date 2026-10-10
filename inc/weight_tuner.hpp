@@ -170,6 +170,10 @@ inline void printTunedWeights(std::ostream& out, const EvaluationWeights& weight
     out << "benzen::EvaluationWeights weights;\n";
     out << "weights.newBrand = " << weights.newBrand << ";\n"
         << "weights.dailyBrand = " << weights.dailyBrand << ";\n"
+        << "weights.matchBrandCompletion = "
+        << weights.matchBrandCompletion << ";\n"
+        << "weights.dailyBrandCompletion = "
+        << weights.dailyBrandCompletion << ";\n"
         << "weights.udon = " << weights.udon << ";\n"
         << "weights.concentration = " << weights.concentration << ";\n";
     for (const auto& parameter : kTunableWeights)

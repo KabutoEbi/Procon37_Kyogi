@@ -234,71 +234,71 @@ inline BrandRepairResult repairDayBrands(
                         neighborhood.actionStarts = &trace.starts;
                         neighborhood.freeAgents[owner.second] = true;
                         if (radius > 1) {
-                            // Let the other patrols take over brands from A's
-                            // abandoned suffix. Radius 3 supports a two-step
-                            // responsibility chain on the four-agent tier.
-                            std::vector<std::pair<int, AgentIndex>> substitutes;
-                            for (const auto& other : patrols) {
-                                if (other.second == owner.second) continue;
-                                int cost = kImpassableCost - 1;
-                                for (std::size_t i = 0; i < s.field.spots.size(); ++i) {
-                                    const auto bit = brandBit(s.field.spots[i].brandIndex);
-                                    if ((result.finalState.acquiredSpots[owner.second] & spotBit(i)) &&
-                                        !(cp.state.dayBrands & bit))
-                                        cost = std::min(cost, distances[i][cp.state.agents[other.second].pos]);
+                                // Let the other patrols take over brands from A's
+                                // abandoned suffix. Radius 3 supports a two-step
+                                // responsibility chain on the four-agent tier.
+                                std::vector<std::pair<int, AgentIndex>> substitutes;
+                                for (const auto& other : patrols) {
+                                    if (other.second == owner.second) continue;
+                                    int cost = kImpassableCost - 1;
+                                    for (std::size_t i = 0; i < s.field.spots.size(); ++i) {
+                                        const auto bit = brandBit(s.field.spots[i].brandIndex);
+                                        if ((result.finalState.acquiredSpots[owner.second] & spotBit(i)) &&
+                                            !(cp.state.dayBrands & bit))
+                                            cost = std::min(cost, distances[i][cp.state.agents[other.second].pos]);
+                                    }
+                                    substitutes.emplace_back(cost, other.second);
                                 }
-                                substitutes.emplace_back(cost, other.second);
-                            }
-                            std::sort(substitutes.begin(), substitutes.end());
-                            if (substitutes.size() + 1 < radius) continue;
-                            for (std::size_t i = 0; i + 1 < radius; ++i)
-                                neighborhood.freeAgents[substitutes[i].second] = true;
+                                std::sort(substitutes.begin(), substitutes.end());
+                                if (substitutes.size() + 1 < radius) continue;
+                                for (std::size_t i = 0; i + 1 < radius; ++i)
+                                    neighborhood.freeAgents[substitutes[i].second] = true;
                         }
                         AgentIndex supply = ms.agents.size();
                         int nearest = kImpassableCost;
                         const auto p = s.field.toCoord(cp.state.agents[owner.second].pos);
                         for (AgentIndex a = 0; a < ms.agents.size(); ++a) {
-                            if (!ms.agents[a].isSupply()) continue;
-                            const auto q = s.field.toCoord(cp.state.agents[a].pos);
-                            const int cost = std::abs(p.x - q.x) + std::abs(p.y - q.y);
-                            if (cost < nearest) { nearest = cost; supply = a; }
+                                if (!ms.agents[a].isSupply()) continue;
+                                const auto q = s.field.toCoord(cp.state.agents[a].pos);
+                                const int cost = std::abs(p.x - q.x) + std::abs(p.y - q.y);
+                                if (cost < nearest) { nearest = cost; supply = a; }
                         }
                         if (supply < ms.agents.size()) neighborhood.freeAgents[supply] = true;
                         neighborhood.prefix.resize(ms.agents.size());
                         for (AgentIndex a = 0; a < ms.agents.size(); ++a) {
-                            neighborhood.prefix[a].assign(result.plan[a].begin(),
-                                result.plan[a].begin() + cp.cursors[a]);
-                            auto& pending = neighborhood.start.pendingActions[a];
-                            if (neighborhood.freeAgents[a] && pending.isWait()) {
-                                // A chosen long wait can be split at the cut.
-                                // Committed moves cannot be interrupted.
-                                const int elapsed = -neighborhood.prefix[a].back() - pending.remainingSteps;
-                                if (elapsed) neighborhood.prefix[a].back() = -elapsed;
-                                else neighborhood.prefix[a].pop_back();
-                                pending = PendingAction{};
-                            }
-                            if (!neighborhood.freeAgents[a]) {
-                                for (std::size_t i = 0; i < s.field.spots.size(); ++i)
-                                    if (result.finalState.acquiredSpots[a] & spotBit(i))
-                                        neighborhood.fixedBrands |= brandBit(s.field.spots[i].brandIndex);
-                            }
+                                neighborhood.prefix[a].assign(result.plan[a].begin(),
+                                    result.plan[a].begin() + cp.cursors[a]);
+                                auto& pending = neighborhood.start.pendingActions[a];
+                                if (neighborhood.freeAgents[a] && pending.isWait()) {
+                                    // A chosen long wait can be split at the cut.
+                                    // Committed moves cannot be interrupted.
+                                    const int elapsed = -neighborhood.prefix[a].back() - pending.remainingSteps;
+                                    if (elapsed) neighborhood.prefix[a].back() = -elapsed;
+                                    else neighborhood.prefix[a].pop_back();
+                                    pending = PendingAction{};
+                                }
+                                if (!neighborhood.freeAgents[a]) {
+                                    for (std::size_t i = 0; i < s.field.spots.size(); ++i)
+                                        if (result.finalState.acquiredSpots[a] & spotBit(i))
+                                            neighborhood.fixedBrands |= brandBit(s.field.spots[i].brandIndex);
+                                }
                         }
                         auto attemptDeadline = deadline;
                         if (deadline != Clock::time_point::max()) {
-                            const auto now = Clock::now();
-                            if (now >= deadline) { result.interrupted = true; break; }
-                            const auto slots = std::min<std::size_t>(4, config.maxAttempts - result.attempts);
-                            attemptDeadline = now + (deadline - now) / slots;
+                                const auto now = Clock::now();
+                                if (now >= deadline) { result.interrupted = true; break; }
+                                const auto slots = std::min<std::size_t>(4, config.maxAttempts - result.attempts);
+                                attemptDeadline = now + (deadline - now) / slots;
                         }
                         ++result.attempts;
                         const auto candidate = maximizeDayBrands(s, ms, prev, result.plan,
-                            config.nodesPerAttempt, attemptDeadline, &neighborhood, &distances);
+                                config.nodesPerAttempt, attemptDeadline, &neighborhood, &distances);
                         result.expanded += candidate.expanded;
                         if (score(candidate.finalState) > score(result.finalState)) {
-                            result.plan = candidate.plan;
-                            result.finalState = candidate.finalState;
-                            ++result.improvements;
-                            improved = true;
+                                result.plan = candidate.plan;
+                                result.finalState = candidate.finalState;
+                                ++result.improvements;
+                                improved = true;
                             break;
                         }
                     }

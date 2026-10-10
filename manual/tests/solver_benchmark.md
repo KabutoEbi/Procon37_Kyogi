@@ -122,6 +122,11 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `--variant no-joint-destroy-repair`: SA前の複数巡回車・補給車共同再構築だけを無効化する。
 - `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
 - `--agents N`, `--supplies N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、補給車数、スポット数、系列数、日数を上書きする。補給車数は台数未満でなければならない。
+- `--first-day-finals-model`: 本選1日目6面の地形比・外周スポット比を使う。24×24では発表済み準決勝条件（6日、指定ステップ、燃料80、在庫合計60）を設定し、32×32では第1試合の5日構成を拡大した決勝予測問題を生成する。
+- `--select-agents-ms N`: 問題生成後、固定末尾補給配置の代わりに`N`ミリ秒の全日試走で種別配置を選ぶ。`--single-day`より前に全日選択したい場合は別実行で選択し、得た配置を`--supply-mask N`で固定する。
+- `--supply-mask N`: bitが立ったエージェントを補給車として固定する。予測問題の配置再生・切り分け用。
+- `--selector-min-supplies N`, `--selector-max-supplies N`: 種別選択で比較する補給車台数の下限・上限を固定する。自動台数選択との切り分け用。
+- `--no-brand-completion-reward`: 全系列達成時の追加評価だけを0にして切り分ける。
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。
 - `--no-completion`: 途中解の未実行マクロ経路の完了を無効にする。
 - `--tight-fuel`: 燃料上限を初日ステップ数の半分にする。

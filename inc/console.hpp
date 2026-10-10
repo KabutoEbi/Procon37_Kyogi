@@ -151,6 +151,8 @@ inline void printConsoleEvaluation(
         << "  total=" << std::setprecision(12) << evaluation.total << '\n'
         << "  new-brands=" << evaluation.newBrandCount << '\n'
         << "  daily-brands=" << evaluation.dailyBrandCount << '\n'
+        << "  match-brand-completed=" << evaluation.matchBrandCompleted << '\n'
+        << "  daily-brand-completed=" << evaluation.dailyBrandCompleted << '\n'
         << "  udon=" << evaluation.udonCount << '\n'
         << "  fuel=" << evaluation.remainingFuel << '\n'
         << "  unreachable=" << evaluation.unreachableTargetCount << '\n'
