@@ -104,7 +104,7 @@ MATCH_OPERATION_PROFILES = {
         "予行演習（本番URL・実探索/実送信・各30秒）", 30000, 30000,
     ),
     "production": MatchOperationProfile(
-        "本番（本番URL・実探索/実送信・各20秒）", 20000, 20000,
+        "第1試合（本番URL・実探索/実送信・各60秒）", 60000, 60000,
     ),
 }
 
@@ -115,15 +115,11 @@ def match_setting_issues(setting: dict[str, Any], profile_key: str) -> tuple[str
     day_seconds = setting.get("daySeconds")
     if profile_key == "connection_test":
         return ()
-    if profile_key == "production":
-        if day_seconds != [20] * 4:
-            issues.append("行動回答時間または日数")
-        return tuple(issues)
-
     map_value = setting.get("map")
     spots = setting.get("spots")
+    expected_day_seconds = [60] * 5 if profile_key == "production" else [30] * 5
     expected = (
-        (day_seconds == [30] * 5, "行動回答時間または日数"),
+        (day_seconds == expected_day_seconds, "行動回答時間または日数"),
         (setting.get("daySteps") == [32, 36, 40, 40, 48], "日別ステップ数"),
         (isinstance(map_value, dict) and map_value.get("width") == 16
          and map_value.get("height") == 16, "マップサイズ"),
@@ -1285,7 +1281,7 @@ class SolverGUI(tk.Tk):
         )
         self._sync_day_time_limit()
         self._log(
-            f"試合区分: {profile.label} / 接続テスト・予行演習・本番は"
+            f"試合区分: {profile.label} / 接続テスト・予行演習・第1試合は"
             f"すべて.envの同一URLを使用 / ダミーは接続テストのみ"
         )
 
@@ -1610,7 +1606,7 @@ class SolverGUI(tk.Tk):
             self.token_var.set(config.token)
             status = "TOKEN読込済み" if config.token else "TOKEN未設定"
             self.status_var.set(
-                f".env再読込: {status}（接続テスト・予行演習・本番で共通）"
+                f".env再読込: {status}（接続テスト・予行演習・第1試合で共通）"
             )
         except (WorkflowError, OSError) as error:
             if show_dialog:
