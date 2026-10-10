@@ -52,11 +52,13 @@ from backend import (  # noqa: E402
 )
 from app import (  # noqa: E402
     SolverGUI,
+    MATCH_OPERATION_PROFILES,
     TEAM_ROLE_PROFILES,
     automatic_phase_is_waiting,
     compact_clock_status,
     duration_text,
     match_clock_values,
+    match_setting_issues,
     official_score_text,
 )
 from server_client.auto_submit import parser as auto_submit_parser  # noqa: E402
@@ -143,6 +145,13 @@ class BackendTest(unittest.TestCase):
 
     def test_three_person_presets_and_spoken_score(self) -> None:
         self.assertEqual(
+            {key: (value.selection_time_ms, value.fallback_day_time_ms)
+             for key, value in MATCH_OPERATION_PROFILES.items()},
+            {"connection_test": (10000, 10000),
+             "rehearsal": (30000, 30000),
+             "production": (20000, 20000)},
+        )
+        self.assertEqual(
             {role: (profile.time_limit_ms, profile.udon_sa,
                     profile.stable_beam_stop, profile.sa_stagnation_stop)
              for role, profile in TEAM_ROLE_PROFILES.items()},
@@ -156,6 +165,32 @@ class BackendTest(unittest.TestCase):
             match_brands=11, total_daily_brands=27,
         )
         self.assertEqual(official_score_text(summary), "11 / 27 / 31")
+
+    def test_match_setting_profile_checks(self) -> None:
+        rehearsal = {
+            "daySeconds": [30] * 5,
+            "daySteps": [32, 36, 40, 40, 48],
+            "map": {"width": 16, "height": 16},
+            "agents": [1, 2, 3, 4],
+            "spots": [
+                {"brand": index if index < 10 else index - 10,
+                 "stocks": 2 if index < 14 else 1}
+                for index in range(16)
+            ],
+            "fuelLimits": 40,
+            "busyThreshold": 1,
+            "jammedThreshold": 2,
+        }
+        self.assertEqual(match_setting_issues(rehearsal, "rehearsal"), ())
+        self.assertEqual(
+            match_setting_issues({"daySeconds": [20] * 4}, "production"),
+            (),
+        )
+        rehearsal["jammedThreshold"] = 3
+        self.assertEqual(
+            match_setting_issues(rehearsal, "rehearsal"),
+            ("渋滞基準値",),
+        )
 
     def test_spoken_checkpoint_uses_selected_target_day(self) -> None:
         self.assertEqual(
@@ -374,11 +409,11 @@ class BackendTest(unittest.TestCase):
         )
 
     def test_day_time_limit_ms(self) -> None:
-        self.assertEqual(SearchParameters().time_limit_ms, 60000)
+        self.assertEqual(SearchParameters().time_limit_ms, 20000)
         self.assertEqual(SearchParameters().safety_margin_ms, 5000)
         self.assertEqual(SearchParameters().send_reserve_ms, 5000)
         self.assertEqual(SearchParameters().trial_candidates, 6)
-        self.assertEqual(SearchParameters().selection_time_ms, 0)
+        self.assertEqual(SearchParameters().selection_time_ms, 20000)
         self.assertIn("--auto-beam-width", SearchParameters(auto_beam_width=1).arguments())
         self.assertIn("--udon-sa", SearchParameters(udon_sa=0).arguments())
         self.assertIn("--stable-beam-stop", SearchParameters(
@@ -678,6 +713,40 @@ result
                     workflow.check_connection()
             with mock.patch("backend.request_json", side_effect=ApiError(403, "not ready")):
                 self.assertIn("未確認", workflow.check_connection())
+
+    def test_dummy_connection_test_posts_agent_kinds_and_all_days(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Workflow(
+                ConnectionConfig("http://example", "typed-token"),
+                ROOT / "main", Path(directory),
+            )
+            responses = [
+                ({"map": {}, "agents": [10, 20, 30, 40],
+                  "daySteps": [3, 4]}, b"{}", 200),
+                (None, b"", 200),
+                ({"day": 0}, b"{}", 200),
+                ({"revision": 7}, b"{}", 200),
+                ({"day": 1}, b"{}", 200),
+                ({"revision": 8}, b"{}", 200),
+            ]
+            with mock.patch("backend.request_json", side_effect=responses) as request:
+                result = workflow.run_dummy_connection_test()
+            self.assertIn("全2日ダミー回答受理", result)
+            self.assertIn("revision=7,8", result)
+            self.assertEqual(request.call_count, 6)
+            self.assertEqual(request.call_args_list[0].args[2], "/setting")
+            self.assertEqual(request.call_args_list[1].args[2], "/agent")
+            self.assertEqual(request.call_args_list[1].kwargs["method"], "POST")
+            self.assertEqual(request.call_args_list[1].kwargs["payload"], [0, 1, 0, 1])
+            self.assertEqual(request.call_args_list[3].kwargs["payload"], [[-3]] * 4)
+            self.assertEqual(request.call_args_list[5].kwargs["payload"], [[-4]] * 4)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+            with mock.patch(
+                "backend.request_json", side_effect=ApiError(403, "not ready")
+            ):
+                with self.assertRaisesRegex(WorkflowError, "ダミーデータ送信失敗"):
+                    workflow.run_dummy_connection_test()
 
     def test_auto_wait_pause_resume_and_post_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

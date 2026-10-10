@@ -59,7 +59,7 @@ class SearchParameters:
     auto_beam_width: int = 0
     threads: int = 0
     # GUIでは設定読込時に対象日のdaySecondsで上書きする。
-    time_limit_ms: int = 60000
+    time_limit_ms: int = 20000
     safety_margin_ms: int = 5000
     max_actions: int = 4
     macro_actions: int = 1
@@ -73,8 +73,8 @@ class SearchParameters:
     trial_candidates: int = 6
     trial_beam_width: int = 32
     trial_joint_beam_width: int = 128
-    # 0なら盤面別の受付終了時刻まで使う。
-    selection_time_ms: int = 0
+    # 実サーバー用の運用プロファイルから設定する。
+    selection_time_ms: int = 20000
     send_reserve_ms: int = 5000
     clock_margin_ms: int = 1000
 
@@ -1159,6 +1159,79 @@ class Workflow:
         if status != 200 or not isinstance(value, dict) or "map" not in value:
             raise WorkflowError("接続先は試合設定を返しませんでした")
         return "通信確認成功 (GET /setting: HTTP 200)"
+
+    def run_dummy_connection_test(self, *, interval: float = 0.2) -> str:
+        """実サーバーへダミー種別と全日分の待機回答を送る。"""
+        self.connection.validate()
+        if not math.isfinite(interval) or interval < 0.2:
+            raise WorkflowError("取得間隔は0.2秒以上にしてください")
+        try:
+            setting, _, status = request_json(
+                self.connection.url, self.connection.token, "/setting",
+                timeout=self.connection.timeout,
+            )
+            agents = setting.get("agents") if isinstance(setting, dict) else None
+            day_steps = setting.get("daySteps") if isinstance(setting, dict) else None
+            if (status != 200 or not isinstance(agents, list) or not agents
+                    or not isinstance(day_steps, list) or not day_steps
+                    or any(type(steps) is not int or steps <= 0 for steps in day_steps)):
+                raise WorkflowError("接続テスト用のエージェント数・日別ステップ数を取得できません")
+            dummy = [index % 2 for index in range(len(agents))]
+            _value, _raw, post_status = request_json(
+                self.connection.url, self.connection.token, "/agent",
+                method="POST", payload=dummy, timeout=self.connection.timeout,
+            )
+            if post_status != 200:
+                raise WorkflowError(
+                    f"ダミー種別が受理されませんでした: HTTP {post_status}"
+                )
+
+            revisions: list[int] = []
+            for day, steps in enumerate(day_steps):
+                while True:
+                    self.check_stop()
+                    try:
+                        state, _, state_status = request_json(
+                            self.connection.url, self.connection.token, "/",
+                            timeout=self.connection.timeout,
+                        )
+                    except ApiError as error:
+                        if error.status == 403:
+                            time.sleep(interval)
+                            continue
+                        raise
+                    state_day = state.get("day") if isinstance(state, dict) else None
+                    if state_status != 200 or type(state_day) is not int:
+                        raise WorkflowError("接続テストの当日状態を取得できません")
+                    if state_day < day:
+                        time.sleep(interval)
+                        continue
+                    if state_day > day:
+                        raise WorkflowError(
+                            f"接続テストのday={day}を送信する前にday={state_day}へ進みました"
+                        )
+                    break
+
+                wait_answer = [[-steps] for _ in agents]
+                accepted, _, answer_status = request_json(
+                    self.connection.url, self.connection.token, "/",
+                    method="POST", payload=wait_answer,
+                    timeout=self.connection.timeout,
+                )
+                revision = accepted.get("revision") if isinstance(accepted, dict) else None
+                if answer_status != 200 or type(revision) is not int or revision < 0:
+                    raise WorkflowError(
+                        f"day={day}のダミー回答が受理されませんでした"
+                    )
+                revisions.append(revision)
+        except ApiError as error:
+            raise WorkflowError(f"ダミーデータ送信失敗: {error}") from error
+        return (
+            "接続テスト成功: GET /setting → "
+            f"POST /agent（ダミー{len(dummy)}台）→ "
+            f"全{len(day_steps)}日ダミー回答受理 "
+            f"(revision={','.join(map(str, revisions))})"
+        )
 
     def build_solver(self) -> CommandResult:
         output = self.solver

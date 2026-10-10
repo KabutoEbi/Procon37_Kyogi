@@ -89,6 +89,61 @@ TEAM_ROLE_LABELS = {
 }
 
 
+@dataclass(frozen=True)
+class MatchOperationProfile:
+    label: str
+    selection_time_ms: int
+    fallback_day_time_ms: int
+
+
+MATCH_OPERATION_PROFILES = {
+    "connection_test": MatchOperationProfile(
+        "接続テスト（本番URL・全日ダミー）", 10000, 10000,
+    ),
+    "rehearsal": MatchOperationProfile(
+        "予行演習（本番URL・実探索/実送信・各30秒）", 30000, 30000,
+    ),
+    "production": MatchOperationProfile(
+        "本番（本番URL・実探索/実送信・各20秒）", 20000, 20000,
+    ),
+}
+
+
+def match_setting_issues(setting: dict[str, Any], profile_key: str) -> tuple[str, ...]:
+    """取得した実サーバー設定が案内された試合条件と一致するか返す。"""
+    issues: list[str] = []
+    day_seconds = setting.get("daySeconds")
+    if profile_key == "connection_test":
+        return ()
+    if profile_key == "production":
+        if day_seconds != [20] * 4:
+            issues.append("行動回答時間または日数")
+        return tuple(issues)
+
+    map_value = setting.get("map")
+    spots = setting.get("spots")
+    expected = (
+        (day_seconds == [30] * 5, "行動回答時間または日数"),
+        (setting.get("daySteps") == [32, 36, 40, 40, 48], "日別ステップ数"),
+        (isinstance(map_value, dict) and map_value.get("width") == 16
+         and map_value.get("height") == 16, "マップサイズ"),
+        (isinstance(setting.get("agents"), list)
+         and len(setting["agents"]) == 4, "エージェント数"),
+        (isinstance(spots, list) and len(spots) == 16, "スポット数"),
+        (isinstance(spots, list)
+         and len({spot.get("brand") for spot in spots if isinstance(spot, dict)}) == 10,
+         "系列数"),
+        (isinstance(spots, list)
+         and sum(spot.get("stocks", 0) for spot in spots if isinstance(spot, dict)) == 30,
+         "最大在庫数合計"),
+        (setting.get("fuelLimits") == 40, "燃料積載量上限"),
+        (setting.get("busyThreshold") == 1, "混雑基準値"),
+        (setting.get("jammedThreshold") == 2, "渋滞基準値"),
+    )
+    issues.extend(label for valid, label in expected if not valid)
+    return tuple(issues)
+
+
 def official_score_text(summary: SolverResultSummary) -> str:
     """口頭比較用の公式辞書順スコアを返す。"""
     return (
@@ -323,6 +378,9 @@ class SolverGUI(tk.Tk):
         self._simple_teams: tuple[tuple[str, str], ...] = ()
         self.mode_var = tk.StringVar(value="manual")
         self.team_role_var = tk.StringVar(value=TEAM_ROLE_LABELS["normal"])
+        self.match_profile_var = tk.StringVar(
+            value=MATCH_OPERATION_PROFILES["connection_test"].label
+        )
         self.parameter_vars = {
             name: tk.StringVar(value=str(value))
             for name, value in vars(SearchParameters()).items()
@@ -382,6 +440,7 @@ class SolverGUI(tk.Tk):
         self._build_ui()
         self._reload_simple_teams(show_dialog=False)
         self._reload_env(show_dialog=False)
+        self._match_profile_changed()
         self.day_var.trace_add("write", lambda *_: self._day_changed())
         for variable in (
             self.url_var, self.token_var, self.work_var,
@@ -469,7 +528,6 @@ class SolverGUI(tk.Tk):
         )
         self.simple_stop_button.grid(row=0, column=12, padx=(0, 5))
         self._action_buttons.append(self.simple_start_button)
-
         mode = ttk.Frame(self, padding=(12, 0, 12, 8))
         mode.pack(fill=tk.X)
         ttk.Label(mode, text="日次回答の送信").pack(side=tk.LEFT, padx=(0, 8))
@@ -487,6 +545,18 @@ class SolverGUI(tk.Tk):
         self.team_role_box.pack(side=tk.LEFT, padx=4)
         self.team_role_box.bind("<<ComboboxSelected>>", self._team_role_changed)
         self.team_role_box.set(TEAM_ROLE_LABELS["normal"])
+        ttk.Label(mode, text="試合区分").pack(side=tk.LEFT, padx=(14, 4))
+        self.match_profile_box = ttk.Combobox(
+            mode,
+            textvariable=self.match_profile_var,
+            values=tuple(profile.label for profile in MATCH_OPERATION_PROFILES.values()),
+            state="readonly",
+            width=27,
+        )
+        self.match_profile_box.pack(side=tk.LEFT, padx=4)
+        self.match_profile_box.bind(
+            "<<ComboboxSelected>>", self._match_profile_changed
+        )
         self.stop_button = ttk.Button(mode, text="停止", command=self._request_stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=6)
         spoken = ttk.Frame(mode)
@@ -608,7 +678,10 @@ class SolverGUI(tk.Tk):
         self.token_entry.grid(row=2, column=1, columnspan=2, sticky=tk.EW)
         ttk.Label(config, text="timeout(s)").grid(row=2, column=3, sticky=tk.E, padx=(12, 5))
         ttk.Entry(config, textvariable=self.timeout_var, width=8).grid(row=2, column=4, sticky=tk.W)
-        check = ttk.Button(config, text="通信確認（手動）", command=self._check_connection)
+        check = ttk.Button(
+            config, text="接続テスト（全日ダミー送信）",
+            command=self._check_connection,
+        )
         check.grid(row=2, column=5, sticky=tk.E)
         self._action_buttons.append(check)
         self._build_file_panel(config)
@@ -1180,6 +1253,36 @@ class SolverGUI(tk.Tk):
             "normal",
         )
 
+    def _match_profile(self) -> MatchOperationProfile:
+        selected = self.match_profile_var.get()
+        return next(
+            (profile for profile in MATCH_OPERATION_PROFILES.values()
+             if profile.label == selected),
+            MATCH_OPERATION_PROFILES["connection_test"],
+        )
+
+    def _match_profile_key(self) -> str:
+        selected = self.match_profile_var.get()
+        return next(
+            (key for key, profile in MATCH_OPERATION_PROFILES.items()
+             if profile.label == selected),
+            "connection_test",
+        )
+
+    def _match_profile_changed(self, _event: object | None = None) -> None:
+        profile = self._match_profile()
+        self.parameter_vars["selection_time_ms"].set(
+            str(profile.selection_time_ms)
+        )
+        self.parameter_vars["time_limit_ms"].set(
+            str(profile.fallback_day_time_ms)
+        )
+        self._sync_day_time_limit()
+        self._log(
+            f"試合区分: {profile.label} / 接続テスト・予行演習・本番は"
+            f"すべて.envの同一URLを使用 / ダミーは接続テストのみ"
+        )
+
     def _team_role_changed(self, _event: object | None = None) -> None:
         role = self._team_role()
         if role != "normal":
@@ -1500,7 +1603,9 @@ class SolverGUI(tk.Tk):
             self.url_var.set(config.url)
             self.token_var.set(config.token)
             status = "TOKEN読込済み" if config.token else "TOKEN未設定"
-            self.status_var.set(f".env再読込: {status}")
+            self.status_var.set(
+                f".env再読込: {status}（接続テスト・予行演習・本番で共通）"
+            )
         except (WorkflowError, OSError) as error:
             if show_dialog:
                 messagebox.showerror(".env読込", str(error), parent=self)
@@ -1603,8 +1708,29 @@ class SolverGUI(tk.Tk):
 
     def _check_connection(self) -> None:
         workflow = self._workflow_or_dialog()
-        if workflow is not None:
-            self._run_task("通信確認", workflow.check_connection, self._log)
+        if workflow is None:
+            return
+        if self._match_profile_key() != "connection_test":
+            messagebox.showerror(
+                "接続テスト",
+                "ダミーデータは「接続テスト」区分でのみ送信できます。",
+                parent=self,
+            )
+            return
+        if not messagebox.askyesno(
+            "接続テスト（全日ダミー送信）",
+            f"{workflow.connection.url}\n\n"
+            "ダミー種別を送信し、各日の公開を待って全ステップ待機を送信します。\n"
+            "接続テスト用試合の全日程が送信対象です。\n"
+            "主催者が指定した接続テスト時間中だけ実行してください。",
+            parent=self,
+        ):
+            return
+        self._run_task(
+            "接続テスト（全日ダミー送信）",
+            workflow.run_dummy_connection_test,
+            self._log,
+        )
 
     def _prepare_for_role(self) -> None:
         if self._team_role() in ("middle", "long"):
@@ -1770,6 +1896,15 @@ class SolverGUI(tk.Tk):
         self._sync_day_time_limit()
         self._refresh_views()
         self._log_match_schedule(path)
+        try:
+            setting = read_json(path)
+            issues = match_setting_issues(setting, self._match_profile_key())
+            if issues:
+                self._log("⚠ 試合条件不一致: " + "、".join(issues))
+            else:
+                self._log("✓ 選択中の試合区分と取得設定が一致しました")
+        except (WorkflowError, OSError, TypeError, ValueError):
+            pass
 
     def _log_match_schedule(self, path: Path) -> None:
         try:
@@ -2247,10 +2382,22 @@ class SolverGUI(tk.Tk):
             steps = str(snapshot.day_steps[snapshot.day])
         days_text = str(len(snapshot.day_steps)) if snapshot.day_steps else "未取得"
         brand_count = len({brand for brand, _ in snapshot.spots.values()})
+        stock_total = sum(snapshot.stock_limits.values())
+        thresholds = ""
+        try:
+            setting_value = read_json(Path(self.setting_var.get()).expanduser())
+            thresholds = (
+                f"  busy={setting_value.get('busyThreshold', '-')}"
+                f"  jammed={setting_value.get('jammedThreshold', '-')}"
+            ) if isinstance(setting_value, dict) else ""
+        except (WorkflowError, OSError):
+            pass
         self.map_info_var.set(
             f"{snapshot.width}×{snapshot.height}  day={day_text}  days={days_text}  "
-            f"steps={steps}  agents={len(snapshot.agents)}  spots={len(snapshot.spots)}  "
-            f"brands={brand_count}  fuelLimit={snapshot.fuel_limit}"
+            f"steps={steps} ({'/'.join(map(str, snapshot.day_steps))})  "
+            f"agents={len(snapshot.agents)}  spots={len(snapshot.spots)}  "
+            f"brands={brand_count}  maxStocks={stock_total}  "
+            f"fuelLimit={snapshot.fuel_limit}{thresholds}"
         )
 
     def _clear_answer_route(self) -> None:
