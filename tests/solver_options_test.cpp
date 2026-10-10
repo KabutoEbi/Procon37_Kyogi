@@ -16,10 +16,15 @@ int main() {
     assert(parse({"main"}).beam.smallBoardQuantityFirstRoutes);
     assert(parse({"main"}).beam.smallBoardFinalColumns);
     assert(parse({"main"}).beam.spotRouteLns.terminalWaitFill);
+    assert(parse({"main"}).beam.spotRouteLns.trafficAwareJointRoutes);
     assert(!parse({"main", "--terminal-wait-fill", "0"})
         .beam.spotRouteLns.terminalWaitFill);
     assert(!parse({"main", "--small-board-final-columns", "0"})
         .beam.smallBoardFinalColumns);
+    assert(parse({"main", "--traffic-aware-joint-routes", "1"})
+        .beam.spotRouteLns.trafficAwareJointRoutes);
+    assert(!parse({"main", "--traffic-aware-joint-routes", "0"})
+        .beam.spotRouteLns.trafficAwareJointRoutes);
     assert(!parse({"main", "--small-board-joint-refinement", "0"})
         .beam.smallBoardJointRefinement);
     assert(!parse({"main", "--small-board-quantity-first", "0"})
@@ -99,6 +104,7 @@ int main() {
         {"main", "--small-board-quantity-first", "2"},
         {"main", "--small-board-final-columns", "2"},
         {"main", "--terminal-wait-fill", "2"},
+        {"main", "--traffic-aware-joint-routes", "2"},
         {"main", "--small-board-beam-budget-percent", "49"},
         {"main", "--small-board-beam-budget-percent", "96"},
         {"main", "--small-board-brand-node-limit", "999"},

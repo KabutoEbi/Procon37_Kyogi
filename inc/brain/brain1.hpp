@@ -3855,7 +3855,24 @@ inline BeamSearchResult brain1(
             remember();
         }
     }
+    const auto refineTimedJointRoutes = [&] {
+        if (!config.spotRouteLns.trafficAwareJointRoutes || !finalDay ||
+            !runSpotRouteLns || setting.field.width != 16 ||
+            setting.field.height != 16 || Clock::now() >= hardDeadline) return;
+        const auto joint = searchTeamSpotRoutes(setting, matchState,
+            previousScore, result.plan, config.spotRouteLns, hardDeadline);
+        result.spotRouteLnsAttempts += joint.attempts;
+        result.spotRouteLnsImprovements += joint.improvements;
+        if (joint.improvements) {
+            result.plan = joint.plan;
+            result.finalState = joint.finalState;
+            changed = true;
+        }
+    };
     if (result.stableBeamStopped) {
+        // Stable beam widths do not rule out a better quantity allocation.
+        // Keep the fast termination and try only this bounded final-day LNS.
+        refineTimedJointRoutes();
         if (changed) {
             EvaluationContext context;
             context.scoreAtDayStart = previousScore;
@@ -4009,6 +4026,9 @@ inline BeamSearchResult brain1(
         }
         if (config.spotRouteLns.teamNeighborhood && Clock::now() < legacyRouteDeadline) {
             auto teamConfig = config.spotRouteLns;
+            // Keep the established pre-SA trajectory. The timed joint-route
+            // portfolio is compared only after all final-day refiners finish.
+            teamConfig.trafficAwareJointRoutes = false;
             if (limited && legacyRouteDeadline - Clock::now() > std::chrono::seconds(3))
                 teamConfig.maxTeamAttempts = std::max<std::size_t>(
                     teamConfig.maxTeamAttempts, 2000);
@@ -4314,6 +4334,10 @@ inline BeamSearchResult brain1(
             changed = true;
         }
     }
+    // New neighborhoods must not steal time from the established beam, brand
+    // rescue or SA. On the final day, use only leftover time and keep the
+    // complete incumbent unless official replay strictly improves its score.
+    refineTimedJointRoutes();
     if (changed) {
         EvaluationContext context;
         context.scoreAtDayStart = previousScore;

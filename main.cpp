@@ -136,6 +136,8 @@ int runSolver(int argc, char* argv[], int firstArg, const SolverOptions& options
               << " route-columns=" << (config.routeColumns.enabled ? 1 : 0)
               << " terminal-wait-fill="
               << (config.spotRouteLns.terminalWaitFill ? 1 : 0)
+              << " traffic-aware-joint-routes="
+              << (config.spotRouteLns.trafficAwareJointRoutes ? 1 : 0)
               << " small-board-quantity-first="
               << (config.smallBoardQuantityFirstRoutes ? 1 : 0)
               << " quantity-budget-percent=" << config.quantityBudgetPercent

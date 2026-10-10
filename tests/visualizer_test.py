@@ -57,6 +57,7 @@ from app import (  # noqa: E402
     match_clock_values,
     match_setting_issues,
     official_score_text,
+    team_role_time_limit_ms,
 )
 from server_client.auto_submit import parser as auto_submit_parser  # noqa: E402
 
@@ -117,13 +118,18 @@ class BackendTest(unittest.TestCase):
              "production": (60000, 60000)},
         )
         self.assertEqual(
-            {role: (profile.time_limit_ms, profile.udon_sa,
+            {role: (profile.time_limit_ms, profile.production_time_limit_ms,
+                    profile.udon_sa,
                     profile.stable_beam_stop, profile.sa_stagnation_stop)
              for role, profile in TEAM_ROLE_PROFILES.items()},
-            {"lead": (10000, 0, 0, 0),
-             "middle": (20000, 0, 1, 0),
-             "long": (20000, 1, 0, 1)},
+            {"lead": (10000, 10000, 0, 0, 0),
+             "middle": (20000, 40000, 0, 1, 0),
+             "long": (20000, 50000, 1, 0, 1)},
         )
+        self.assertEqual(team_role_time_limit_ms("lead", "production"), 10000)
+        self.assertEqual(team_role_time_limit_ms("middle", "rehearsal"), 20000)
+        self.assertEqual(team_role_time_limit_ms("middle", "production"), 40000)
+        self.assertEqual(team_role_time_limit_ms("long", "production"), 50000)
         summary = SolverResultSummary(
             day=2, stop="completed", elapsed_ms=1, expanded=2,
             daily_udon=7, daily_brands=5, total_udon=31,

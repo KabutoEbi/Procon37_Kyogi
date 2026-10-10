@@ -29,6 +29,9 @@ struct SpotRouteLnsConfig {
     bool preserveIntermediateState = true;
     // 系列を確保した後、複数巡回車の取得列を同時に組み替える。
     bool teamNeighborhood = true;
+    // Rebuild joint moves with the actual supply timeline, order insertions
+    // by directed traffic cost, and exchange complete patrol suffixes.
+    bool trafficAwareJointRoutes = true;
     std::size_t maxTeamAttempts = 320;
     std::size_t maxTeamRounds = 3;
     // 翌日位置の完全一致を外す場合も、到達系列数と燃料を検査する。
@@ -131,7 +134,8 @@ inline bool rebuildSpotSuffix(
     const RepairCheckpoint& checkpoint, AgentIndex agent,
     const std::vector<std::size_t>& visits, CellPos endAnchor,
     AgentPlan& plan, std::vector<DijkstraTable>& pathCache,
-    std::vector<bool>& cached, const RepairTrace* supplyTrace = nullptr) {
+    std::vector<bool>& cached, const RepairTrace* supplyTrace = nullptr,
+    bool synchronizeSupplyWait = false) {
     const GameState& state = checkpoint.state;
     if (state.pendingActions[agent].active) return false;
     CellPos pos = state.agents[agent].pos;
@@ -158,8 +162,34 @@ inline bool rebuildSpotSuffix(
             int time = state.dayStepLimit - remainingSteps;
             auto nextPos = current;
             int nextFuel = remainingFuel;
-            if (!walkPatrolPath(setting, matchState, path.directions,
-                nextPos, nextFuel, time, supplyTrace, [](CellPos) {})) return false;
+            bool feasible = walkPatrolPath(setting, matchState, path.directions,
+                nextPos, nextFuel, time, supplyTrace, [](CellPos) {});
+            // A route may need a rendezvous at its current stop before it can
+            // depart. Wait only for an actual visit by a supply in the fixed
+            // timeline, then retry from the untouched pre-move state.
+            if (!feasible && synchronizeSupplyWait && remainingFuel < setting.fuelLimit) {
+                const int startTime = state.dayStepLimit - remainingSteps;
+                for (int meeting = startTime + 1;
+                     meeting + path.cost.steps <= state.dayStepLimit &&
+                     static_cast<std::size_t>(meeting) < supplyTrace->checkpoints.size();
+                     ++meeting) {
+                    const auto& frame = supplyTrace->checkpoints[meeting].state;
+                    bool supplyHere = false;
+                    for (AgentIndex supply = 0; supply < frame.agentCount; ++supply)
+                        supplyHere |= frame.agents[supply].isSupply() &&
+                            frame.agents[supply].pos == current;
+                    if (!supplyHere) continue;
+                    nextPos = current;
+                    nextFuel = setting.fuelLimit;
+                    time = meeting;
+                    if (!walkPatrolPath(setting, matchState, path.directions,
+                        nextPos, nextFuel, time, supplyTrace, [](CellPos) {})) continue;
+                    output.push_back(startTime - meeting);
+                    feasible = true;
+                    break;
+                }
+            }
+            if (!feasible) return false;
             for (const auto direction : path.directions)
                 output.push_back(static_cast<int>(direction));
             if (path.directions.empty()) output.push_back(-1);
@@ -599,7 +629,7 @@ inline SpotRouteLnsResult fillTerminalPatrolWaits(
 // Joint spot-level search. A move, swap, or short segment relocation changes
 // two complete patrol routes at once. Full simulation handles stock contention,
 // incidental pickups and refuelling by the unchanged supply route.
-inline SpotRouteLnsResult improveTeamSpotRoutes(
+inline SpotRouteLnsResult searchTeamSpotRoutes(
     const MatchSetting& setting, const MatchState& matchState, ScoreState previous,
     const DailyPlan& incumbent, const SpotRouteLnsConfig& config,
     std::chrono::steady_clock::time_point deadline) {
@@ -635,6 +665,13 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
         if (finalDay || !config.preserveIntermediateState) return true;
         if (candidate.score.matchBrands != initial.state.score.matchBrands ||
             candidate.dayBrands != initial.state.dayBrands) return false;
+        if (config.trafficAwareJointRoutes) {
+            for (const AgentIndex a : patrols)
+                if (candidate.agents[a].pos != initial.state.agents[a].pos ||
+                    candidate.agents[a].fuel != initial.state.agents[a].fuel)
+                    return false;
+            return true;
+        }
         if (config.allowFuturePositionChange) {
             const auto future = detail::futureRoutePotential(
                 setting, matchState, candidate, pathCache, cached);
@@ -666,8 +703,27 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
             routes[a] = detail::acquiredSpotSequence(trace, workingState, a, 0);
         const DailyPlan basePlan = workingPlan;
         const GameState baseState = workingState;
+        detail::RepairTrace supplyTrace;
+        if (config.trafficAwareJointRoutes) {
+            supplyTrace = trace;
+            supplyTrace.checkpoints.push_back({baseState, {}});
+        }
         DailyPlan roundPlan;
         GameState roundState{};
+        std::int64_t roundTravel = 0;
+        const auto travelSteps = [&](const DailyPlan& plan) {
+            std::int64_t total = 0;
+            for (const AgentIndex a : patrols) {
+                CellPos pos = matchState.agents[a].pos;
+                for (const int action : plan[a]) {
+                    if (!isMoveAction(action)) continue;
+                    total += moveStepCost(setting, matchState, pos);
+                    pos = setting.field.neighbor(pos,
+                        static_cast<Direction>(action));
+                }
+            }
+            return total;
+        };
         bool found = false;
         std::size_t roundAttempts = 0;
         const auto tryRoutes = [&](AgentIndex first, AgentIndex second,
@@ -678,10 +734,13 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
             const auto rebuild = [&](AgentIndex a,
                                      const std::vector<std::size_t>& visits) {
                 trial[a].clear();
-                const CellPos anchor = finalDay || config.allowFuturePositionChange
+                const CellPos anchor = finalDay ||
+                    (config.allowFuturePositionChange && !config.trafficAwareJointRoutes)
                     ? kInvalidCell : baseState.agents[a].pos;
                 return detail::rebuildSpotSuffix(setting, matchState, start,
-                    a, visits, anchor, trial[a], pathCache, cached);
+                    a, visits, anchor, trial[a], pathCache, cached,
+                    config.trafficAwareJointRoutes ? &supplyTrace : nullptr,
+                    config.trafficAwareJointRoutes);
             };
             if (!rebuild(first, firstVisits) ||
                 (second != first && !rebuild(second, secondVisits))) return;
@@ -690,12 +749,16 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
             ++result.attempts;
             ++result.teamAttempts;
             const auto replay = simulateDay(setting, matchState, trial, previous);
-            if (!replay.valid || score(replay.state) < score(baseState) ||
-                (found && score(replay.state) <= score(roundState))) return;
+            if (!replay.valid || score(replay.state) < score(baseState)) return;
+            const auto travel = config.trafficAwareJointRoutes
+                ? travelSteps(trial) : 0;
+            if (found && std::make_pair(score(replay.state), -travel) <=
+                std::make_pair(score(roundState), -roundTravel)) return;
             if (!preservesFuture(replay.state)) return;
             found = true;
             roundPlan = std::move(trial);
             roundState = replay.state;
+            roundTravel = travel;
         };
         const auto budgetLeft = [&] {
             return !stopped() && roundAttempts < config.maxTeamAttempts;
@@ -708,14 +771,88 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
             return std::make_pair(routes[a].size(), a) <
                    std::make_pair(routes[b].size(), b);
         });
+        struct Insertion {
+            AgentIndex agent;
+            std::size_t spot;
+            std::size_t at;
+            int detour;
+        };
+        std::vector<Insertion> insertions;
+        const auto distance = [&](CellPos from, CellPos to) {
+            const auto index = static_cast<std::size_t>(from);
+            if (!cached[index]) {
+                pathCache[index] = Brain0::dijkstra(setting, matchState, from);
+                cached[index] = true;
+            }
+            return pathCache[index].distances[static_cast<std::size_t>(to)];
+        };
         for (const AgentIndex receiver : receivers) {
             for (std::size_t spot = 0; spot < setting.field.spots.size() && budgetLeft(); ++spot) {
                 if (baseState.remainingStocks[spot] <= 0 ||
                     (baseState.acquiredSpots[receiver] & spotBit(spot))) continue;
                 for (std::size_t at = 0; at <= routes[receiver].size() && budgetLeft(); ++at) {
+                    if (config.trafficAwareJointRoutes) {
+                        const CellPos from = at == 0
+                            ? matchState.agents[receiver].pos
+                            : setting.field.spots[routes[receiver][at - 1]].pos;
+                        const CellPos goal = setting.field.spots[spot].pos;
+                        int detour = std::max(1, distance(from, goal));
+                        if (at < routes[receiver].size()) {
+                            const CellPos to = setting.field.spots[routes[receiver][at]].pos;
+                            const int onward = distance(goal, to);
+                            const int direct = distance(from, to);
+                            if (detour >= kImpassableCost || onward >= kImpassableCost ||
+                                direct >= kImpassableCost) continue;
+                            detour += onward - direct;
+                        }
+                        if (detour < kImpassableCost)
+                            insertions.push_back({receiver, spot, at, detour});
+                        continue;
+                    }
                     auto changed = routes[receiver];
                     changed.insert(changed.begin() + at, spot);
                     tryRoutes(receiver, receiver, changed, changed);
+                }
+            }
+        }
+
+        // Small directed detours leave more time for another pickup. Stock
+        // is only a tie-break; the full replay resolves competing patrols.
+        std::stable_sort(insertions.begin(), insertions.end(), [&](const auto& a, const auto& b) {
+            return std::make_tuple(a.detour, -baseState.remainingStocks[a.spot]) <
+                std::make_tuple(b.detour, -baseState.remainingStocks[b.spot]);
+        });
+        for (const auto& insertion : insertions) {
+            if (!budgetLeft()) break;
+            auto changed = routes[insertion.agent];
+            changed.insert(changed.begin() + insertion.at, insertion.spot);
+            tryRoutes(insertion.agent, insertion.agent, changed, changed);
+        }
+
+        // 2-opt-star: exchange whole suffixes without reversing their order.
+        // A narrow traffic corridor can make a one-visit transfer infeasible
+        // even though swapping the two remaining tours is feasible.
+        if (config.trafficAwareJointRoutes) {
+            for (std::size_t i = 0; i < patrols.size() && budgetLeft(); ++i) {
+                for (std::size_t j = i + 1; j < patrols.size() && budgetLeft(); ++j) {
+                    const AgentIndex a = patrols[i], b = patrols[j];
+                    for (std::size_t x = 0; x < routes[a].size() && budgetLeft(); ++x) {
+                        for (std::size_t y = 0; y < routes[b].size() && budgetLeft(); ++y) {
+                            auto ar = std::vector<std::size_t>(routes[a].begin(), routes[a].begin() + x);
+                            auto br = std::vector<std::size_t>(routes[b].begin(), routes[b].begin() + y);
+                            ar.insert(ar.end(), routes[b].begin() + y, routes[b].end());
+                            br.insert(br.end(), routes[a].begin() + x, routes[a].end());
+                            const auto duplicate = [](const auto& visits) {
+                                SpotMask seen = 0;
+                                for (const auto spot : visits) {
+                                    if (seen & spotBit(spot)) return true;
+                                    seen |= spotBit(spot);
+                                }
+                                return false;
+                            };
+                            if (!duplicate(ar) && !duplicate(br)) tryRoutes(a, b, ar, br);
+                        }
+                    }
                 }
             }
         }
@@ -791,6 +928,36 @@ inline SpotRouteLnsResult improveTeamSpotRoutes(
             ++result.improvements;
         }
     }
+    return result;
+}
+
+// Retain the established neighborhood trajectory before adding the timed
+// refuel / suffix-exchange candidates. This prevents a new move ordering from
+// replacing a productive legacy move under the same attempt limit.
+inline SpotRouteLnsResult improveTeamSpotRoutes(
+    const MatchSetting& setting, const MatchState& matchState, ScoreState previous,
+    const DailyPlan& incumbent, const SpotRouteLnsConfig& config,
+    std::chrono::steady_clock::time_point deadline) {
+    auto legacyConfig = config;
+    legacyConfig.trafficAwareJointRoutes = false;
+    auto result = searchTeamSpotRoutes(setting, matchState, previous,
+        incumbent, legacyConfig, deadline);
+    if (!config.trafficAwareJointRoutes ||
+        std::chrono::steady_clock::now() >= deadline) return result;
+    const auto improved = searchTeamSpotRoutes(setting, matchState, previous,
+        result.plan, config, deadline);
+    const auto score = [](const GameState& state) {
+        return std::make_tuple(countBits(state.score.matchBrands),
+            countBits(state.dayBrands), state.score.totalUdon);
+    };
+    if (score(improved.finalState) > score(result.finalState)) {
+        result.plan = improved.plan;
+        result.finalState = improved.finalState;
+        result.improvements += improved.improvements;
+    }
+    result.attempts += improved.attempts;
+    result.teamAttempts += improved.teamAttempts;
+    result.interrupted |= improved.interrupted;
     return result;
 }
 
