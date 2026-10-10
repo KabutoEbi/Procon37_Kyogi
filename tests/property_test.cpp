@@ -41,6 +41,7 @@ void checkRandomMaps() {
         create.seed = seed;
         const MatchSetting setting = ProblemCreator::generate(create).setting;
         const MatchState state = makeState(setting, seed);
+        bool checkedShortestFuelTieBreak = false;
 
         for (AgentIndex a = 0; a < setting.agentCount(); ++a) {
             const CellPos start = setting.agentStarts[a];
@@ -62,6 +63,36 @@ void checkRandomMaps() {
                 assert(pos == spot.pos);
                 assert(steps == path.cost.steps && fuel == path.cost.fuel);
                 assert(table.patrolFuelCosts[spot.pos] == fuel);
+                if (!checkedShortestFuelTieBreak) {
+                    const auto expanded = Brain0::shortestFuelConstrainedPath(
+                        setting, state, start, spot.pos, AgentKind::Patrol,
+                        static_cast<int>(2 * setting.field.cellCount()));
+                    assert(expanded.reachable);
+                    assert(expanded.cost.steps == path.cost.steps);
+                    assert(expanded.cost.fuel == path.cost.fuel);
+                    checkedShortestFuelTieBreak = true;
+                }
+
+                const auto fuelTable = Brain0::minimumFuelDijkstra(
+                    setting, state, start);
+                const auto fuelPath = Brain0::restorePath(
+                    setting, fuelTable, spot.pos, AgentKind::Patrol);
+                assert(fuelPath.reachable);
+                assert(fuelPath.cost.fuel <= path.cost.fuel);
+
+                const auto roadTable = Brain0::roadAvoidingDijkstra(
+                    setting, state, start);
+                const auto roadPath = Brain0::restorePath(
+                    setting, roadTable, spot.pos, AgentKind::Patrol);
+                assert(roadPath.reachable);
+                const auto roadMoves = [&](const PathResult& candidate) {
+                    int count = 0;
+                    for (std::size_t j = 0; j < candidate.directions.size(); ++j)
+                        count += setting.field.at(candidate.positions[j]).type ==
+                            CellType::Road;
+                    return count;
+                };
+                assert(roadMoves(roadPath) <= roadMoves(path));
             }
         }
 

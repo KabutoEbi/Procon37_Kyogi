@@ -50,6 +50,9 @@ int main() {
     expiredPrior.arenaScorePrior = false;
     assert(benzen::selectAgentKinds(highStock, expiredPrior).supplyCount == 2);
     assert(parse({"main"}).selection.trialCandidateLimit == 6);
+    assert(parse({"main"}).selection.incumbentSupplyMask == -1);
+    assert(parse({"main", "--incumbent-agent-mask", "5"})
+        .selection.incumbentSupplyMask == 5);
     assert(parse({"main"}).beam.safetyMarginMs == 5000);
     assert(parse({"main"}).beam.coordinatedRefinement);
     assert(!parse({"main", "--coordinated-refinement", "0"}).beam.coordinatedRefinement);
@@ -67,6 +70,12 @@ int main() {
     assert(parse({"main"}).beam.adaptiveLongSearch);
     assert(parse({"main"}).beam.udonAlns.simulatedAnnealing);
     assert(parse({"main"}).beam.udonAlns.jointDestroyRepair);
+    assert(!parse({"main"}).beam.routeColumns.pathPortfolio);
+    assert(parse({"main", "--route-path-portfolio", "1"})
+        .beam.routeColumns.pathPortfolio);
+    assert(!parse({"main"}).beam.routeColumns.brandAwareRescue);
+    assert(parse({"main", "--brand-aware-rescue", "1"})
+        .beam.routeColumns.brandAwareRescue);
     assert(!parse({"main"}).beam.stopOnStableBeam);
     assert(!parse({"main"}).beam.udonAlns.stopOnStagnation);
     assert(parse({"main", "--stable-beam-stop", "1"})
@@ -105,6 +114,8 @@ int main() {
         {"main", "--small-board-final-columns", "2"},
         {"main", "--terminal-wait-fill", "2"},
         {"main", "--traffic-aware-joint-routes", "2"},
+        {"main", "--route-path-portfolio", "2"},
+        {"main", "--brand-aware-rescue", "2"},
         {"main", "--small-board-beam-budget-percent", "49"},
         {"main", "--small-board-beam-budget-percent", "96"},
         {"main", "--small-board-brand-node-limit", "999"},

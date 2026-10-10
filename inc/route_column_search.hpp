@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
+#include <iterator>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -24,11 +25,18 @@ struct RouteColumnConfig {
     // Rank labels by every spot crossed on the restored shortest path, not
     // only by the explicitly selected destination.  Replay remains the oracle.
     bool rankTransitPickups = true;
+    // Alongside the shortest-time route, retain a minimum-fuel path and a
+    // road-avoiding path when their detour is bounded.  The master problem
+    // and official replay remain the sole acceptance criteria.
+    bool pathPortfolio = false;
     bool supplyRendezvous = true;
     std::size_t maxSupplySchedules = 8;
     // 当日開始時点で動けない、または満タンの1割以下の巡回車へ
     // 補給車が直行する候補を、通常の合流候補より先に確保する。
     std::size_t maxStrandedRescueSchedules = 2;
+    // Prefer a rescue that turns the refill into access to otherwise
+    // difficult brands during the remaining day.
+    bool brandAwareRescue = false;
     // Keep most of the global schedule pool for timed multi-meeting routes.
     std::size_t maxStationSchedules = 2;
     std::size_t maxMeetingsPerSchedule = 3;
@@ -141,9 +149,16 @@ inline RouteColumnResult searchRouteColumns(
         };
         std::vector<Rescue> rescues;
         std::array<DijkstraTable, kMaxAgents> supplyTables;
+        std::array<DijkstraTable, kMaxAgents> patrolTables;
+        const bool scoreBrandReachability =
+            config.brandAwareRescue && setting.fuelLimit < steps;
         for (const AgentIndex supply : supplies)
             supplyTables[supply] = Brain0::dijkstra(
                 setting, matchState, matchState.agents[supply].pos);
+        if (scoreBrandReachability)
+            for (const AgentIndex patrol : patrols)
+                patrolTables[patrol] = Brain0::dijkstra(
+                    setting, matchState, matchState.agents[patrol].pos);
         const int lowFuel = std::max(2, setting.fuelLimit / 10);
         for (const AgentIndex patrol : patrols) {
             const auto& agent = matchState.agents[patrol];
@@ -167,9 +182,30 @@ inline RouteColumnResult searchRouteColumns(
                 if (!path.reachable || path.cost.steps >= steps) continue;
                 const std::int64_t urgency = canMove ? setting.fuelLimit :
                     static_cast<std::int64_t>(setting.fuelLimit) * steps;
-                const std::int64_t value = urgency +
+                std::int64_t value = urgency +
                     static_cast<std::int64_t>(setting.fuelLimit - agent.fuel) *
                         (steps - path.cost.steps) - path.cost.steps;
+                // On fuel-rich days the ordinary urgency ranking is cheaper
+                // and equally effective. Brand reachability matters when a
+                // full tank is shorter than the day's action horizon.
+                if (scoreBrandReachability) {
+                    BrandMask reachable = 0;
+                    const int remaining = steps - std::max(1, path.cost.steps);
+                    const auto& patrolTable = patrolTables[patrol];
+                    for (const auto& spot : setting.field.spots) {
+                        if (patrolTable.distances[spot.pos] <= remaining &&
+                            patrolTable.patrolFuelCosts[spot.pos] <=
+                                setting.fuelLimit) {
+                            reachable |= brandBit(spot.brandIndex);
+                        }
+                    }
+                    const int allBrands = countBits(reachable);
+                    const int newMatchBrands = countBits(
+                        reachable & ~previous.matchBrands);
+                    value += static_cast<std::int64_t>(
+                        2 * newMatchBrands + allBrands) *
+                        setting.fuelLimit * std::max(1, remaining);
+                }
                 rescues.push_back({value, supply, patrol, path});
             }
         }
@@ -466,6 +502,9 @@ inline RouteColumnResult searchRouteColumns(
     // refuels at their actual step and rejects impossible columns.
     std::vector<DijkstraTable> paths(setting.field.cellCount());
     std::vector<bool> pathCached(setting.field.cellCount(), false);
+    std::vector<DijkstraTable> fuelPaths(setting.field.cellCount());
+    std::vector<DijkstraTable> roadAvoidingPaths(setting.field.cellCount());
+    std::vector<bool> alternativePathCached(setting.field.cellCount(), false);
     const auto pathTo = [&](CellPos from, CellPos to) {
         const auto index = static_cast<std::size_t>(from);
         if (!pathCached[index]) {
@@ -473,6 +512,41 @@ inline RouteColumnResult searchRouteColumns(
             pathCached[index] = true;
         }
         return Brain0::restorePath(setting, paths[index], to);
+    };
+    const auto pathAlternatives = [&](CellPos from, CellPos to) {
+        std::vector<PathResult> alternatives;
+        const auto shortest = pathTo(from, to);
+        if (!shortest.reachable) return alternatives;
+        alternatives.push_back(shortest);
+        if (!config.pathPortfolio) return alternatives;
+        const auto index = static_cast<std::size_t>(from);
+        if (!alternativePathCached[index]) {
+            fuelPaths[index] = Brain0::minimumFuelDijkstra(
+                setting, matchState, from);
+            roadAvoidingPaths[index] = Brain0::roadAvoidingDijkstra(
+                setting, matchState, from);
+            alternativePathCached[index] = true;
+        }
+        const int detourLimit = shortest.cost.steps +
+            std::max(4, shortest.cost.steps / 2);
+        const auto append = [&](const DijkstraTable& table) {
+            auto path = Brain0::restorePath(
+                setting, table, to, AgentKind::Patrol);
+            if (!path.reachable || path.cost.steps > detourLimit) return;
+            const bool duplicate = std::any_of(
+                alternatives.begin(), alternatives.end(),
+                [&](const PathResult& old) {
+                    return old.directions == path.directions;
+                });
+            if (!duplicate) alternatives.push_back(std::move(path));
+        };
+        // Fuel-saving paths matter most when a shortest leg consumes a
+        // material fraction of a tank.  Road avoidance is useful even on a
+        // full tank because tomorrow's traffic depends on road use.
+        if (shortest.cost.fuel >= std::max(2, setting.fuelLimit / 4))
+            append(fuelPaths[index]);
+        append(roadAvoidingPaths[index]);
+        return alternatives;
     };
     CellPos neutral = kInvalidCell;
     for (CellPos p = 0; p < static_cast<CellPos>(setting.field.cellCount()); ++p)
@@ -653,13 +727,15 @@ inline RouteColumnResult searchRouteColumns(
                 BrandMask brands = 0;
                 int time = 0;
                 int count = 0;
+                bool alternativePath = false;
             };
-            std::vector<Label> beam{{matchState.agents[agent].pos, {}, 0, 0, 0, 0}};
+            std::vector<Label> beam{{matchState.agents[agent].pos, {},
+                                     0, 0, 0, 0, false}};
             const int rescueStep = rescueSteps[scheduleIndex][agent];
             if (rescueStep > 0 && rescueStep < steps) {
                 beam.push_back({matchState.agents[agent].pos,
                                 AgentPlan{-rescueStep}, 0, 0,
-                                rescueStep, 0});
+                                rescueStep, 0, false});
             }
             for (std::size_t depth = 0;
                  depth < config.maxVisits && !beam.empty() &&
@@ -670,59 +746,86 @@ inline RouteColumnResult searchRouteColumns(
                     for (std::size_t spot = 0; spot < setting.field.spots.size(); ++spot) {
                         if (label.visited & spotBit(spot)) continue;
                         const auto& target = setting.field.spots[spot];
-                        const auto path = pathTo(label.pos, target.pos);
-                        const int duration = path.cost.steps + (path.cost.steps == 0);
-                        if (!path.reachable || label.time + duration > steps) continue;
-                        Label child = label;
-                        child.pos = target.pos;
-                        child.time += duration;
-                        if (config.rankTransitPickups &&
-                            setting.field.width >= 32 &&
-                            setting.field.height >= 32) {
-                            const SpotMask traversed =
-                                detail::routePathSpots(setting, path);
-                            const SpotMask gained = traversed & ~child.visited;
-                            child.visited |= traversed;
-                            child.count += countBits(gained);
-                            child.brands |= detail::columnBrands(
-                                setting, traversed);
-                        } else {
-                            child.visited |= spotBit(spot);
-                            if (target.brandIndex >= 0)
-                                child.brands |= BrandMask{1} <<
-                                    target.brandIndex;
-                            ++child.count;
+                        const auto alternatives =
+                            pathAlternatives(label.pos, target.pos);
+                        for (std::size_t pathIndex = 0;
+                             pathIndex < alternatives.size(); ++pathIndex) {
+                            const auto& path = alternatives[pathIndex];
+                            const int duration = path.cost.steps +
+                                (path.cost.steps == 0);
+                            if (label.time + duration > steps) continue;
+                            Label child = label;
+                            child.alternativePath =
+                                label.alternativePath || pathIndex > 0;
+                            child.pos = target.pos;
+                            child.time += duration;
+                            if (config.rankTransitPickups &&
+                                setting.field.width >= 32 &&
+                                setting.field.height >= 32) {
+                                const SpotMask traversed =
+                                    detail::routePathSpots(setting, path);
+                                const SpotMask gained = traversed & ~child.visited;
+                                child.visited |= traversed;
+                                child.count += countBits(gained);
+                                child.brands |= detail::columnBrands(
+                                    setting, traversed);
+                            } else {
+                                child.visited |= spotBit(spot);
+                                if (target.brandIndex >= 0)
+                                    child.brands |= BrandMask{1} <<
+                                        target.brandIndex;
+                                ++child.count;
+                            }
+                            for (const Direction d : path.directions)
+                                child.actions.push_back(static_cast<int>(d));
+                            if (path.cost.steps == 0)
+                                child.actions.push_back(-1);
+                            next.push_back(std::move(child));
                         }
-                        for (const Direction d : path.directions)
-                            child.actions.push_back(static_cast<int>(d));
-                        if (path.cost.steps == 0) child.actions.push_back(-1);
-                        next.push_back(std::move(child));
                     }
                 }
-                std::sort(next.begin(), next.end(), [&](const Label& a, const Label& b) {
-                    const auto rank = [&](const Label& x) {
-                        return std::make_tuple(
-                            countBits(x.brands & ~previous.matchBrands),
-                            countBits(x.brands), x.count, -x.time);
-                    };
-                    return rank(a) > rank(b);
-                });
-                if (next.size() > config.labelWidth) {
-                    const std::size_t brandQuota = std::max<std::size_t>(
-                        1, config.labelWidth / 2);
-                    std::sort(next.begin() + brandQuota, next.end(),
+                std::vector<Label> normal, alternatives;
+                normal.reserve(next.size());
+                alternatives.reserve(next.size());
+                for (auto& label : next)
+                    (label.alternativePath ? alternatives : normal)
+                        .push_back(std::move(label));
+                const auto rankAndTrim = [&](std::vector<Label>& labels,
+                                             std::size_t limit) {
+                    std::sort(labels.begin(), labels.end(),
                         [&](const Label& a, const Label& b) {
                             const auto rank = [&](const Label& x) {
                                 return std::make_tuple(
-                                    -x.time,
                                     countBits(x.brands & ~previous.matchBrands),
-                                    countBits(x.brands),
-                                    x.count);
+                                    countBits(x.brands), x.count, -x.time);
                             };
                             return rank(a) > rank(b);
                         });
-                }
-                if (next.size() > config.labelWidth) next.resize(config.labelWidth);
+                    if (labels.size() > limit) {
+                        const std::size_t brandQuota =
+                            std::max<std::size_t>(1, limit / 2);
+                        std::sort(labels.begin() + brandQuota, labels.end(),
+                            [&](const Label& a, const Label& b) {
+                                const auto rank = [&](const Label& x) {
+                                    return std::make_tuple(
+                                        -x.time,
+                                        countBits(x.brands & ~previous.matchBrands),
+                                        countBits(x.brands), x.count);
+                                };
+                                return rank(a) > rank(b);
+                            });
+                        labels.resize(limit);
+                    }
+                };
+                // Preserve the complete legacy beam. Alternative paths use a
+                // small extra lane, so they cannot evict shortest-path labels.
+                rankAndTrim(normal, config.labelWidth);
+                rankAndTrim(alternatives,
+                    std::max<std::size_t>(1, config.labelWidth / 6));
+                next = std::move(normal);
+                next.insert(next.end(),
+                    std::make_move_iterator(alternatives.begin()),
+                    std::make_move_iterator(alternatives.end()));
                 beam.clear();
                 for (Label& label : next) {
                     if (Clock::now() >= agentDeadline) break;

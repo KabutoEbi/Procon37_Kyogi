@@ -6,6 +6,7 @@ PROBLEM_OVERVIEW.md
 /main
 /main.exe
 /.build/
+/build/
 __pycache__/
 *.py[cod]
 /runtime/

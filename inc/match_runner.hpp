@@ -255,6 +255,8 @@ public:
             if (record.usedFallback) {
                 EvaluationContext ctx;
                 ctx.scoreAtDayStart = score;
+                ctx.availableBrandCount = static_cast<std::int32_t>(
+                    s.field.brands.size());
                 record.evaluation = evaluateGameState(
                     sim.state, ctx, cfg.beam.weights);
             }

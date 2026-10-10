@@ -49,7 +49,9 @@ private:
             name == "--udon-joint-destroy" || name == "--spot-route-lns" ||
             name == "--terminal-wait-fill" ||
             name == "--traffic-aware-joint-routes" ||
-            name == "--route-columns" || name == "--adaptive-long-search" ||
+            name == "--route-columns" || name == "--route-path-portfolio" ||
+            name == "--brand-aware-rescue" ||
+            name == "--adaptive-long-search" ||
             name == "--next-day-probe" || name == "--day-beam" ||
             name == "--quantity-upgrades" ||
             name == "--coordinated-refinement" ||
@@ -110,6 +112,10 @@ private:
         else if (name == "--traffic-aware-joint-routes")
             beam.spotRouteLns.trafficAwareJointRoutes = value != 0;
         else if (name == "--route-columns") beam.routeColumns.enabled = value != 0;
+        else if (name == "--route-path-portfolio")
+            beam.routeColumns.pathPortfolio = value != 0;
+        else if (name == "--brand-aware-rescue")
+            beam.routeColumns.brandAwareRescue = value != 0;
         else if (name == "--adaptive-long-search") beam.adaptiveLongSearch = value != 0;
         else if (name == "--next-day-probe") beam.compareNextDayPlans = value != 0;
         else if (name == "--quantity-upgrades") beam.quantityUpgrades = value != 0;
@@ -157,6 +163,8 @@ private:
         } else if (name == "--selection-time-ms") {
             selection.timeLimitMs = value;
             hasSelectionTimeLimit = true;
+        } else if (name == "--incumbent-agent-mask") {
+            selection.incumbentSupplyMask = value;
         } else {
             throw std::invalid_argument("unknown option: " + std::string(name));
         }

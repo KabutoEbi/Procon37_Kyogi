@@ -22,3 +22,5 @@ if (table.canReach(goal)) {
 ```
 
 `positions`は始点と終点を含み、`directions.size() + 1 == positions.size()`となる。補給車として復元すると`RouteCost::fuel`は0になる。
+
+通常の`Brain0::dijkstra()`は所要ステップを最小化し、同じ所要ステップなら巡回車の燃料消費が少ない経路を選ぶ。比較用の`minimumFuelDijkstra()`は燃料を第1基準、`roadAvoidingDijkstra()`は道路セルからの移動回数を第1基準にする。

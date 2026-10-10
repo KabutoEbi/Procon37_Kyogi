@@ -44,11 +44,11 @@ class GUITest(unittest.TestCase):
             self.assertTrue(gui.automatic_match_button.winfo_ismapped())
             gui.team_role_var.set(TEAM_ROLE_LABELS["lead"])
             gui._team_role_changed()
-            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "10000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "60000")
             self.assertEqual(gui.parameter_vars["udon_sa"].get(), "0")
             self.assertEqual(gui.parameter_vars["stable_beam_stop"].get(), "0")
             self.assertEqual(gui.parameter_vars["sa_stagnation_stop"].get(), "0")
-            self.assertIn("短時間ビーム", gui.build_solver_button.cget("text"))
+            self.assertIn("停滞検出ビーム", gui.build_solver_button.cget("text"))
             self.assertIsNone(gui._workflow().shared_dir)
             self.assertTrue(gui.spoken_checkpoint_entry.winfo_ismapped())
             self.assertTrue(gui.spoken_import_button.winfo_ismapped())
@@ -63,12 +63,22 @@ class GUITest(unittest.TestCase):
             gui._match_profile_changed()
             self.assertIn("予行演習", gui.build_solver_button.cget("text"))
             self.assertEqual(gui.parameter_vars["selection_time_ms"].get(), "30000")
-            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "10000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "30000")
             gui.match_profile_var.set(MATCH_OPERATION_PROFILES["production"].label)
             gui._match_profile_changed()
             self.assertIn("第1試合", gui.build_solver_button.cget("text"))
             self.assertEqual(gui.parameter_vars["selection_time_ms"].get(), "60000")
-            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "10000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "60000")
+            gui.match_profile_var.set(MATCH_OPERATION_PROFILES["semifinal"].label)
+            gui._match_profile_changed()
+            self.assertIn("準決勝", gui.build_solver_button.cget("text"))
+            self.assertEqual(gui.parameter_vars["selection_time_ms"].get(), "90000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "60000")
+            gui.match_profile_var.set(MATCH_OPERATION_PROFILES["final"].label)
+            gui._match_profile_changed()
+            self.assertIn("決勝", gui.build_solver_button.cget("text"))
+            self.assertEqual(gui.parameter_vars["selection_time_ms"].get(), "120000")
+            self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "60000")
             gui.team_role_var.set(TEAM_ROLE_LABELS["middle"])
             gui._team_role_changed()
             self.assertEqual(gui.parameter_vars["time_limit_ms"].get(), "40000")
@@ -264,6 +274,10 @@ result
 
                 gui.work_var.set(directory)
                 gui.token_var.set("entered-token")
+                gui.match_profile_var.set(
+                    MATCH_OPERATION_PROFILES["connection_test"].label
+                )
+                gui._match_profile_changed()
                 probe_responses = [
                     ({"map": {}, "agents": [1, 2, 3, 4],
                       "daySteps": [1, 1, 1, 1],
@@ -288,6 +302,8 @@ result
                     self.assertEqual(probe.call_args.args[2], "/")
                     self.assertEqual(probe.call_args.kwargs["payload"], [[-1]] * 4)
 
+                gui.match_profile_var.set(MATCH_OPERATION_PROFILES["production"].label)
+                gui._match_profile_changed()
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver), \
                      mock.patch("backend.send", side_effect=send):

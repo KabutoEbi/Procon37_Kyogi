@@ -1969,6 +1969,8 @@ private:
         const SpotDistanceTables& spotDistances) {
         EvaluationContext context;
         context.scoreAtDayStart = scoreAtDayStart;
+        context.availableBrandCount = static_cast<std::int32_t>(
+            setting.field.brands.size());
         std::array<std::int32_t, kMaxAgents> targets{};
         targets.fill(-1);
         const auto assignment = coordinatedAssignments(state, setting, matchState, spotDistances);
@@ -2723,6 +2725,8 @@ public:
         if (hasBest) {
             EvaluationContext ctx;
             ctx.scoreAtDayStart = prev;
+            ctx.availableBrandCount = static_cast<std::int32_t>(
+                s.field.brands.size());
             res.success = true;
             res.plan = wait;
             res.finalState = fallback.state;
@@ -3876,6 +3880,8 @@ inline BeamSearchResult brain1(
         if (changed) {
             EvaluationContext context;
             context.scoreAtDayStart = previousScore;
+            context.availableBrandCount = static_cast<std::int32_t>(
+                setting.field.brands.size());
             result.evaluation = evaluateGameState(
                 result.finalState, context, config.weights);
         }
@@ -4088,8 +4094,11 @@ inline BeamSearchResult brain1(
         // official lexicographic score chooses the returned plan.
         const bool expandedQuantityPortfolio = longSearch.udonAlns.expandedPortfolio &&
             (finalDay || (setting.field.width >= 24 && reachedBrandBound));
-        if (expandedQuantityPortfolio && !improved.stagnationStopped &&
-            Clock::now() < deadline) {
+        // A stagnated first SA is exactly when an independent restart is most
+        // useful. The second pass uses another RNG stream and neighborhood
+        // distribution, while the incumbent and official brand-first guard
+        // prevent a restart from lowering the submitted score.
+        if (expandedQuantityPortfolio && Clock::now() < deadline) {
             auto expandedConfig = longSearch.udonAlns;
             expandedConfig.maxAttempts = std::max<std::size_t>(
                 expandedConfig.maxAttempts, 16);
@@ -4341,6 +4350,8 @@ inline BeamSearchResult brain1(
     if (changed) {
         EvaluationContext context;
         context.scoreAtDayStart = previousScore;
+        context.availableBrandCount = static_cast<std::int32_t>(
+            setting.field.brands.size());
         result.evaluation = evaluateGameState(result.finalState, context, config.weights);
     }
     // Refiners can replace the beam plan after its utilization was measured.

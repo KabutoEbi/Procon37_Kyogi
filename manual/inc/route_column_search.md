@@ -16,4 +16,8 @@
 
 `RouteColumnConfig`の既定値は、`enabled=true`、日次予算の下限`minimumBudgetMs=5000`、候補生成の`labelWidth=24`、巡回車あたり`columnsPerAgent=32`、最大訪問数`maxVisits=14`、組合せ探索上限`maxMasterNodes=150000`、32×32の通過取得順位`rankTransitPickups=true`、補給車待機案`supplyRendezvous=true`、補給計画数`maxSupplySchedules=8`、直接救援案`maxStrandedRescueSchedules=2`、固定待機案`maxStationSchedules=2`、1計画の最大合流数`maxMeetingsPerSchedule=3`。`brain1()`ではスポット系探索が有効で、日次予算が5秒以上あり、従来のスポット再探索後に時間が残る場合だけ呼び出す。その後、さらに時間があれば玉数ALNSを試す。CLIの`--route-columns 0/1`で追加探索を切り替えられる。`--spot-route-lns 0`なら追加探索も停止する。
 
+`brandAwareRescue=false`が既定である。`--brand-aware-rescue 1`を指定し、かつ燃料上限が当日の行動時間より短い日は、直接救援候補を補給後に到達できる系列数で順位付けする。試合で未取得の系列を強く評価するため、単に欠乏燃料が最大の巡回車ではなく、新系列回収へ戻れる巡回車を優先できる。生成問題の対比較が反転したため、本番既定にはしていない。
+
+`pathPortfolio=false`が既定である。`--route-path-portfolio 1`では通常の最短時間経路を残したまま、燃料最小経路と道路使用回数最小経路を小さな独立レーンへ追加する。厳燃料の生成問題で得点改善を確認できなかったため、本番既定にはしていない。
+
 結果の`generated`は生成した経路候補数、`masterNodes`は組合せ探索の訪問ノード数、`improvements`は採用改善数を表す。`brain1()`の`routeColumnsGenerated`、`routeColumnsMasterNodes`、`routeColumnsImprovements`、コンソール統計、ベンチマークCSVへ伝播する。締切・候補なし・改善なしでは入力計画を保持する。呼び出し元と採用順は[`brain1.hpp`](brain/brain1.md)、生成問題でのON/OFF比較は[2026-10-05の検証記録](../tests/route-column-results-2026-10-05.md)、公開試合 API を使った候補保持の比較は[2026-10-06の検証記録](../tests/arena-api-results-2026-10-06.md)を参照する。

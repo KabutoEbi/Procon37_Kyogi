@@ -12,6 +12,10 @@ struct EvaluationWeights {
     // 既定値は公式の辞書順（試合系列 > 日別系列 > 玉数）を強く優先する。
     double newBrand = 1.0e12;
     double dailyBrand = 1.0e8;
+    // 盤面に存在する全系列を揃えた状態をビーム内へ強く残す。
+    // 試合系列の達成は日別系列より上位の公式評価なので桁を分ける。
+    double matchBrandCompletion = 1.0e15;
+    double dailyBrandCompletion = 1.0e11;
     double udon = 1.0e4;
     double remainingFuel = 1.0;
     double unusedStep = -0.5;
@@ -51,6 +55,7 @@ struct EvaluationContext {
     std::int32_t nextDayUdonCount = 0;
     std::int32_t nextDayNewBrandApproach = 0;
     std::int32_t nextDayBrandApproach = 0;
+    std::int32_t availableBrandCount = 0;
 
     EvaluationContext() noexcept {
         nearestValuableSpotSteps.fill(kImpassableCost);
@@ -63,6 +68,8 @@ struct EvaluationContext {
 struct EvaluationBreakdown {
     std::int32_t newBrandCount = 0;
     std::int32_t dailyBrandCount = 0;
+    std::int32_t matchBrandCompleted = 0;
+    std::int32_t dailyBrandCompleted = 0;
     std::int32_t udonCount = 0;
     std::int32_t remainingFuel = 0;
     std::int32_t unusedSteps = 0;
@@ -91,6 +98,8 @@ inline double evaluationTotal(
     const EvaluationWeights& weights) noexcept {
     return weights.newBrand * result.newBrandCount +
            weights.dailyBrand * result.dailyBrandCount +
+           weights.matchBrandCompletion * result.matchBrandCompleted +
+           weights.dailyBrandCompletion * result.dailyBrandCompleted +
            weights.udon * result.udonCount +
            weights.remainingFuel * result.remainingFuel +
            weights.unusedStep * result.unusedSteps +
@@ -118,6 +127,14 @@ inline EvaluationBreakdown evaluateGameState(
     result.newBrandCount = static_cast<std::int32_t>(countBits(
         state.score.matchBrands & ~context.scoreAtDayStart.matchBrands));
     result.dailyBrandCount = static_cast<std::int32_t>(countBits(state.dayBrands));
+    if (context.availableBrandCount > 0) {
+        result.matchBrandCompleted = static_cast<std::int32_t>(
+            countBits(state.score.matchBrands) >=
+            static_cast<std::size_t>(context.availableBrandCount));
+        result.dailyBrandCompleted = static_cast<std::int32_t>(
+            countBits(state.dayBrands) >=
+            static_cast<std::size_t>(context.availableBrandCount));
+    }
     result.udonCount = state.score.totalUdon - context.scoreAtDayStart.totalUdon;
     result.unusedSteps = state.remainingSteps();
     result.concentrationCount = context.concentrationCount;

@@ -56,6 +56,10 @@ c++ -std=c++17 -O2 -pthread -Iinc tests/solver_benchmark.cpp -o /tmp/solver_benc
 /tmp/solver_benchmark --compare-adaptive-long-search \
   --size 32 --agents 7 --supplies 2 --spots 32 --brands 24 \
   --single-day --mixed-traffic --time-ms 45000
+# SAの停滞終了後に独立拡張パスを実行する長時間条件
+/tmp/solver_benchmark --current-only --variant improved --stagnation-stop \
+  --size 32 --agents 7 --supplies 1 --spots 32 --brands 24 \
+  --single-day --mixed-traffic --time-ms 35000 --no-day-beam
 ```
 
 出力は次のCSV形式である。
@@ -87,7 +91,7 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 
 `no-quantity-upgrades`は堅牢な2店先読み、取得スポット多様化、共有合流、拡張ALNSポートフォリオをまとめて無効化する。`no-robust-route`、`no-quantity-diversity`、`no-shared-rendezvous`、`no-expanded-alns`は各機能のアブレーションに使う。
 
-`--quantity-upgrades`で実験的な玉数改善群を有効化する（CLI本体と違い値なしのベンチ用フラグ）。日跨ぎ先読みは独立して既定有効で、`--no-day-beam`により無効化する。`--keep-beam-iterations`は系列上限での早期終了を無効化する。`--quantity-budget-percent N`（1〜90）は玉数用の予約割合を変更し、時間配分の切り分けに使う。玉数改善群の比較では後ろ2つを`--quantity-upgrades`と併用し、日跨ぎの有無は別軸で比較する。
+`--quantity-upgrades`で実験的な玉数改善群を有効化する（CLI本体と違い値なしのベンチ用フラグ）。日跨ぎ先読みは独立して既定有効で、`--no-day-beam`により無効化する。`--keep-beam-iterations`は系列上限での早期終了を無効化する。`--stagnation-stop`はSAの停滞終了を有効化し、停止後に残時間があれば独立拡張パスへ進む動作を再現する。`--quantity-budget-percent N`（1〜90）は玉数用の予約割合を変更し、時間配分の切り分けに使う。玉数改善群の比較では後ろ2つを`--quantity-upgrades`と併用し、日跨ぎの有無は別軸で比較する。
 
 既定は8/16/24/32の4サイズ、seed 1〜8、各3回、4日間、1スレッド、日次300msで実行する。`--seeds`、`--repeats`、`--size`、`--time-ms`で変更できる。`--single-day`は初日のみを比較し、翌日配置の評価も初日終了で打ち切る。
 
@@ -100,6 +104,8 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 各問題で`baseline`と`--variant`の構成を比較し、実行順を交互に入れ替える。`baseline`は今回の巡回先・合流の再割当、迂回合流、2店先読み、割当キャッシュをすべて無効にした構成で、前回までのマクロ探索を使用する。既定の`improved`はすべて有効。`--compare-detour-aware-sa`は利益÷迂回量による低頻度の狙い撃ち、`--compare-differential-insertion`は挿入位置の局所差分評価、`--compare-reachability-rarity`は到達可能巡回車数による希少系列ポートフォリオを、それぞれ直前方式と対比較する。`no-cache`、`no-coordination`、`no-detour`、`no-lookahead`、`no-macros`はそれぞれ1機能を無効にする。`no-patrol-replan`は共同割当変更時の巡回マクロ再計画を、`no-supply-cleanup`は探索後の補給車周回除去を、`wandering-supply`は合流未割当時の自由移動を有効にする。`unbounded-supply-wait`は補給車の待機上限を0にして旧方式へ戻す。`legacy-supply-schedules`は経路候補組合せの固定待機案を1件、時刻付き合流を最大2回へ戻す比較用設定である。`no-terminal-wait-fill`は既定の末尾待機活用を無効化し、`no-transit-pickup-ranking`は32×32の経路ラベルにおける通過取得順位を無効化する。`limited-detour-scan`は燃料制約時の到達可能候補まで続ける迂回探索を無効にする。`no-hard-nextday`は最終日前日の遠隔一意系列への準備を、`no-route-portfolio`は最終日の経路方式比較を無効にする。`replan-2`、`replan-4`、`replan-8`は指定イベント間隔で常にマクロ経路を再検討する。機能別の効果は、同じ問題・同じ回数の`improved`行とも照合する。
 
 標準エラーへ試合単位の得点合計、時間の中央値・最大値、展開数、辞書順（試合系列→日別系列累計→玉数）での勝ち・同点・負けを出力する。性能値はCPU負荷などに左右されるため、同じ環境・同じビルド設定で比較する。固定シードでも時間打切りの結果は変動し、生成問題での改善が本番問題での改善を保証するものではない。
+
+準決勝・決勝向けの停滞後再始動の条件、測定値、不採用案は[1人運用向けSA再始動の検証記録](large-board-single-run-2026-10-10.md)を参照する。
 
 2026-09-30の合流改善について、固定探索量と1日300ms制限の変更前後比較を[合流改善の比較記録](rendezvous-results-2026-09-30.md)にまとめた。
 
@@ -116,6 +122,11 @@ size,seed,repeat,variant,day,brands,daily_brands,udon,ms,nodes,cache_hits,assign
 - `--variant no-joint-destroy-repair`: SA前の複数巡回車・補給車共同再構築だけを無効化する。
 - `--seed-start N`: seedの開始値。学習・検証と重ならない問題集合を作る。
 - `--agents N`, `--supplies N`, `--spots N`, `--brands N`, `--days N`: 生成する台数、補給車数、スポット数、系列数、日数を上書きする。補給車数は台数未満でなければならない。
+- `--first-day-finals-model`: 本選1日目6面の地形比・外周スポット比を使う。24×24では発表済み準決勝条件（6日、指定ステップ、燃料80、在庫合計60）を設定し、32×32では第1試合の5日構成を拡大した決勝予測問題を生成する。
+- `--select-agents-ms N`: 問題生成後、固定末尾補給配置の代わりに`N`ミリ秒の全日試走で種別配置を選ぶ。`--single-day`より前に全日選択したい場合は別実行で選択し、得た配置を`--supply-mask N`で固定する。
+- `--supply-mask N`: bitが立ったエージェントを補給車として固定する。予測問題の配置再生・切り分け用。
+- `--selector-min-supplies N`, `--selector-max-supplies N`: 種別選択で比較する補給車台数の下限・上限を固定する。自動台数選択との切り分け用。
+- `--no-brand-completion-reward`: 全系列達成時の追加評価だけを0にして切り分ける。
 - `--legacy-weights`: 燃料制約時の4つの重み補正を無効にする。
 - `--no-completion`: 途中解の未実行マクロ経路の完了を無効にする。
 - `--tight-fuel`: 燃料上限を初日ステップ数の半分にする。

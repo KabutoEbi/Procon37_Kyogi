@@ -56,6 +56,7 @@ c++ -std=c++17 -O2 -pthread main.cpp -o solver
 ./solver sample_maps/sample_16.json
 ./solver setting.json state.json score-checkpoint.json
 ./solver select setting.json agents.json
+./solver greedy setting.json state.json score-checkpoint.json
 ./solver solve setting.json state.json score-checkpoint.json
 ./solver generate random-setting.json --width 16 --height 16 --seed 10
 ```
@@ -64,7 +65,7 @@ c++ -std=c++17 -O2 -pthread main.cpp -o solver
 
 現在の`main.cpp`は`agents.json`、`answer.json`、`score-next.json`、`result-state.json`を生成するが送信はしない。`result-state.json`には探索対象day、探索終了時の`step`、自チームの種別・位置・燃料、スポット残在庫を保存し、ローカル表示に使用する。完了した1日分の計画では`step`は当日のステップ上限と一致する。`score-next.json`は生成計画をローカル実行した予測値なので、通信クライアントは回答が受理された後にだけ次日用チェックポイントとして採用する。探索失敗時は検証済みの全車待機回答へ切り替える。待機は`-1, -14`ではなく`-15`のように連続分を圧縮して出力される。
 
-`select`は種別選択と`agents.json`生成だけで終了する。`solve`は当日状態を必須入力とし、日次探索だけを実行する。`generate`は幅・高さ・台数・スポット数・系列数・日数・1日の秒数・チーム数・seedを受け取り、公式の試合設定形式を保存する。Python通信クライアントとビジュアライザはこれらのモードを呼び分ける。
+`select`は種別選択と`agents.json`生成だけで終了する。`greedy`は最短路ベースの貪欲日次解を即時計算し、`solve`と同じ4成果物を生成する。`solve`は当日状態を必須入力とし、日次探索だけを実行する。`generate`は幅・高さ・台数・スポット数・系列数・日数・1日の秒数・チーム数・seedを受け取り、公式の試合設定形式を保存する。Python通信クライアントとビジュアライザはこれらのモードを呼び分ける。
 
 リポジトリ直下の`main.cpp`では、種別選択を`runSelection()`、日次探索と成果物保存を`runSolver()`へ分離している。出力ファイル名、種別選択失敗の報告、JSON書き出し失敗の報告はそれぞれ共通箇所で管理する。
 

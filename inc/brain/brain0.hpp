@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <queue>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -18,6 +19,77 @@ namespace benzen {
 // 最短ステップ経路を求める基礎戦略。
 // 道路状態は1日の間変化しないため、同じ日の探索結果を再利用できる。
 class Brain0 final {
+  private:
+    enum class PathPreference {
+        MinimumFuel,
+        AvoidRoads,
+    };
+
+    // Keep the actual step/fuel totals in the returned table, but choose the
+    // predecessor tree by a second objective.  This supplies deliberately
+    // different paths to higher-level portfolio search without changing the
+    // official cost model used by simulation.
+    static DijkstraTable preferredDijkstra(
+        const MatchSetting& s, const MatchState& st, CellPos start,
+        PathPreference preference, const std::function<bool()>& stop = {}) {
+        const Field& field = s.field;
+        DijkstraTable result;
+        result.start = start;
+        result.distances.assign(field.cellCount(), kImpassableCost);
+        result.patrolFuelCosts.assign(field.cellCount(), kImpassableCost);
+        result.previous.assign(field.cellCount(), kInvalidCell);
+        result.previousDirection.assign(field.cellCount(), Direction::UpperLeft);
+        result.firstHop.assign(field.cellCount(), kInvalidCell);
+        if (!field.contains(start) || !field.at(start).isPassable()) return result;
+
+        std::vector<std::int32_t> primary(field.cellCount(), kImpassableCost);
+        using Entry = std::tuple<std::int32_t, std::int32_t,
+                                 std::int32_t, CellPos>;
+        std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> queue;
+        primary[start] = 0;
+        result.distances[start] = 0;
+        result.patrolFuelCosts[start] = 0;
+        queue.push({0, 0, 0, start});
+
+        while (!queue.empty()) {
+            if (stop && stop()) return result;
+            const auto [objective, steps, fuel, from] = queue.top();
+            queue.pop();
+            const auto index = static_cast<std::size_t>(from);
+            if (std::tie(objective, steps, fuel) !=
+                std::tie(primary[index], result.distances[index],
+                         result.patrolFuelCosts[index])) continue;
+            const int edgeSteps = moveStepCost(s, st, from);
+            const int edgeFuel = moveFuelCost(s, AgentKind::Patrol, from);
+            if (edgeSteps >= kImpassableCost || edgeFuel >= kImpassableCost ||
+                steps > kImpassableCost - edgeSteps ||
+                fuel > kImpassableCost - edgeFuel) continue;
+            const int nextSteps = steps + edgeSteps;
+            const int nextFuel = fuel + edgeFuel;
+            const int nextObjective = objective +
+                (preference == PathPreference::MinimumFuel
+                     ? edgeFuel
+                     : (field.at(from).type == CellType::Road ? 1 : 0));
+            for (int raw = 0; raw < 6; ++raw) {
+                const auto direction = static_cast<Direction>(raw);
+                const CellPos to = field.neighbor(from, direction);
+                if (!field.contains(to) || !field.at(to).isPassable()) continue;
+                const auto toIndex = static_cast<std::size_t>(to);
+                if (std::tie(nextObjective, nextSteps, nextFuel) >=
+                    std::tie(primary[toIndex], result.distances[toIndex],
+                             result.patrolFuelCosts[toIndex])) continue;
+                primary[toIndex] = nextObjective;
+                result.distances[toIndex] = nextSteps;
+                result.patrolFuelCosts[toIndex] = nextFuel;
+                result.previous[toIndex] = from;
+                result.previousDirection[toIndex] = direction;
+                result.firstHop[toIndex] = from == start ? to : result.firstHop[index];
+                queue.push({nextObjective, nextSteps, nextFuel, to});
+            }
+        }
+        return result;
+    }
+
   public:
     static DijkstraTable dijkstra(const MatchSetting& s, const MatchState& st, CellPos start,
                                   const std::function<bool()>& stop = {}) {
@@ -54,6 +126,9 @@ class Brain0 final {
                 continue;
             }
             const std::int32_t next = dist + cost;
+            const std::int32_t nextFuel =
+                res.patrolFuelCosts[static_cast<std::size_t>(from)] +
+                moveFuelCost(s, AgentKind::Patrol, from);
 
             for (std::int32_t d = 0; d < 6; ++d) {
                 const auto dir = static_cast<Direction>(d);
@@ -63,13 +138,18 @@ class Brain0 final {
                 }
 
                 const auto i = static_cast<std::size_t>(to);
-                if (next >= res.distances[i]) {
+                // New-Ihama's route rule: minimize travel time first and use
+                // patrol fuel as the exact tie-breaker. Arrival time never
+                // regresses, while the restored route keeps at least as much
+                // fuel for later visits.
+                if (next > res.distances[i] ||
+                    (next == res.distances[i] &&
+                     nextFuel >= res.patrolFuelCosts[i])) {
                     continue;
                 }
 
                 res.distances[i] = next;
-                res.patrolFuelCosts[i] = res.patrolFuelCosts[from] +
-                    moveFuelCost(s, AgentKind::Patrol, from);
+                res.patrolFuelCosts[i] = nextFuel;
                 res.previous[i] = from;
                 res.previousDirection[i] = dir;
                 res.firstHop[i] = from == start ? to : res.firstHop[from];
@@ -131,6 +211,23 @@ class Brain0 final {
                                    CellPos start, CellPos goal,
                                    AgentKind kind = AgentKind::Patrol) {
         return restorePath(setting, dijkstra(setting, state, start), goal, kind);
+    }
+
+    // Minimum-fuel and road-independent alternatives are intentionally kept
+    // separate from shortestPath.  Callers can retain all three and let the
+    // exact simulator decide which complete plan is best.
+    static DijkstraTable minimumFuelDijkstra(
+        const MatchSetting& setting, const MatchState& state, CellPos start,
+        const std::function<bool()>& stop = {}) {
+        return preferredDijkstra(
+            setting, state, start, PathPreference::MinimumFuel, stop);
+    }
+
+    static DijkstraTable roadAvoidingDijkstra(
+        const MatchSetting& setting, const MatchState& state, CellPos start,
+        const std::function<bool()>& stop = {}) {
+        return preferredDijkstra(
+            setting, state, start, PathPreference::AvoidRoads, stop);
     }
 
     // 燃料消費量を状態に含め、指定燃料内で所要ステップが最小の経路を求める。

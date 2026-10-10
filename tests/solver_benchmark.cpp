@@ -1,10 +1,11 @@
-#include "application.hpp"
+#include "../inc/application.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <map>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -14,11 +15,16 @@ int main(int argc, char** argv) {
     using namespace benzen;
     int seeds = 8, repeats = 3, timeMs = 300, sizeOnly = 0, seedStart = 1;
     int agentOnly = 0, supplyOnly = 1, spotOnly = 0, brandOnly = 0, dayOnly = 0;
+    int selectAgentsMs = 0, supplyMask = -1;
+    int selectorMinSupplies = -1, selectorMaxSupplies = -1;
     bool currentOnly = false, noCompletion = false, legacyWeights = false, tightFuel = false;
     bool singleDay = false, mixedTraffic = false, fixedWork = false, profile = false;
+    bool firstDayFinalsModel = false, noBrandCompletionReward = false;
     bool compareBrandRepair = false, compareUdonAlns = false, compareUdonSa = false;
     bool compareSpotRouteLns = false;
     bool compareRouteColumns = false;
+    bool comparePathPortfolio = false;
+    bool compareBrandAwareRescue = false;
     bool compareStrandedRescue = false;
     bool compareTightFutureFuel = false;
     bool compareAdaptiveLongSearch = false;
@@ -34,6 +40,7 @@ int main(int argc, char** argv) {
     bool quantityUpgrades = false;
     bool noCoordinatedRefinement = false;
     bool keepBeamIterations = false;
+    bool stagnationStop = false;
     int quantityBudgetPercent = -1;
     std::string variant = "improved";
     try {
@@ -47,8 +54,17 @@ int main(int argc, char** argv) {
             if (option == "--quantity-upgrades") { quantityUpgrades = true; continue; }
             if (option == "--no-coordinated-refinement") { noCoordinatedRefinement = true; continue; }
             if (option == "--keep-beam-iterations") { keepBeamIterations = true; continue; }
+            if (option == "--stagnation-stop") { stagnationStop = true; continue; }
             if (option == "--single-day") { singleDay = true; continue; }
             if (option == "--mixed-traffic") { mixedTraffic = true; continue; }
+            if (option == "--first-day-finals-model") {
+                firstDayFinalsModel = true;
+                continue;
+            }
+            if (option == "--no-brand-completion-reward") {
+                noBrandCompletionReward = true;
+                continue;
+            }
             if (option == "--fixed-work") { fixedWork = true; continue; }
             if (option == "--compare-small-board-joint-refinement") {
                 compareSmallBoardJointRefinement = true;
@@ -72,6 +88,14 @@ int main(int argc, char** argv) {
             if (option == "--compare-udon-sa") { compareUdonSa = true; continue; }
             if (option == "--compare-spot-route-lns") { compareSpotRouteLns = true; continue; }
             if (option == "--compare-route-columns") { compareRouteColumns = true; continue; }
+            if (option == "--compare-path-portfolio") {
+                comparePathPortfolio = true;
+                continue;
+            }
+            if (option == "--compare-brand-aware-rescue") {
+                compareBrandAwareRescue = true;
+                continue;
+            }
             if (option == "--compare-adaptive-long-search") {
                 compareAdaptiveLongSearch = true;
                 continue;
@@ -117,6 +141,10 @@ int main(int argc, char** argv) {
             else if (option == "--spots") spotOnly = number;
             else if (option == "--brands") brandOnly = number;
             else if (option == "--days") dayOnly = number;
+            else if (option == "--select-agents-ms") selectAgentsMs = number;
+            else if (option == "--supply-mask") supplyMask = number;
+            else if (option == "--selector-min-supplies") selectorMinSupplies = number;
+            else if (option == "--selector-max-supplies") selectorMaxSupplies = number;
             else if (option == "--quantity-budget-percent" && number <= 90) quantityBudgetPercent = number;
             else throw std::invalid_argument("unknown option");
         }
@@ -135,6 +163,8 @@ int main(int argc, char** argv) {
                 static_cast<int>(compareUdonSa) +
                 static_cast<int>(compareSpotRouteLns) +
                 static_cast<int>(compareRouteColumns) +
+                static_cast<int>(comparePathPortfolio) +
+                static_cast<int>(compareBrandAwareRescue) +
                 static_cast<int>(compareStrandedRescue) +
                 static_cast<int>(compareTightFutureFuel) +
                 static_cast<int>(compareAdaptiveLongSearch) +
@@ -165,6 +195,18 @@ int main(int argc, char** argv) {
         }
         if (compareRouteColumns) {
             if (currentOnly) throw std::invalid_argument("paired comparison requires both variants");
+            variant = "improved";
+        }
+        if (comparePathPortfolio) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
+            variant = "improved";
+        }
+        if (compareBrandAwareRescue) {
+            if (currentOnly)
+                throw std::invalid_argument(
+                    "paired comparison requires both variants");
             variant = "improved";
         }
         if (compareStrandedRescue) {
@@ -240,11 +282,13 @@ int main(int argc, char** argv) {
              (compareUdonSa ? "no-udon-sa" :
              (compareSpotRouteLns ? "no-spot-route-lns" :
               (compareRouteColumns ? "no-route-columns" :
+               (comparePathPortfolio ? "no-path-portfolio" :
+                (compareBrandAwareRescue ? "no-brand-aware-rescue" :
                (compareStrandedRescue ? "no-stranded-rescue" :
                 (compareTightFutureFuel ? "tight-future-fuel-20" :
                  (compareAdaptiveLongSearch ? "fixed-long-search" :
-                  "baseline")))))));
-        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "detour-aware-sa", "no-detour-aware-sa", "differential-insertion", "full-route-insertion", "reachability-rarity", "no-reachability-rarity", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-terminal-wait-fill", "small-board-quantity-first", "no-small-board-quantity-first", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
+                  "baseline")))))))));
+        const std::vector<std::string> allowed = {"improved", "quantity-aware-sa", "no-quantity-aware-sa", "detour-aware-sa", "no-detour-aware-sa", "differential-insertion", "full-route-insertion", "reachability-rarity", "no-reachability-rarity", "adaptive-long-search", "fixed-long-search", "tight-future-fuel-5", "tight-future-fuel-10", "tight-future-fuel-20", "tight-future-fuel-40", "no-route-columns", "no-path-portfolio", "no-brand-aware-rescue", "no-stranded-rescue", "no-quantity-upgrades", "no-expanded-alns", "no-spot-route-lns", "no-robust-route", "no-shared-rendezvous", "no-quantity-diversity", "no-cache", "no-coordination", "no-detour", "no-lookahead", "no-macros", "no-patrol-replan", "no-supply-cleanup", "wandering-supply", "unbounded-supply-wait", "legacy-supply-schedules", "terminal-wait-fill", "no-terminal-wait-fill", "small-board-quantity-first", "no-small-board-quantity-first", "no-transit-pickup-ranking", "limited-detour-scan", "no-hard-nextday", "no-route-portfolio", "replan-2", "replan-4", "replan-8", "detour-8", "final-detour-6", "lookahead-8", "full-actions", "brand-repair", "no-brand-repair", "udon-alns", "no-udon-alns", "udon-sa", "no-udon-sa", "no-arena-guidance", "arena-stock-guidance", "arena-both-guidance", "no-joint-destroy-repair"};
         if (variant != "warm-start-portfolio" && variant != "small-board-joint-refinement" &&
             std::find(allowed.begin(), allowed.end(), variant) == allowed.end())
             throw std::invalid_argument("invalid variant");
@@ -277,15 +321,144 @@ int main(int argc, char** argv) {
                 create.spotCount = spotOnly > 0 ? spotOnly : size;
                 create.brandCount = brandOnly > 0
                     ? brandOnly : size * 3 / 4;
+                if (firstDayFinalsModel) {
+                    // 本選1日目の第1〜6試合の平均。予行演習は分布が異なるため除外。
+                    create.terrainWeights = {65.333, 64.167, 73.333, 53.167};
+                    create.dayCount = size == 24 ? 6 : 5;
+                }
                 if (dayOnly > 0) create.dayCount = dayOnly;
                 create.seed = seed;
                 auto setting = ProblemCreator::generate(create).setting;
+                if (firstDayFinalsModel) {
+                    if (size == 24) {
+                        // 主催者発表の準決勝条件をそのまま使う。
+                        setting.daySteps = {48, 56, 68, 68, 56, 72};
+                        setting.fuelLimit = 80;
+
+                        // 生成時の1店1〜5個という範囲を保ったまま、最大在庫数
+                        // 合計を準決勝の60個へ合わせる。
+                        std::int32_t totalStock = 0;
+                        for (const auto& spot : setting.field.spots)
+                            totalStock += spot.maxStock;
+                        while (totalStock != 60) {
+                            bool changed = false;
+                            for (auto& spot : setting.field.spots) {
+                                if (totalStock > 60 && spot.maxStock > 1) {
+                                    --spot.maxStock;
+                                    --totalStock;
+                                    changed = true;
+                                } else if (totalStock < 60 &&
+                                           spot.maxStock < create.agentCount) {
+                                    ++spot.maxStock;
+                                    ++totalStock;
+                                    changed = true;
+                                }
+                                if (totalStock == 60) break;
+                            }
+                            if (!changed)
+                                throw std::runtime_error(
+                                    "cannot fit semifinal stock total");
+                        }
+                    } else {
+                        // 決勝は未確定のため、16x16の第1試合条件を辺長比例する。
+                        const std::array<std::int32_t, 5> stepNumerators = {
+                            8, 9, 10, 10, 12,
+                        };
+                        setting.daySteps.clear();
+                        for (std::int32_t day = 0; day < create.dayCount; ++day) {
+                            const auto ratio = stepNumerators[
+                                static_cast<std::size_t>(day) %
+                                stepNumerators.size()];
+                            setting.daySteps.push_back(size * ratio / 4);
+                        }
+                        setting.fuelLimit = size * 5 / 2;
+                    }
+                    setting.daySeconds.assign(setting.daySteps.size(), 60);
+                    setting.busyThreshold = 1;
+                    setting.jammedThreshold = 2;
+
+                    // 本選6面では16スポット中9〜11個が外周にある。外周比を
+                    // 中央値10/16に固定し、残りは内部の平地へ置く。
+                    std::vector<CellPos> boundaryPlain, innerPlain;
+                    std::vector<bool> occupied(setting.field.cellCount(), false);
+                    for (const CellPos pos : setting.agentStarts)
+                        occupied[static_cast<std::size_t>(pos)] = true;
+                    for (std::size_t pos = 0; pos < setting.field.cellCount(); ++pos) {
+                        if (occupied[pos] ||
+                            setting.field.cells[pos].type != CellType::Plain)
+                            continue;
+                        const auto coord = setting.field.toCoord(
+                            static_cast<CellPos>(pos));
+                        auto& candidates = coord.x == 0 || coord.y == 0 ||
+                                coord.x + 1 == setting.field.width ||
+                                coord.y + 1 == setting.field.height
+                            ? boundaryPlain : innerPlain;
+                        candidates.push_back(static_cast<CellPos>(pos));
+                    }
+                    std::mt19937_64 placementRandom(
+                        static_cast<std::uint64_t>(seed) ^ UINT64_C(0x6a09e667f3bcc909));
+                    std::shuffle(boundaryPlain.begin(), boundaryPlain.end(), placementRandom);
+                    std::shuffle(innerPlain.begin(), innerPlain.end(), placementRandom);
+                    const std::size_t boundaryTarget =
+                        setting.field.spots.size() * 10 / 16;
+                    std::vector<CellPos> positions;
+                    const auto take = [&](const std::vector<CellPos>& source,
+                                          std::size_t count) {
+                        const auto available = std::min(count, source.size());
+                        positions.insert(positions.end(), source.begin(),
+                            source.begin() + static_cast<std::ptrdiff_t>(available));
+                    };
+                    take(boundaryPlain, boundaryTarget);
+                    take(innerPlain, setting.field.spots.size() - positions.size());
+                    if (positions.size() < setting.field.spots.size())
+                        take(boundaryPlain,
+                            setting.field.spots.size() - positions.size());
+                    if (positions.size() != setting.field.spots.size())
+                        throw std::runtime_error(
+                            "insufficient plain cells for first-day finals model");
+                    std::shuffle(positions.begin(), positions.end(), placementRandom);
+                    for (std::size_t i = 0; i < setting.field.spots.size(); ++i)
+                        setting.field.spots[i].pos = positions[i];
+                    if (!setting.field.rebuildSpotIndex())
+                        throw std::runtime_error(
+                            "failed to rebuild first-day finals model spots");
+                }
                 if (tightFuel) setting.fuelLimit = std::max(1, setting.daySteps.front() / 2);
                 if (singleDay) { setting.daySteps.resize(1); setting.daySeconds.resize(1); }
                 std::vector<AgentKind> kinds(create.agentCount, AgentKind::Patrol);
                 for (int supply = 0; supply < supplyOnly; ++supply)
                     kinds[kinds.size() - 1 - static_cast<std::size_t>(supply)] =
                         AgentKind::Supply;
+                if (supplyMask >= 0) {
+                    if ((static_cast<unsigned int>(supplyMask) >>
+                         static_cast<unsigned int>(create.agentCount)) != 0U)
+                        throw std::invalid_argument("supply mask exceeds agent count");
+                    for (std::size_t agent = 0; agent < kinds.size(); ++agent)
+                        kinds[agent] = (static_cast<unsigned int>(supplyMask) &
+                            (1U << static_cast<unsigned int>(agent))) != 0U
+                            ? AgentKind::Supply : AgentKind::Patrol;
+                }
+                if (selectAgentsMs > 0) {
+                    AgentSelectorConfig selector;
+                    selector.timeLimitMs = selectAgentsMs;
+                    selector.safetyMarginMs = 0;
+                    selector.extendTrialsToDeadline = true;
+                    if (selectorMinSupplies > 0)
+                        selector.minSupplyCount = selectorMinSupplies;
+                    if (selectorMaxSupplies > 0)
+                        selector.maxSupplyCount = selectorMaxSupplies;
+                    const auto selected = selectAgentKinds(setting, selector);
+                    if (!selected.success)
+                        throw std::runtime_error("agent selection failed");
+                    kinds = selected.kinds;
+                    std::cerr << "selected size=" << size << " seed=" << seed
+                        << " supplies=" << selected.supplyCount << " kinds=";
+                    for (const auto kind : kinds)
+                        std::cerr << (kind == AgentKind::Supply ? 'S' : 'P');
+                    std::cerr << " assignments=" << selected.trialAssignments
+                        << " simulations=" << selected.trialSimulations
+                        << " timed_out=" << selected.timedOut << '\n';
+                }
                 for (int repeat = 0; repeat < repeats; ++repeat) {
                     std::vector<std::string> order{baselineName, variant};
                     if (currentOnly) order = {variant};
@@ -302,6 +475,7 @@ int main(int argc, char** argv) {
                         beam.adaptiveLongSearch = name != "fixed-long-search";
                         beam.useDayBeam = !noDayBeam;
                         beam.stopBeamAtBrandUpperBound = !keepBeamIterations;
+                        beam.udonAlns.stopOnStagnation = stagnationStop;
                         if (quantityBudgetPercent > 0) beam.quantityBudgetPercent = quantityBudgetPercent;
                         beam.useBrandRepair = name != "no-brand-repair" && name != "baseline";
                         beam.useUdonAlns = name != "no-udon-alns" && name != "baseline";
@@ -343,9 +517,16 @@ int main(int argc, char** argv) {
                             name != "no-quantity-upgrades" &&
                             name != "no-spot-route-lns";
                         beam.routeColumns.enabled = name != "no-route-columns";
+                        beam.routeColumns.pathPortfolio =
+                            comparePathPortfolio &&
+                            name != "no-path-portfolio";
+                        beam.routeColumns.brandAwareRescue =
+                            name != "no-brand-aware-rescue";
                         if (name == "no-stranded-rescue")
                             beam.routeColumns.maxStrandedRescueSchedules = 0;
-                        if (compareRouteColumns) beam.routeColumns.minimumBudgetMs = 0;
+                        if (compareRouteColumns || comparePathPortfolio ||
+                            compareBrandAwareRescue)
+                            beam.routeColumns.minimumBudgetMs = 0;
                         beam.prioritizeHardNextDayTargets =
                             name != "baseline" && name != "no-hard-nextday";
                         beam.assignmentCacheLimit = name == "baseline" || name == "no-cache" ? 0 : 4096;
@@ -383,6 +564,10 @@ int main(int argc, char** argv) {
                         if (name == "lookahead-8") beam.lookaheadCandidateLimit = 8;
                         if (name == "full-actions") beam.adaptiveActionLimit = false;
                         beam.completeIncumbentRoutes = !noCompletion;
+                        if (noBrandCompletionReward) {
+                            beam.weights.matchBrandCompletion = 0.0;
+                            beam.weights.dailyBrandCompletion = 0.0;
+                        }
                         if (legacyWeights) {
                             beam.fuelAwareWeights = false;
                         }
@@ -397,12 +582,44 @@ int main(int argc, char** argv) {
                             beam.beamWidth = 32;
                             beam.jointBeamWidth = 128;
                         }
-                        if (mixedTraffic) {
+                        if (mixedTraffic || firstDayFinalsModel) {
                             config.trafficByDay.assign(setting.dayCount(),
                                 std::vector<TrafficStatus>(setting.field.cellCount()));
-                            for (std::size_t d = 0; d < setting.dayCount(); ++d)
-                                for (std::size_t c = 0; c < setting.field.cellCount(); ++c)
-                                    config.trafficByDay[d][c] = static_cast<TrafficStatus>((c + seed + d) % 3);
+                            if (firstDayFinalsModel) {
+                                // 第1試合の観測比率。初日は全道路順調で、以降は
+                                // 日ごとの混雑・渋滞率を道路セルへ決定的に割り当てる。
+                                static constexpr std::array<std::array<int, 3>, 5>
+                                    trafficRatios{{
+                                        {{1000, 0, 0}}, {{754, 231, 15}},
+                                        {{308, 492, 200}}, {{508, 261, 231}},
+                                        {{431, 292, 277}},
+                                    }};
+                                std::vector<std::size_t> roads;
+                                for (std::size_t c = 0;
+                                     c < setting.field.cellCount(); ++c)
+                                    if (setting.field.cells[c].type == CellType::Road)
+                                        roads.push_back(c);
+                                for (std::size_t d = 0; d < setting.dayCount(); ++d) {
+                                    auto shuffled = roads;
+                                    std::mt19937_64 trafficRandom(
+                                        static_cast<std::uint64_t>(seed) * UINT64_C(1315423911) + d);
+                                    std::shuffle(shuffled.begin(), shuffled.end(), trafficRandom);
+                                    const auto& ratios = trafficRatios[d % trafficRatios.size()];
+                                    const std::size_t busy =
+                                        shuffled.size() * static_cast<std::size_t>(ratios[1]) / 1000;
+                                    const std::size_t jammed =
+                                        shuffled.size() * static_cast<std::size_t>(ratios[2]) / 1000;
+                                    for (std::size_t i = 0; i < shuffled.size(); ++i)
+                                        config.trafficByDay[d][shuffled[i]] =
+                                            i < jammed ? TrafficStatus::Jammed :
+                                            i < jammed + busy ? TrafficStatus::Busy :
+                                            TrafficStatus::Smooth;
+                                }
+                            } else {
+                                for (std::size_t d = 0; d < setting.dayCount(); ++d)
+                                    for (std::size_t c = 0; c < setting.field.cellCount(); ++c)
+                                        config.trafficByDay[d][c] = static_cast<TrafficStatus>((c + seed + d) % 3);
+                            }
                         }
                         const auto match = runMatch(setting, kinds, config);
                         if (!match.success) return 1;

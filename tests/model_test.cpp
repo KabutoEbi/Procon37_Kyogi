@@ -158,6 +158,7 @@ void testHashAndEvaluation() {
     assert(states.count(changed) == 0);
 
     EvaluationContext ctx;
+    ctx.availableBrandCount = static_cast<std::int32_t>(s.field.brands.size());
     ctx.nearestNewBrandSpotSteps[0] = 2;
     ctx.nearestDailyBrandSpotSteps[0] = 3;
     ctx.targetSlack = 4;
@@ -172,6 +173,9 @@ void testHashAndEvaluation() {
     const auto eval = evaluateGameState(sim.state, ctx);
     assert(eval.newBrandCount == 1);
     assert(eval.dailyBrandCount == 1);
+    assert(eval.matchBrandCompleted == 1);
+    assert(eval.dailyBrandCompleted == 1);
+    assert(eval.total > 1.0e15);
     assert(eval.udonCount == 1);
     assert(eval.newBrandSpotDistance == 2);
     assert(eval.dailyBrandSpotDistance == 3);
@@ -544,6 +548,17 @@ void testAgentSelector() {
            first.supplyCount);
     assert(std::count(first.kinds.begin(), first.kinds.end(), AgentKind::Patrol) >= 1);
 
+    AgentSelectorConfig incumbent = cfg;
+    incumbent.trialCandidateLimit = 1;
+    incumbent.incumbentSupplyMask = 0;
+    for (std::size_t index = 0; index < first.kinds.size(); ++index) {
+        if (first.kinds[index] == AgentKind::Supply)
+            incumbent.incumbentSupplyMask |= std::int64_t{1} << index;
+    }
+    const auto retained = selectAgentKinds(s, incumbent);
+    assert(retained.success);
+    assert(retained.kinds == first.kinds);
+
     cfg.minSupplyCount = 1;
     cfg.maxSupplyCount = 1;
     cfg.trialCandidateLimit = 0;
@@ -658,6 +673,19 @@ void testSelectorTrialsPreferredSupplyCountFirst() {
     assert(selected.trialAssignments == 1);
     // 7台では補給2台・巡回5台を最初に試す。
     assert(selected.supplyCount == 2);
+
+    AgentSelectorConfig sevenHeuristic;
+    sevenHeuristic.trialCandidateLimit = 0;
+    const auto sevenDefault = selectAgentKinds(s, sevenHeuristic);
+    assert(sevenDefault.success);
+    assert(sevenDefault.supplyCount <= 2);
+    assert(sevenDefault.evaluatedAssignments == 28);
+
+    // 明示指定した検証では従来どおり補給3台も候補にできる。
+    sevenHeuristic.maxSupplyCount = 3;
+    const auto sevenExplicit = selectAgentKinds(s, sevenHeuristic);
+    assert(sevenExplicit.success);
+    assert(sevenExplicit.evaluatedAssignments == 63);
 
     // 長期戦では試走を省略しても、僅かな初日上限差だけで補給1台へ
     // 戻らない。翌日以降の燃料連鎖を避ける中心構成を維持する。
