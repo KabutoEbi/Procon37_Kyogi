@@ -1,7 +1,3 @@
-docs/
-回答システムに関する情報・簡易版の回答用サーバー/
-sample_maps/
-PROBLEM_OVERVIEW.md
 *.json
 !/match_info/*.json
 !/match_info/**/*.json
