@@ -3,6 +3,8 @@ docs/
 sample_maps/
 PROBLEM_OVERVIEW.md
 *.json
+!/match_info/*.json
+!/match_info/**/*.json
 /main
 /.build/
 /build/

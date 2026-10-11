@@ -1,0 +1,11 @@
+{
+  "day": 4,
+  "step": 48,
+  "agents": [
+    {"kind": 1, "pos": 153, "fuel": 40},
+    {"kind": 0, "pos": 153, "fuel": 40},
+    {"kind": 0, "pos": 21, "fuel": 0},
+    {"kind": 0, "pos": 16, "fuel": 0}
+  ],
+  "remainingStocks": [1, 2, 3, 1, 3, 1, 2, 2, 0, 3, 0, 2, 1, 1, 2, 0]
+}
