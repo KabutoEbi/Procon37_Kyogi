@@ -29,7 +29,7 @@ c++ -std=c++17 -O2 -pthread main.cpp -o main
 python3 server_client/get_problem.py --help
 ```
 
-既定では生成物と通信ログを`runtime/`へ置く。どちらもGit管理対象外である。
+既定では生成物と通信ログを`runtime/`へ置く。作業中の`runtime/`はGit管理対象外である。完了した本選記録を公開保存する場合は`match_info/runtime/match-NN/`へコピーし、TOKENやAuthorizationが含まれないことを確認してからGitへ追加する。
 
 ## 安全な確認順序
 

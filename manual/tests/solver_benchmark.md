@@ -8,16 +8,20 @@
 
 `saved_day_benchmark` は過去の `endsAt` だけを無効化して、保存時点の位置・燃料・交通・得点から探索する。`runtime` への書込みやサーバー送信は行わない。出力計画はシミュレータで再検証する。
 
-`runtime_match_benchmark`は保存された`setting.json`、`state-dayN.json`の全日交通とday 0初期状態を読み、候補自身の終端状態を次日へ渡して全試合を再生する。第2引数の0/1で1969型の玉数優先ポートフォリオを比較でき、保存ファイルは変更しない。
+`runtime_match_benchmark`は保存された`setting.json`、`state-dayN.json`の全日交通とday 0初期状態を読み、候補自身の終端状態を次日へ渡して全試合を再生する。第2引数の0/1で1969型の玉数優先ポートフォリオを比較でき、保存ファイルは変更しない。再現可能な試合検証には、上書きされる`runtime/`ではなくGit管理済みの`match_info/runtime/match-NN/`を指定する。
 
 ```sh
 make .build/tools/saved_day_benchmark
 .build/tools/saved_day_benchmark \
-  runtime/logs/20261003-140003-405057000-get-setting.json \
-  runtime/state-day3.json runtime/score-day3.json 50000
+  match_info/runtime/match-02/setting.json \
+  match_info/runtime/match-02/state-day3.json \
+  match_info/runtime/match-02/score-day3.json 50000
+
+make .build/tools/runtime_match_benchmark
+.build/tools/runtime_match_benchmark match_info/runtime/match-02 0
 ```
 
-引数は設定、開始状態、前日までの得点（初日は `-` 可）、時間上限ms（省略時50000）、追加改善の有効化0/1（省略時既定値）。設定は現在の `runtime/setting.json` ではなく、その試合の保存設定を指定すること。
+`saved_day_benchmark`の引数は設定、開始状態、前日までの得点（初日は `-` 可）、時間上限ms（省略時50000）、追加改善の有効化0/1（省略時既定値）。設定は現在の `runtime/setting.json` ではなく、その試合の保存設定を指定すること。
 
 複数サイズ・複数シード・複数回の実行で、探索改善の有無による全日程の得点と速度を比較する。既定は補給車1台に固定し、`--supplies N`で補給車数だけを変更できるため、種別選択の差を混ぜず経路探索を比較できる。
 

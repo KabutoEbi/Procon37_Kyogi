@@ -36,7 +36,7 @@ if (result.success) {
 - `smallBoardBrandSearchNodeLimit`: 16×16の全車系列探索上限。既定200000。厳燃料時は100000へ抑える
 - `useUdonAlns`: 達成済み系列マスクを固定した玉数ALNS。既定true
 - `smallBoardJointRefinement`: 16×16だけは通常ALNSで巡回車3台の経路・在庫を同時再配分する。既定true。CLIの`--small-board-joint-refinement 0`で従来の2台上限へ戻せる。試行数・時刻上限は増やさず、24×24以上は変更しない。[比較結果](../../tests/first-round-16-results-2026-10-10.md)
-- `smallBoardQuantityFirstRoutes`: #1969と同じ16×16・8日・14系列で、既存解を保持しながら玉数優先ポートフォリオを追加比較する。全系列を満たす公式リプレイだけを採用し、後続の系列優先候補も省略しない。既定true。CLIの`--small-board-quantity-first 0`で無効化。[1969の検証](../tests/arena-score-analysis-1969-16.md)
+- `smallBoardQuantityFirstRoutes`: #1969と同じ16×16・8日・14系列で、既存解を保持しながら玉数優先ポートフォリオを追加比較する。全系列を満たす公式リプレイだけを採用し、後続の系列優先候補も省略しない。既定true。CLIの`--small-board-quantity-first 0`で無効化。[1969の検証](../../tests/arena-score-analysis-1969-16.md)
 - `smallBoardFinalColumns`: 16×16・最終日・系列上限達成後、通常SAが完了して残時間がある場合だけ幅48/候補48の追加経路組合せを比較。既定true。CLIの`--small-board-final-columns 0`で無効化。中間日・24×24以上には影響しない。[公開問題比較](../../tests/arena-score-analysis-1937-16.md)
 - `udonAlns`: ALNSの基準上限は12試行・各800展開・解放巡回車2台。有限時間では`adaptiveLongSearch`が本選盤面と実効予算に応じて試行数・展開上限を増やす。最終日と、系列上限へ達した24×24以上の残時間では巡回車3台までの拡張近傍も比較する。中間日の追加近傍は終端位置・燃料を固定する。詳細は[玉数ALNS](../udon_alns.md)
 - `adaptiveLongSearch`: 16／24／32盤面と実効探索時間に応じ、ビーム・後段探索の配分、ALNS試行数・展開上限を自動調整する。既定true。厳燃料日はビームを優先する

@@ -26,7 +26,9 @@
 | 1969・合成mixed | `14/112/182` | `14/111/203` | `14/111/203` |
 | 1969・保存実交通 | `14/112/182` | `14/112/172` | `14/112/172` |
 
-`runtime/simple-server/client/`には1969の設定、全8日の実交通、初期状態、提出回答と得点が保存されている。`runtime_match_benchmark`はday 0の初期状態から各日の保存交通を使い、候補自身の終端位置・燃料を次日へ引き継ぐ。当時の提出`14/108/154`に対して現在の探索は全日14系列の`14/112/172`となった。公開首位までは10玉不足する。追加した玉数候補のOFF/ONは同点で、単独の上積みは未確認である。玉数候補成功時に系列優先4パスを省く案は`14/111/156`へ退行したため撤回した。
+この計測時点では`runtime/simple-server/client/`に1969の設定、全8日の実交通、初期状態、提出回答と得点が保存されていた。`runtime_match_benchmark`はday 0の初期状態から各日の保存交通を使い、候補自身の終端位置・燃料を次日へ引き継いだ。当時の提出`14/108/154`に対して現在の探索は全日14系列の`14/112/172`となった。公開首位までは10玉不足する。追加した玉数候補のOFF/ONは同点で、単独の上積みは未確認である。玉数候補成功時に系列優先4パスを省く案は`14/111/156`へ退行したため撤回した。
+
+2026-10-11の準決勝実行により同作業ディレクトリは上書きされ、1969の保存一式は現在のリポジトリに残っていない。この節の数値と下記コマンドは当時の検証記録であり、実データ部分の再実行には1969保存一式の復元が必要である。
 
 | day | 当時の当日系列/玉数 | 現在の当日系列/玉数 |
 |---:|---:|---:|
@@ -51,6 +53,7 @@ python3 tests/small_board_api_benchmark.py \
   --compare-small-board-quantity-first
 
 make .build/tools/runtime_match_benchmark
-.build/tools/runtime_match_benchmark runtime/simple-server/client 0
-.build/tools/runtime_match_benchmark runtime/simple-server/client 1
+# 1969保存一式を復元した場合だけ実行可能
+.build/tools/runtime_match_benchmark <1969-runtime-dir> 0
+.build/tools/runtime_match_benchmark <1969-runtime-dir> 1
 ```

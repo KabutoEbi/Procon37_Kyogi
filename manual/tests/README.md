@@ -27,6 +27,7 @@
 | [`takamatsu-pamphlet-search-analysis.md`](takamatsu-pamphlet-search-analysis.md) | 高松大会パンフレットのビーム・SA解法との照合と希少系列評価の不採用理由 |
 | [`beam-vs-sa-selection-2026-10-10.md`](beam-vs-sa-selection-2026-10-10.md) | ビーム単独・山登りALNS・焼きなましの対比較と既定方式の選定 |
 | [`finals-map-prediction-2026-10-11.md`](finals-map-prediction-2026-10-11.md) | 本選1日目6面から予測した準決勝・決勝マップと本番時間検証 |
+| [`semifinal-results-2026-10-11.md`](semifinal-results-2026-10-11.md) | 準決勝の採用構成、6日分の実得点、対戦結果、保存データ |
 | [`saved_day_benchmark.cpp`](coordinated-refinement-results-2026-10-07.md) | 保存済みの設定・当日状態・得点から1日を再探索する診断ツール |
 | [`runtime_match_benchmark.cpp`](arena-score-analysis-1969-16.md) | 保存済みの全日交通を候補自身の状態遷移で再生する読取専用比較ツール |
 | [`tune_weights.cpp`](tune_weights.md) | 評価関数の重み調整 |
