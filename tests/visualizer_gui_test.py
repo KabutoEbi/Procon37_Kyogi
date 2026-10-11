@@ -103,6 +103,7 @@ class GUITest(unittest.TestCase):
             gui._show_settings_window()
             gui.update()
             self.assertTrue(gui.settings_window.winfo_viewable())
+            self.assertEqual(gui.connection_button.cget("text"), "接続")
             self.assertTrue(gui.random_generate_button.winfo_ismapped())
             self.assertTrue(gui.random_traffic_check.winfo_ismapped())
             gui.random_traffic_check.invoke()
@@ -275,35 +276,20 @@ result
                 gui.work_var.set(directory)
                 gui.token_var.set("entered-token")
                 gui.match_profile_var.set(
-                    MATCH_OPERATION_PROFILES["connection_test"].label
+                    MATCH_OPERATION_PROFILES["production"].label
                 )
                 gui._match_profile_changed()
-                probe_responses = [
-                    ({"map": {}, "agents": [1, 2, 3, 4],
-                      "daySteps": [1, 1, 1, 1],
-                      "daySeconds": [20, 20, 20, 20]}, b"{}", 200),
-                    (None, b"", 200),
-                    ({"day": 0}, b"{}", 200),
-                    ({"revision": 0}, b"{}", 200),
-                    ({"day": 1}, b"{}", 200),
-                    ({"revision": 1}, b"{}", 200),
-                    ({"day": 2}, b"{}", 200),
-                    ({"revision": 2}, b"{}", 200),
-                    ({"day": 3}, b"{}", 200),
-                    ({"revision": 3}, b"{}", 200),
-                ]
-                with mock.patch("app.messagebox.askyesno", return_value=True), \
-                     mock.patch("backend.request_json", side_effect=probe_responses) as probe:
+                with mock.patch(
+                    "backend.request_json",
+                    return_value=({"map": {}}, b"{}", 200),
+                ) as probe:
                     self.assertEqual(probe.call_count, 0)
                     gui._check_connection()
                     drain()
-                    self.assertEqual(probe.call_count, 10)
+                    self.assertEqual(probe.call_count, 1)
                     self.assertEqual(probe.call_args.args[1], "entered-token")
-                    self.assertEqual(probe.call_args.args[2], "/")
-                    self.assertEqual(probe.call_args.kwargs["payload"], [[-1]] * 4)
-
-                gui.match_profile_var.set(MATCH_OPERATION_PROFILES["production"].label)
-                gui._match_profile_changed()
+                    self.assertEqual(probe.call_args.args[2], "/setting")
+                    self.assertNotIn("payload", probe.call_args.kwargs)
                 with mock.patch("backend.fetch", side_effect=fetch), \
                      mock.patch("backend.Workflow._run", autospec=True, side_effect=solver), \
                      mock.patch("backend.send", side_effect=send):
