@@ -101,7 +101,7 @@ class MatchOperationProfile:
 
 MATCH_OPERATION_PROFILES = {
     "connection_test": MatchOperationProfile(
-        "接続テスト（本番URL・送信のみダミー・各20秒）", 20000, 20000,
+        "接続テスト（本番URL・選択／回答各20秒）", 20000, 20000,
     ),
     "rehearsal": MatchOperationProfile(
         "予行演習（本番URL・実探索/実送信・各30秒）", 30000, 30000,
@@ -721,9 +721,10 @@ class SolverGUI(tk.Tk):
         ttk.Label(config, text="timeout(s)").grid(row=2, column=3, sticky=tk.E, padx=(12, 5))
         ttk.Entry(config, textvariable=self.timeout_var, width=8).grid(row=2, column=4, sticky=tk.W)
         check = ttk.Button(
-            config, text="接続テスト（全日ダミー送信）",
+            config, text="接続",
             command=self._check_connection,
         )
+        self.connection_button = check
         check.grid(row=2, column=5, sticky=tk.E)
         self._action_buttons.append(check)
         self._build_file_panel(config)
@@ -1775,28 +1776,9 @@ class SolverGUI(tk.Tk):
         workflow = self._workflow_or_dialog()
         if workflow is None:
             return
-        if self._match_profile_key() != "connection_test":
-            messagebox.showerror(
-                "接続テスト",
-                "ダミーデータは「接続テスト」区分でのみ送信できます。",
-                parent=self,
-            )
-            return
-        if not messagebox.askyesno(
-            "接続テスト（全日ダミー送信）",
-            f"{workflow.connection.url}\n\n"
-            "問題・各日の状態は実サーバーから取得し、送信だけをダミーにします。\n"
-            "試合前10秒、選択カウントダウン10秒、タイプ回答20秒、"
-            "行動回答20秒×4日を確認します。\n"
-            "ダミー種別を送信し、各日の公開を待って全ステップ待機を送信します。\n"
-            "接続テスト用試合の全日程が送信対象です。\n"
-            "主催者が指定した接続テスト時間中だけ実行してください。",
-            parent=self,
-        ):
-            return
         self._run_task(
-            "接続テスト（全日ダミー送信）",
-            workflow.run_dummy_connection_test,
+            "接続（GET /setting）",
+            workflow.check_connection,
             self._log,
         )
 

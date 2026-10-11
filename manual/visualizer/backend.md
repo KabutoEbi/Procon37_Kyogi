@@ -22,7 +22,7 @@ GUIから表示処理を除いた、通信、C++ソルバー実行、簡易サ�
 | メソッド | 処理 |
 |---|---|
 | `check_connection()` | `GET /setting`で到達・認証・形式を確認 |
-| `run_dummy_connection_test()` | 設定公開を最大25秒待ち、実サーバーから問題・4日分の状態を取得して、ダミー種別と全ステップ待機だけを送信。20秒×4日の設定を送信前に検査 |
+| `run_dummy_connection_test()` | 旧全日接続試験用の低レベルAPI。現在のGUI「接続」ボタンからは呼ばず、ダミー回答を送るため通常の接続確認には使用しない |
 | `build_solver()` | C++17、`-O3 -DNDEBUG`、厳格警告、`-pthread`で担当共通の`main.cpp`を本番ビルド |
 | `generate_random_setting()` | C++の`generate`モードで公式設定形式を一時生成し、検査後に保存 |
 | `fetch_setting()` / `fetch_state()` | 公式JSONを安全に保存し、dayを検査 |
